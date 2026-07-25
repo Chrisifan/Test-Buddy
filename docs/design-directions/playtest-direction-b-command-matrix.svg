@@ -1,0 +1,154 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1000" viewBox="0 0 1600 1000">
+  <defs>
+    <linearGradient id="b-bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#06151C"/>
+      <stop offset=".55" stop-color="#071F2B"/>
+      <stop offset="1" stop-color="#102B28"/>
+    </linearGradient>
+    <linearGradient id="b-panel" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#E7FFF7" stop-opacity=".12"/>
+      <stop offset="1" stop-color="#54F7C6" stop-opacity=".045"/>
+    </linearGradient>
+    <linearGradient id="b-hot" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#56FFC8"/>
+      <stop offset="1" stop-color="#20B6FF"/>
+    </linearGradient>
+    <filter id="b-glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="7" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <pattern id="b-grid" width="36" height="36" patternUnits="userSpaceOnUse">
+      <path d="M36 0H0V36" fill="none" stroke="#C7FFF4" stroke-opacity=".055"/>
+    </pattern>
+    <style>
+      .title{font:800 50px "Fira Sans","PingFang SC",sans-serif;fill:#EFFFFA;letter-spacing:-1.8px}
+      .sub{font:500 17px "Fira Sans","PingFang SC",sans-serif;fill:#86AEA9}
+      .h2{font:750 24px "Fira Sans","PingFang SC",sans-serif;fill:#F5FFFC}
+      .h3{font:700 17px "Fira Sans","PingFang SC",sans-serif;fill:#F5FFFC}
+      .body{font:500 15px "Fira Sans","PingFang SC",sans-serif;fill:#9DBDB8}
+      .tiny{font:700 11px "Fira Code",monospace;fill:#70F8D6;letter-spacing:2.4px}
+      .mono{font:700 36px "Fira Code",monospace;fill:#F5FFFC}
+      .panel{fill:url(#b-panel);stroke:#8DFFE2;stroke-opacity:.16;stroke-width:1.2}
+      .chip{fill:#071920;stroke:#71FFD9;stroke-opacity:.2}
+    </style>
+  </defs>
+  <rect width="1600" height="1000" fill="url(#b-bg)"/>
+  <rect width="1600" height="1000" fill="url(#b-grid)"/>
+  <circle cx="1230" cy="150" r="260" fill="#3BFFE1" opacity=".07" filter="url(#b-glow)"/>
+  <circle cx="620" cy="920" r="320" fill="#1D8BFF" opacity=".08" filter="url(#b-glow)"/>
+
+  <rect x="28" y="28" width="112" height="944" rx="28" fill="#051016" stroke="#A0FFF0" stroke-opacity=".12"/>
+  <g transform="translate(64 66)">
+    <rect width="40" height="40" rx="10" fill="url(#b-hot)" opacity=".95"/>
+    <path d="M13 26l8-14 7 9 5-5" fill="none" stroke="#062027" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+  <g transform="translate(66 160)" fill="none" stroke="#B8FFF2" stroke-width="3" opacity=".72">
+    <rect width="36" height="36" rx="10"/><path d="M9 13h18M9 23h18"/>
+    <g transform="translate(0 78)"><circle cx="18" cy="18" r="15"/><path d="M18 7v11l8 5"/></g>
+    <g transform="translate(0 156)"><path d="M6 28l12-22 12 22z"/><path d="M18 14v8"/></g>
+    <g transform="translate(0 234)"><rect width="36" height="36" rx="8"/><path d="M9 24l7-8 5 4 7-10"/></g>
+    <g transform="translate(0 312)"><path d="M5 10h26v18H5z"/><path d="M11 28h14"/></g>
+    <g transform="translate(0 390)"><circle cx="18" cy="18" r="14"/><path d="M11 18h14M18 11v14"/></g>
+  </g>
+
+  <g transform="translate(188 62)">
+    <text class="tiny">AUTOMATION COMMAND CENTER</text>
+    <text y="58" class="title">PlayTest 指挥中心</text>
+    <text y="92" class="sub">项目、分组、用例、浏览器与测试结果在一个实时控制台内联动</text>
+  </g>
+  <g transform="translate(1216 62)">
+    <rect width="260" height="56" rx="14" class="chip"/>
+    <circle cx="28" cy="28" r="8" fill="#50FFC8" filter="url(#b-glow)"/>
+    <text x="50" y="34" class="body">MidScene Ready · Chromium</text>
+  </g>
+
+  <g transform="translate(188 150)">
+    <rect width="420" height="228" rx="18" class="panel"/>
+    <text x="24" y="42" class="tiny">QUALITY INDEX</text>
+    <text x="24" y="96" class="mono">92.4</text>
+    <text x="150" y="88" class="body">自动化覆盖指数</text>
+    <path d="M28 166 C96 104,144 210,210 150 S330 118,386 70" fill="none" stroke="#4BFFD4" stroke-width="5" filter="url(#b-glow)"/>
+    <rect x="24" y="188" width="110" height="22" rx="11" fill="#48FFD0" opacity=".18"/>
+    <text x="42" y="204" class="body">+12% 本周</text>
+  </g>
+  <g transform="translate(632 150)">
+    <rect width="398" height="228" rx="18" class="panel"/>
+    <text x="24" y="42" class="tiny">ACTIVE RUNS</text>
+    <text x="24" y="96" class="mono">18</text>
+    <text x="112" y="88" class="body">条测试路径运行中</text>
+    <g transform="translate(28 132)">
+      <rect width="334" height="14" rx="7" fill="#061016"/>
+      <rect width="248" height="14" rx="7" fill="url(#b-hot)"/>
+      <text x="0" y="48" class="body">趋势图、指标卡片、明细表格正在并发验证</text>
+    </g>
+  </g>
+  <g transform="translate(1054 150)">
+    <rect width="422" height="228" rx="18" class="panel"/>
+    <text x="24" y="42" class="tiny">RISK RADAR</text>
+    <text x="24" y="96" class="mono">3</text>
+    <text x="88" y="88" class="body">个待处理失败簇</text>
+    <circle cx="318" cy="118" r="66" fill="none" stroke="#69FFE0" stroke-opacity=".28"/>
+    <circle cx="318" cy="118" r="42" fill="none" stroke="#69FFE0" stroke-opacity=".5"/>
+    <circle cx="318" cy="118" r="8" fill="#69FFE0" filter="url(#b-glow)"/>
+    <circle cx="288" cy="82" r="5" fill="#FFB347"/>
+    <circle cx="352" cy="142" r="5" fill="#FF647C"/>
+  </g>
+
+  <g transform="translate(188 414)">
+    <rect width="500" height="432" rx="20" class="panel"/>
+    <text x="26" y="44" class="tiny">TEST PATH PIPELINE</text>
+    <text x="26" y="86" class="h2">测试路径流水线</text>
+    <g transform="translate(30 124)">
+      <rect width="438" height="58" rx="14" class="chip"/>
+      <circle cx="30" cy="29" r="13" fill="#55FFD0"/>
+      <text x="60" y="26" class="h3">PRD 解析</text>
+      <text x="60" y="47" class="body">识别 8 个覆盖域，生成 21 条路径</text>
+    </g>
+    <g transform="translate(30 202)">
+      <rect width="438" height="58" rx="14" class="chip"/>
+      <circle cx="30" cy="29" r="13" fill="#20B6FF"/>
+      <text x="60" y="26" class="h3">自然语言测试</text>
+      <text x="60" y="47" class="body">3 条命令已沉淀为用例步骤</text>
+    </g>
+    <g transform="translate(30 280)">
+      <rect width="438" height="58" rx="14" class="chip"/>
+      <circle cx="30" cy="29" r="13" fill="#FFB347"/>
+      <text x="60" y="26" class="h3">录制回放</text>
+      <text x="60" y="47" class="body">捕获点击、输入、断言和截图证据</text>
+    </g>
+  </g>
+
+  <g transform="translate(718 414)">
+    <rect width="360" height="432" rx="20" class="panel"/>
+    <text x="24" y="44" class="tiny">CONTROLLED BROWSER</text>
+    <text x="24" y="86" class="h2">嵌入浏览器</text>
+    <rect x="24" y="116" width="312" height="190" rx="16" fill="#031015" stroke="#77FFDD" stroke-opacity=".2"/>
+    <rect x="44" y="140" width="150" height="18" rx="9" fill="#55FFD0" opacity=".48"/>
+    <rect x="44" y="176" width="252" height="84" rx="12" fill="#FFFFFF" opacity=".06"/>
+    <path d="M60 240c40-54 78 10 116-38s72-8 104-44" fill="none" stroke="#51FFD4" stroke-width="4"/>
+    <text x="24" y="350" class="body">URL、账号、视口、语言、无头模式可随项目切换</text>
+    <rect x="24" y="374" width="150" height="34" rx="10" fill="#4BFFD4" opacity=".18"/>
+    <text x="46" y="397" class="h3">打开浏览器</text>
+  </g>
+
+  <g transform="translate(1108 414)">
+    <rect width="368" height="432" rx="20" class="panel"/>
+    <text x="24" y="44" class="tiny">RUN INTELLIGENCE</text>
+    <text x="24" y="86" class="h2">测试结果分析</text>
+    <g transform="translate(24 122)">
+      <rect width="320" height="70" rx="14" class="chip"/>
+      <text x="18" y="30" class="h3">核心链路</text>
+      <text x="18" y="52" class="body">1/12 失败 · 定位到登录遮罩</text>
+    </g>
+    <g transform="translate(24 212)">
+      <rect width="320" height="70" rx="14" class="chip"/>
+      <text x="18" y="30" class="h3">图表展示</text>
+      <text x="18" y="52" class="body">趋势线与表格数据一致</text>
+    </g>
+    <g transform="translate(24 302)">
+      <rect width="320" height="70" rx="14" class="chip"/>
+      <text x="18" y="30" class="h3">证据链</text>
+      <text x="18" y="52" class="body">截图、Trace、日志已归档</text>
+    </g>
+  </g>
+</svg>

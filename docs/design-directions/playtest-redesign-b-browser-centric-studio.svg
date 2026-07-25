@@ -1,0 +1,62 @@
+<svg width="1440" height="900" viewBox="0 0 1440 900" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1440" height="900" rx="32" fill="#080D16"/>
+  <rect x="24" y="24" width="92" height="852" rx="28" fill="#0D1422" stroke="#1D2A3F"/>
+  <rect x="46" y="48" width="48" height="48" rx="15" fill="#0FF0C3"/>
+  <text x="70" y="78" text-anchor="middle" font-family="Arial, sans-serif" font-size="17" font-weight="800" fill="#061018">PT</text>
+  <rect x="44" y="132" width="52" height="52" rx="17" fill="#142338" stroke="#0FF0C3"/>
+  <circle cx="70" cy="158" r="8" fill="#0FF0C3"/>
+  <circle cx="70" cy="236" r="7" fill="#6E7E95"/>
+  <circle cx="70" cy="314" r="7" fill="#6E7E95"/>
+  <circle cx="70" cy="392" r="7" fill="#6E7E95"/>
+  <circle cx="70" cy="470" r="7" fill="#6E7E95"/>
+  <circle cx="70" cy="548" r="7" fill="#6E7E95"/>
+  <circle cx="70" cy="820" r="7" fill="#6E7E95"/>
+
+  <text x="152" y="64" font-family="Arial, sans-serif" font-size="13" letter-spacing="4" fill="#47F4CF">BROWSER CENTRIC STUDIO</text>
+  <text x="152" y="104" font-family="Arial, sans-serif" font-size="34" font-weight="800" fill="#F8FBFF">浏览器中枢工作台</text>
+  <text x="152" y="132" font-family="Arial, sans-serif" font-size="16" fill="#8897AD">把被测应用变成主舞台；配置、用例、结果都围绕浏览器上下文出现，而不是做成全局菜单栏。</text>
+
+  <rect x="152" y="168" width="828" height="680" rx="28" fill="#0D1422" stroke="#20314B"/>
+  <rect x="176" y="192" width="780" height="54" rx="18" fill="#111C2D"/>
+  <circle cx="204" cy="219" r="6" fill="#FF5F56"/>
+  <circle cx="228" cy="219" r="6" fill="#FFBD2E"/>
+  <circle cx="252" cy="219" r="6" fill="#27C93F"/>
+  <rect x="286" y="204" width="500" height="30" rx="15" fill="#07101B" stroke="#23364F"/>
+  <text x="310" y="224" font-family="Arial, sans-serif" font-size="13" fill="#A9B7CA">demo-shop.example / charts / revenue</text>
+  <rect x="808" y="204" width="126" height="30" rx="15" fill="#0FF0C3"/>
+  <text x="871" y="224" text-anchor="middle" font-family="Arial, sans-serif" font-size="13" font-weight="800" fill="#061018">录制路径</text>
+  <rect x="176" y="270" width="780" height="414" rx="22" fill="#F7F9FC"/>
+  <rect x="212" y="308" width="210" height="108" rx="18" fill="#FFFFFF" stroke="#DDE4EE"/>
+  <rect x="450" y="308" width="462" height="108" rx="18" fill="#FFFFFF" stroke="#DDE4EE"/>
+  <rect x="212" y="448" width="700" height="64" rx="16" fill="#FFFFFF" stroke="#DDE4EE"/>
+  <rect x="212" y="540" width="330" height="100" rx="16" fill="#FFFFFF" stroke="#DDE4EE"/>
+  <rect x="582" y="540" width="330" height="100" rx="16" fill="#FFFFFF" stroke="#DDE4EE"/>
+  <rect x="176" y="710" width="780" height="108" rx="22" fill="#101B2C" stroke="#20314B"/>
+  <text x="210" y="746" font-family="Arial, sans-serif" font-size="14" fill="#7890A8">路径回放时间线</text>
+  <circle cx="236" cy="784" r="10" fill="#0FF0C3"/>
+  <rect x="252" y="780" width="142" height="8" rx="4" fill="#0FF0C3"/>
+  <circle cx="416" cy="784" r="10" fill="#5B6B82"/>
+  <rect x="432" y="780" width="142" height="8" rx="4" fill="#23364F"/>
+  <circle cx="596" cy="784" r="10" fill="#5B6B82"/>
+  <rect x="612" y="780" width="142" height="8" rx="4" fill="#23364F"/>
+  <circle cx="776" cy="784" r="10" fill="#5B6B82"/>
+
+  <rect x="1010" y="168" width="382" height="680" rx="28" fill="#0D1422" stroke="#20314B"/>
+  <rect x="1038" y="196" width="326" height="90" rx="22" fill="#111C2D" stroke="#20314B"/>
+  <text x="1064" y="230" font-family="Arial, sans-serif" font-size="13" fill="#7890A8">当前项目</text>
+  <text x="1064" y="260" font-family="Arial, sans-serif" font-size="22" font-weight="800" fill="#F8FBFF">Demo Shop 自动化</text>
+  <rect x="1038" y="310" width="326" height="128" rx="22" fill="#101B2C" stroke="#20314B"/>
+  <text x="1064" y="346" font-family="Arial, sans-serif" font-size="17" font-weight="800" fill="#F8FBFF">上下文配置</text>
+  <text x="1064" y="378" font-family="Arial, sans-serif" font-size="14" fill="#93A4BA">环境 Staging</text>
+  <text x="1064" y="406" font-family="Arial, sans-serif" font-size="14" fill="#93A4BA">账号 tester@demo</text>
+  <rect x="1038" y="462" width="326" height="160" rx="22" fill="#101B2C" stroke="#20314B"/>
+  <text x="1064" y="498" font-family="Arial, sans-serif" font-size="17" font-weight="800" fill="#F8FBFF">AI 检查点</text>
+  <text x="1064" y="532" font-family="Arial, sans-serif" font-size="14" fill="#93A4BA">验证图表 tooltip、表格合计、筛选联动。</text>
+  <rect x="1064" y="560" width="220" height="12" rx="6" fill="#20314B"/>
+  <rect x="1064" y="560" width="134" height="12" rx="6" fill="#0FF0C3"/>
+  <rect x="1038" y="646" width="326" height="172" rx="22" fill="#101B2C" stroke="#20314B"/>
+  <text x="1064" y="682" font-family="Arial, sans-serif" font-size="17" font-weight="800" fill="#F8FBFF">最近结果</text>
+  <text x="1064" y="716" font-family="Arial, sans-serif" font-size="14" fill="#93A4BA">通过 12 · 阻塞 2 · 新失败 1</text>
+  <rect x="1064" y="744" width="250" height="40" rx="14" fill="#16263B"/>
+  <text x="1189" y="769" text-anchor="middle" font-family="Arial, sans-serif" font-size="14" font-weight="700" fill="#F8FBFF">打开结果分析</text>
+</svg>

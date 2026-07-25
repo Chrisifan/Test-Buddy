@@ -1,0 +1,9 @@
+allowBuilds:
+  electron: true
+  esbuild: true
+  msw: true
+  sharp: true
+onlyBuiltDependencies:
+  - electron
+  - esbuild
+  - msw

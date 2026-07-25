@@ -1,0 +1,158 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1000" viewBox="0 0 1600 1000">
+  <defs>
+    <linearGradient id="a-bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#120B2B"/>
+      <stop offset="0.48" stop-color="#221B52"/>
+      <stop offset="1" stop-color="#2D315F"/>
+    </linearGradient>
+    <linearGradient id="a-card" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#F4F7FF" stop-opacity="0.16"/>
+      <stop offset="1" stop-color="#AEBBFF" stop-opacity="0.08"/>
+    </linearGradient>
+    <linearGradient id="a-card-hot" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#E8F6FF" stop-opacity="0.23"/>
+      <stop offset="0.56" stop-color="#6AD9FF" stop-opacity="0.12"/>
+      <stop offset="1" stop-color="#6D5EF4" stop-opacity="0.1"/>
+    </linearGradient>
+    <linearGradient id="a-cyan" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#67F7FF"/>
+      <stop offset="1" stop-color="#5B6CFF"/>
+    </linearGradient>
+    <linearGradient id="a-pink" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#FF7AEF"/>
+      <stop offset="1" stop-color="#8E75FF"/>
+    </linearGradient>
+    <filter id="a-blur" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="22"/>
+    </filter>
+    <filter id="a-glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="8" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <style>
+      .title{font:700 54px "Fira Sans","PingFang SC",sans-serif;fill:#F8FAFF;letter-spacing:-2px}
+      .h2{font:700 24px "Fira Sans","PingFang SC",sans-serif;fill:#FFFFFF}
+      .h3{font:700 18px "Fira Sans","PingFang SC",sans-serif;fill:#FFFFFF}
+      .body{font:500 18px "Fira Sans","PingFang SC",sans-serif;fill:#C9C9DE}
+      .muted{font:500 14px "Fira Sans","PingFang SC",sans-serif;fill:#A9A8C4}
+      .tiny{font:700 11px "Fira Code",monospace;fill:#B9B7DD;letter-spacing:2px}
+      .num{font:700 42px "Fira Code",monospace;fill:#FFFFFF}
+      .card{fill:url(#a-card);stroke:#FFFFFF;stroke-opacity:.14;stroke-width:1.4}
+      .hot{fill:url(#a-card-hot);stroke:#7FEBFF;stroke-opacity:.3;stroke-width:1.6}
+      .line{stroke:#FFFFFF;stroke-opacity:.14;stroke-width:1}
+      .accent{fill:#58E7FF}
+    </style>
+  </defs>
+
+  <rect width="1600" height="1000" rx="34" fill="url(#a-bg)"/>
+  <circle cx="1160" cy="125" r="250" fill="#6B5EFF" opacity=".17" filter="url(#a-blur)"/>
+  <circle cx="500" cy="860" r="210" fill="#12D8FF" opacity=".09" filter="url(#a-blur)"/>
+  <circle cx="1260" cy="760" r="280" fill="#FF7AEF" opacity=".08" filter="url(#a-blur)"/>
+
+  <g transform="translate(24 20)">
+    <circle cx="0" cy="0" r="9" fill="#7D789F"/>
+    <circle cx="32" cy="0" r="9" fill="#7D789F"/>
+    <circle cx="64" cy="0" r="9" fill="#7D789F"/>
+  </g>
+
+  <rect x="0" y="0" width="110" height="1000" fill="#120A2A" opacity=".58"/>
+  <line x1="110" y1="105" x2="110" y2="930" class="line"/>
+  <g transform="translate(54 96)">
+    <circle cx="0" cy="0" r="20" fill="#FFFFFF" opacity=".12"/>
+    <circle cx="0" cy="0" r="11" fill="#FFFFFF" opacity=".75" filter="url(#a-glow)"/>
+  </g>
+  <g fill="#D9D9ED" opacity=".92">
+    <rect x="38" y="150" width="32" height="8" rx="4"/>
+    <rect x="34" y="160" width="40" height="20" rx="6"/>
+    <circle cx="54" cy="242" r="16"/>
+    <path d="M42 340h24v12H42zM46 324h16v16H46z"/>
+    <path d="M54 432l20 8-15 17 5 22-20-8 15-17z"/>
+    <rect x="38" y="535" width="32" height="26" rx="6"/>
+    <circle cx="54" cy="650" r="16"/>
+    <path d="M36 764h36l-18 12zM36 781h36l-18 12zM36 798h36l-18 12z"/>
+  </g>
+  <rect x="18" y="890" width="72" height="70" rx="18" fill="#8C50FF" opacity=".24" stroke="#B48CFF" stroke-opacity=".24"/>
+  <path d="M43 925h24v20H43z" fill="#8FA1FF"/>
+  <path d="M47 938l6-7 5 4 7-12" fill="none" stroke="#FFFFFF" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <text x="176" y="118" class="title">PlayTest 自动化测试工作台</text>
+  <text x="178" y="158" class="body">用自然语言、录制回放和 PRD 分析生成可靠的网页测试路径</text>
+  <g transform="translate(1210 88)">
+    <rect width="250" height="54" rx="16" fill="#FFFFFF" opacity=".1" stroke="#FFFFFF" stroke-opacity=".14"/>
+    <circle cx="28" cy="27" r="8" fill="#4EF3FF"/>
+    <text x="48" y="33" class="body">Staging · 浏览器已连接</text>
+  </g>
+
+  <g transform="translate(176 198)">
+    <rect width="520" height="410" rx="24" class="hot"/>
+    <circle cx="430" cy="102" r="162" fill="none" stroke="#52EDFF" stroke-width="9" opacity=".72" filter="url(#a-glow)"/>
+    <circle cx="430" cy="102" r="178" fill="none" stroke="#52EDFF" stroke-width="2" opacity=".22"/>
+    <text x="34" y="58" class="body">项目健康度</text>
+    <text x="34" y="113" class="title" font-size="46">出色</text>
+    <text x="35" y="154" class="body">核心图表与表格链路稳定</text>
+    <rect x="330" y="78" width="128" height="88" rx="12" fill="url(#a-cyan)" opacity=".92"/>
+    <rect x="350" y="166" width="110" height="12" rx="6" fill="#5F60F6"/>
+    <text x="34" y="302" class="h2">数据看板项目</text>
+    <text x="340" y="302" class="body">197 / 494 路径已覆盖</text>
+    <rect x="34" y="328" width="452" height="10" rx="5" fill="#171734" opacity=".72"/>
+    <rect x="34" y="328" width="285" height="10" rx="5" fill="#DDE7FF"/>
+    <text x="34" y="372" class="muted">本周失败率下降 12%，建议补齐权限角色路径</text>
+  </g>
+
+  <g transform="translate(730 198)">
+    <rect width="392" height="250" rx="24" class="card"/>
+    <text x="32" y="54" class="tiny">NATURAL LANGUAGE</text>
+    <text x="32" y="104" class="h2">自然语言测试</text>
+    <text x="32" y="148" class="body">“筛选最近 30 天，验证趋势图与明细表一致”</text>
+    <rect x="32" y="184" width="328" height="42" rx="14" fill="#FFFFFF" opacity=".12"/>
+    <text x="116" y="211" class="h3">发送执行</text>
+    <circle cx="330" cy="66" r="20" fill="url(#a-cyan)" opacity=".88"/>
+  </g>
+  <g transform="translate(1150 198)">
+    <rect width="344" height="250" rx="24" class="card"/>
+    <text x="32" y="54" class="tiny">PRD ANALYSIS</text>
+    <text x="32" y="104" class="h2">需求路径生成</text>
+    <text x="32" y="148" class="body">导入 PDF 后自动拆解覆盖域、断言和回放草稿</text>
+    <rect x="32" y="184" width="280" height="42" rx="14" fill="#FFFFFF" opacity=".12"/>
+    <text x="106" y="211" class="h3">分析 PRD</text>
+    <path d="M248 58h48v58h-48zM258 72h28M258 87h28M258 102h20" stroke="#D9D7FF" stroke-width="5" stroke-linecap="round" fill="none"/>
+  </g>
+
+  <g transform="translate(730 478)">
+    <rect width="392" height="360" rx="24" class="card"/>
+    <text x="32" y="54" class="tiny">RUN SIGNALS</text>
+    <text x="32" y="104" class="h2">结果分析</text>
+    <text x="32" y="156" class="num">86%</text>
+    <text x="150" y="150" class="body">通过率</text>
+    <rect x="32" y="188" width="320" height="9" rx="5" fill="#141530"/>
+    <rect x="32" y="188" width="275" height="9" rx="5" fill="#58E7FF"/>
+    <g transform="translate(32 230)">
+      <rect width="328" height="72" rx="16" fill="#FFFFFF" opacity=".08"/>
+      <text x="20" y="31" class="h3">风险分组</text>
+      <text x="20" y="56" class="muted">核心链路 · 1/12 失败</text>
+    </g>
+  </g>
+  <g transform="translate(1150 478)">
+    <rect width="344" height="360" rx="24" class="card"/>
+    <text x="32" y="54" class="tiny">BROWSER</text>
+    <text x="32" y="104" class="h2">受控浏览器</text>
+    <rect x="32" y="136" width="280" height="150" rx="16" fill="#0F1027" opacity=".74" stroke="#FFFFFF" stroke-opacity=".12"/>
+    <rect x="52" y="158" width="132" height="18" rx="9" fill="#6AE9FF" opacity=".56"/>
+    <rect x="52" y="192" width="230" height="62" rx="12" fill="#FFFFFF" opacity=".09"/>
+    <text x="32" y="326" class="body">已捕获截图、Trace 与步骤日志</text>
+  </g>
+
+  <g transform="translate(176 665)">
+    <text x="0" y="0" class="body">7 个优化建议</text>
+    <text x="450" y="0" class="h3">查看全部</text>
+    <rect y="36" width="520" height="164" rx="22" class="card"/>
+    <rect x="36" y="76" width="58" height="58" rx="16" fill="url(#a-pink)"/>
+    <text x="120" y="102" class="h2">补齐“角色权限”路径</text>
+    <text x="120" y="138" class="body">当前 PRD 已识别 4 个角色，但仅 1 个角色有回放样本。</text>
+    <rect x="56" y="92" width="16" height="26" rx="8" fill="#FFFFFF" opacity=".75"/>
+    <rect x="48" y="104" width="32" height="14" rx="7" fill="#FFFFFF" opacity=".75"/>
+  </g>
+</svg>

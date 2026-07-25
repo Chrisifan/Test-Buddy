@@ -1,0 +1,66 @@
+<svg width="1440" height="900" viewBox="0 0 1440 900" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1440" height="900" rx="32" fill="#FFFFFF"/>
+  <rect x="0" y="0" width="1440" height="900" rx="32" fill="url(#grid)" opacity="0.45"/>
+  <rect x="24" y="24" width="260" height="852" rx="24" fill="#101828"/>
+  <rect x="50" y="54" width="54" height="54" rx="16" fill="#2F6BFF"/>
+  <text x="77" y="88" text-anchor="middle" font-family="Arial, sans-serif" font-size="18" font-weight="800" fill="#FFFFFF">PT</text>
+  <text x="122" y="74" font-family="Arial, sans-serif" font-size="17" font-weight="800" fill="#FFFFFF">PlayTest</text>
+  <text x="122" y="99" font-family="Arial, sans-serif" font-size="12" fill="#90A0B7">Automation Console</text>
+  <rect x="48" y="144" width="212" height="44" rx="14" fill="#1B2A44"/>
+  <text x="70" y="172" font-family="Arial, sans-serif" font-size="14" font-weight="700" fill="#FFFFFF">Demo Shop 自动化</text>
+  <rect x="48" y="226" width="212" height="44" rx="14" fill="#2F6BFF"/>
+  <text x="76" y="254" font-family="Arial, sans-serif" font-size="14" font-weight="700" fill="#FFFFFF">总览</text>
+  <text x="76" y="314" font-family="Arial, sans-serif" font-size="14" fill="#AEBBD0">项目 / 分组</text>
+  <text x="76" y="374" font-family="Arial, sans-serif" font-size="14" fill="#AEBBD0">测试路径</text>
+  <text x="76" y="434" font-family="Arial, sans-serif" font-size="14" fill="#AEBBD0">PRD 分析</text>
+  <text x="76" y="494" font-family="Arial, sans-serif" font-size="14" fill="#AEBBD0">结果分析</text>
+  <rect x="48" y="730" width="212" height="108" rx="18" fill="#0B1220" stroke="#26364F"/>
+  <text x="72" y="766" font-family="Arial, sans-serif" font-size="13" fill="#90A0B7">运行态</text>
+  <text x="72" y="794" font-family="Arial, sans-serif" font-size="20" font-weight="800" fill="#FFFFFF">Browser Ready</text>
+
+  <text x="324" y="70" font-family="Arial, sans-serif" font-size="13" letter-spacing="4" fill="#2F6BFF">DENSE ENGINEERING CONSOLE</text>
+  <text x="324" y="112" font-family="Arial, sans-serif" font-size="34" font-weight="850" fill="#101828">密集工程控制台</text>
+  <text x="324" y="140" font-family="Arial, sans-serif" font-size="16" fill="#667085">更像专业工具：紧凑、清晰、低装饰。上下文留在左侧与页面局部，不再做上下双菜单。</text>
+  <rect x="1112" y="78" width="244" height="44" rx="12" fill="#101828"/>
+  <text x="1234" y="106" text-anchor="middle" font-family="Arial, sans-serif" font-size="14" font-weight="800" fill="#FFFFFF">Command + K 运行命令</text>
+
+  <rect x="324" y="178" width="1032" height="104" rx="22" fill="#F2F5FA" stroke="#D8E0EC"/>
+  <rect x="350" y="204" width="220" height="52" rx="14" fill="#FFFFFF"/>
+  <text x="372" y="236" font-family="Arial, sans-serif" font-size="14" fill="#475467">通过 24</text>
+  <rect x="594" y="204" width="220" height="52" rx="14" fill="#FFFFFF"/>
+  <text x="616" y="236" font-family="Arial, sans-serif" font-size="14" fill="#475467">失败 3</text>
+  <rect x="838" y="204" width="220" height="52" rx="14" fill="#FFFFFF"/>
+  <text x="860" y="236" font-family="Arial, sans-serif" font-size="14" fill="#475467">覆盖率 46%</text>
+  <rect x="1082" y="204" width="248" height="52" rx="14" fill="#FFFFFF"/>
+  <text x="1104" y="236" font-family="Arial, sans-serif" font-size="14" fill="#475467">待确认路径 4</text>
+
+  <rect x="324" y="314" width="500" height="254" rx="22" fill="#FFFFFF" stroke="#D8E0EC"/>
+  <text x="354" y="354" font-family="Arial, sans-serif" font-size="18" font-weight="800" fill="#101828">路径流水线</text>
+  <rect x="354" y="386" width="426" height="42" rx="12" fill="#F2F5FA"/>
+  <text x="376" y="412" font-family="Arial, sans-serif" font-size="13" fill="#475467">01 PRD 解析 → 生成 4 条路径草案</text>
+  <rect x="354" y="442" width="426" height="42" rx="12" fill="#F2F5FA"/>
+  <text x="376" y="468" font-family="Arial, sans-serif" font-size="13" fill="#475467">02 自然语言测试 → 等待输入</text>
+  <rect x="354" y="498" width="426" height="42" rx="12" fill="#EAF0FF"/>
+  <text x="376" y="524" font-family="Arial, sans-serif" font-size="13" fill="#204ECF">03 录制回放 → 当前焦点</text>
+
+  <rect x="856" y="314" width="500" height="254" rx="22" fill="#FFFFFF" stroke="#D8E0EC"/>
+  <text x="886" y="354" font-family="Arial, sans-serif" font-size="18" font-weight="800" fill="#101828">结果矩阵</text>
+  <rect x="886" y="386" width="430" height="24" rx="8" fill="#F2F5FA"/>
+  <rect x="886" y="426" width="380" height="24" rx="8" fill="#F2F5FA"/>
+  <rect x="886" y="466" width="430" height="24" rx="8" fill="#F2F5FA"/>
+  <rect x="886" y="506" width="300" height="24" rx="8" fill="#F2F5FA"/>
+
+  <rect x="324" y="600" width="1032" height="228" rx="22" fill="#101828"/>
+  <text x="354" y="640" font-family="Arial, sans-serif" font-size="18" font-weight="800" fill="#FFFFFF">嵌入式浏览器 / 日志</text>
+  <rect x="354" y="670" width="588" height="126" rx="16" fill="#FFFFFF"/>
+  <rect x="970" y="670" width="330" height="126" rx="16" fill="#17233A"/>
+  <text x="1000" y="708" font-family="Arial, sans-serif" font-size="13" fill="#AEBBD0">Console</text>
+  <text x="1000" y="742" font-family="Arial, sans-serif" font-size="14" fill="#FFFFFF">assert chart.series[0].data</text>
+  <text x="1000" y="772" font-family="Arial, sans-serif" font-size="14" fill="#77E4A8">matched · 128ms</text>
+
+  <defs>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
+      <path d="M 32 0 L 0 0 0 32" fill="none" stroke="#E8EEF7" stroke-width="1"/>
+    </pattern>
+  </defs>
+</svg>
