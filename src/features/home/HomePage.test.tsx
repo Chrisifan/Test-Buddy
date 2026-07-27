@@ -53,8 +53,10 @@ describe('HomePage', () => {
     expect(screen.getByLabelText('工作台主体')).toBeInTheDocument();
     expect(screen.getByLabelText('路径回放时间线')).toBeInTheDocument();
     expect(screen.getAllByText(project.name).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText('项目总览')).toBeInTheDocument();
     expect(screen.getByText('项目健康')).toBeInTheDocument();
     expect(screen.getByText('覆盖指数')).toBeInTheDocument();
+    expect(screen.getAllByTestId('home-summary-icon')).toHaveLength(6);
     expect(screen.getByText('录制')).toBeInTheDocument();
     expect(screen.getByText('当前项目')).toBeInTheDocument();
     expect(screen.getByText('测试入口')).toBeInTheDocument();
@@ -81,6 +83,7 @@ describe('HomePage', () => {
     );
 
     expect(screen.getByRole('heading', { level: 1, name: 'Quality Overview' })).toBeInTheDocument();
+    expect(screen.getByText('Project Overview')).toBeInTheDocument();
     expect(screen.getByText('Project Health')).toBeInTheDocument();
     expect(screen.getByText('Coverage Index')).toBeInTheDocument();
     expect(screen.queryByText('质量总览')).not.toBeInTheDocument();

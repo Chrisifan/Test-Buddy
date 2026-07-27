@@ -42,8 +42,8 @@ describe('WorkflowPage', () => {
     expect(screen.getByText('流程库')).toBeInTheDocument();
     expect(screen.getAllByRole('button', { name: '添加步骤' }).length).toBeGreaterThan(0);
     expect(screen.getByText('运行配置')).toBeInTheDocument();
-    expect(screen.getByText('#1402 · 主分支')).toBeInTheDocument();
-    expect(screen.getByText('今天 10:45')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 2, name: '购物车到支付' })).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: '步骤序列' })).toBeInTheDocument();
     expect(screen.queryByText('Flow Configuration')).not.toBeInTheDocument();
   });
 

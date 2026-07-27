@@ -121,63 +121,53 @@ export function DocumentAnalysisPage({
       />
 
       <PageBody>
-      <section className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_420px]" aria-label={t('documents.aria.workbench')}>
-        <div className="grid content-start gap-4">
-          <Surface className="p-4" variant="subtle">
-            <div className="flex flex-wrap items-center justify-between gap-4">
-              <div className="flex flex-wrap gap-6">
-                <span className="text-sm"><span className="font-mono text-muted-foreground">{t('documents.stats.total')}</span> <b>{documents.length}</b></span>
-                <span className="text-sm"><span className="font-mono text-muted-foreground">{t('documents.stats.analyzed')}</span> <b className="text-emerald-600">{documents.filter((document) => document.generatedPaths.length).length}</b></span>
-                <span className="text-sm"><span className="font-mono text-muted-foreground">{t('documents.stats.paths')}</span> <b className="text-primary">{generatedCount}</b></span>
-              </div>
-              <div className="flex gap-2">
-                <Button size="sm" type="button" variant="outline">{t('documents.action.filter')}</Button>
-                <Button size="sm" type="button" variant="outline">{t('documents.action.latest')}</Button>
-              </div>
+      <section className="document-studio" aria-label={t('documents.aria.workbench')}>
+        <div className="document-asset-area">
+          <Surface className="document-summary-strip" variant="subtle">
+            <div className="document-summary-metrics">
+              <span><span>{t('documents.stats.total')}</span> <b>{documents.length}</b></span>
+              <span><span>{t('documents.stats.analyzed')}</span> <b className="text-emerald-600">{documents.filter((document) => document.generatedPaths.length).length}</b></span>
+              <span><span>{t('documents.stats.paths')}</span> <b className="text-primary">{generatedCount}</b></span>
+            </div>
+            <div className="flex gap-2">
+              <Button size="sm" type="button" variant="outline">{t('documents.action.filter')}</Button>
+              <Button size="sm" type="button" variant="outline">{t('documents.action.latest')}</Button>
             </div>
           </Surface>
 
-          <div className="designer-prd-grid">
+          <div className="document-asset-grid">
             {documents.map((document) => (
               <button
-                className={`designer-doc-card text-left ${selectedDocument?.id === document.id ? 'border-primary' : ''}`}
+                className={`document-asset-card ${selectedDocument?.id === document.id ? 'is-active' : ''}`}
                 key={document.id}
                 onClick={() => onSelectDocument(document.id)}
                 type="button"
               >
                 <div className="flex items-start justify-between gap-4">
-                  <div className="flex h-10 w-10 items-center justify-center rounded-[4px] bg-primary/10 text-primary">
-                    <FileText className="h-5 w-5" />
-                  </div>
+                  <div className="document-asset-icon"><FileText className="h-5 w-5" /></div>
                   <Badge className="rounded-[4px]" variant="outline">
                     {document.generatedPaths.length ? t('documents.status.analyzed') : document.kind}
                   </Badge>
                 </div>
-                <h3 className="mt-5 truncate text-lg font-semibold tracking-[-0.03em]">{document.name}</h3>
-                <p className="mt-2 line-clamp-3 text-sm leading-6 text-muted-foreground">
-                  {document.summary || t('documents.card.waiting')}
-                </p>
-                <div className="mt-6 flex items-center justify-between text-xs text-muted-foreground">
+                <h3>{document.name}</h3>
+                <p>{document.summary || t('documents.card.waiting')}</p>
+                <footer>
                   <span>{t('documents.card.chars', { count: document.size })}</span>
                   <span>{t('documents.card.paths', { count: document.generatedPaths.length })}</span>
-                </div>
+                </footer>
               </button>
             ))}
-            {!documents.length ? (
-              <Surface className="p-5" variant="panel">
-                <EvidenceCard title={t('documents.empty.title')} description={t('documents.empty.description')} />
-              </Surface>
-            ) : null}
+            {!documents.length ? <EvidenceCard title={t('documents.empty.title')} description={t('documents.empty.description')} /> : null}
           </div>
         </div>
 
-        <aside className="grid content-start gap-4">
-          <Surface className="grid gap-4 p-5" variant="panel">
+        <aside className="document-side-panel">
+          <Surface className="document-intake" variant="plain">
             <div className="flex items-start justify-between gap-4">
               <div>
-                <p className="font-mono text-[11px] uppercase tracking-[0.08em] text-primary">{t('documents.upload.eyebrow')}</p>
-                <h2 className="mt-2 text-xl font-semibold tracking-[-0.03em]">{t('documents.upload.title')}</h2>
-                <p className="mt-2 text-sm leading-6 text-muted-foreground">{intakeMessage}</p>
+                <p>{t('documents.upload.eyebrow')}</p>
+                <h2>{t('documents.upload.title')}</h2>
+                <span>{intakeMessage}</span>
               </div>
               <Sparkles className="h-5 w-5 text-primary" />
             </div>
@@ -208,7 +198,7 @@ export function DocumentAnalysisPage({
           </Surface>
 
           {selectedDocument ? (
-            <Surface className="grid gap-4 p-5" variant="panel">
+            <Surface className="document-inspector" variant="plain">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <p className="font-mono text-[11px] uppercase tracking-[0.08em] text-primary">{t('documents.selected.eyebrow')}</p>
@@ -269,7 +259,7 @@ function GeneratedPathCard({
   const { t } = useI18n();
 
   return (
-    <article className="rounded-[4px] tech-list-row p-4">
+    <article className="document-path-card">
       <div className="flex items-start justify-between gap-4">
         <div>
           <div className="flex flex-wrap items-center gap-2">
@@ -306,7 +296,7 @@ function GeneratedPathCard({
           )}
         </div>
       </div>
-      <div className="mt-4 grid gap-2">
+      <div className="document-path-steps">
         {path.steps.map((step, index) => (
           <div className="rounded-[4px] bg-background/45 px-3 py-2" key={`${step.id}-${index}`}>
             <p className="text-xs font-medium text-foreground">{step.title}</p>

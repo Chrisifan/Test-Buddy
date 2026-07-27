@@ -7,7 +7,7 @@ import type {
 
 import { BrainCircuit, RadioTower, Send, SquareActivity } from 'lucide-react';
 
-import { ActionListItem, EvidenceCard, PageHeader, Surface, PageBody, PageShell } from '../../components/workbench.js';
+import { EvidenceCard, MetricTile, PageHeader, Surface, PageBody, PageShell } from '../../components/workbench.js';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -122,8 +122,14 @@ export function NaturalLanguagePage({
       />
 
       <PageBody>
-      <section className="designer-split nl-workbench" aria-label={t('nl.aria.workbench')}>
-        <aside className="designer-panel flex flex-col">
+      <section className="nl-metric-grid">
+        <MetricTile label={t('nl.meta.session', { status: sessionStatus })} tone={sessionActive ? 'running' : 'neutral'} value={sessionStatus} />
+        <MetricTile label={t('nl.meta.mode', { mode: getModeLabel(commandMode, t) })} tone="primary" value={getModeLabel(commandMode, t)} />
+        <MetricTile label={t('nl.meta.environment', { environment: getEnvironmentLabel(targetEnvironment, t) })} value={getEnvironmentLabel(targetEnvironment, t)} />
+        <MetricTile label={t('workflow.runtime.browser')} value={runtimeProfile.browser} />
+      </section>
+      <section className="designer-split nl-workbench nl-studio" aria-label={t('nl.aria.workbench')}>
+        <aside className="designer-panel nl-command-panel flex flex-col">
           <div className="designer-panel-header grid gap-4">
             <div className="flex items-center justify-between">
               <h2 className="text-sm font-semibold text-primary">{t('nl.session.title')}</h2>
@@ -172,7 +178,7 @@ export function NaturalLanguagePage({
           <div className="designer-panel-body flex-1 space-y-3">
             {recentChatEntries.map((entry) => (
               <article
-                className={`max-w-[92%] rounded-[14px] px-3 py-2 text-sm leading-6 ${
+                className={`nl-chat-bubble max-w-[92%] rounded-[14px] px-3 py-2 text-sm leading-6 ${
                   entry.role === 'user'
                     ? 'ml-auto rounded-tr-[4px] bg-primary text-primary-foreground'
                     : 'rounded-tl-[4px] bg-muted text-foreground'
@@ -190,7 +196,7 @@ export function NaturalLanguagePage({
             ) : null}
           </div>
 
-          <div className="border-t border-border bg-card p-4">
+          <div className="nl-command-composer border-t border-border bg-card p-4">
             <div className="relative">
               <Textarea
                 className="min-h-[96px] pr-12 font-mono text-sm leading-6"
@@ -212,7 +218,7 @@ export function NaturalLanguagePage({
           </div>
         </aside>
 
-        <section className="designer-panel is-muted grid min-h-0 grid-rows-[minmax(0,1fr)_180px] gap-4 p-4">
+        <section className="designer-panel is-muted nl-workspace-stage nl-browser-panel grid min-h-0 grid-rows-[minmax(0,1fr)_180px] gap-4 p-4">
           <div className="designer-browser-stage">
             <div className="designer-browser-bar">
               <span className="designer-browser-dot bg-red-300" />
@@ -238,7 +244,7 @@ export function NaturalLanguagePage({
             </div>
           </div>
 
-          <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_260px]">
+          <div className="nl-evidence-grid grid gap-4 md:grid-cols-[minmax(0,1fr)_260px]">
             <Surface className="p-4" variant="panel">
               <div className="flex items-center justify-between">
                 <p className="font-mono text-[11px] uppercase tracking-[0.08em] text-muted-foreground">{t('nl.flow.title')}</p>
@@ -254,10 +260,12 @@ export function NaturalLanguagePage({
                 {!recentChatEntries.length ? <p className="text-sm text-muted-foreground">{t('nl.flow.empty')}</p> : null}
               </div>
             </Surface>
-            <Surface className="bg-primary p-4 text-primary-foreground" variant="panel">
+            <Surface className="p-4" variant="panel">
               <p className="text-[10px] font-black uppercase tracking-[0.14em] opacity-80">{t('nl.confidence')}</p>
-              <p className="mt-1 text-4xl font-bold tracking-[-0.05em]">{midsceneConfig.modelApiKey ? '98.4%' : t('nl.model.pending')}</p>
-              <p className="mt-3 text-xs opacity-80">MidScene {midsceneConfig.modelName || t('nl.model.unset')}</p>
+              <p className="mt-2 text-xl font-bold tracking-[-0.03em] text-foreground">
+                {midsceneConfig.modelApiKey ? t('settings.status.ready') : t('nl.model.pending')}
+              </p>
+              <p className="mt-3 truncate font-mono text-xs text-muted-foreground">MidScene {midsceneConfig.modelName || t('nl.model.unset')}</p>
             </Surface>
           </div>
         </section>

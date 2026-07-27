@@ -162,7 +162,7 @@ export function StartupPage({
           <span>{t('startup.footer.guide')}</span>
         </div>
         <div className="flex items-center gap-4">
-          <span>PlayTest Pro</span>
+          <span>TestBuddy</span>
           <ServerCog className="h-3.5 w-3.5" />
           <TerminalSquare className="h-3.5 w-3.5" />
         </div>

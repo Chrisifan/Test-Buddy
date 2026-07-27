@@ -287,7 +287,7 @@ export function RunRecordsPage({
           </div>
         </aside>
 
-        <section className="designer-panel is-muted min-w-0 overflow-y-auto p-5">
+        <section className="designer-panel designer-detail-stage run-detail-stage min-w-0">
           <div className="grid gap-3 md:grid-cols-5">
             <Surface className="p-5 md:col-span-2" variant="stat">
               <div className="flex items-start justify-between gap-4">

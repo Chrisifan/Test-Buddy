@@ -35,6 +35,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
+import { PageBody, PageHeader, PageShell } from '../../components/workbench.js';
 
 const themeOptions: Array<{
   mode: ThemeMode;
@@ -153,6 +154,7 @@ const agentRoleOptions: Array<{
 
 export function SettingsModal({
   open,
+  pageMode = false,
   initialSection = 'appearance',
   midsceneConfig,
   agentModelConfig,
@@ -170,6 +172,7 @@ export function SettingsModal({
   onUpdateRuntimeProfile,
 }: {
   open: boolean;
+  pageMode?: boolean;
   initialSection?: SettingsSectionId;
   midsceneConfig: MidsceneConfig;
   agentModelConfig: AgentModelConfig;
@@ -216,10 +219,14 @@ export function SettingsModal({
     const targetTop = section === 'appearance' ? 0 : Math.max(0, element.offsetTop - 16);
     scrollSpyLockedRef.current = behavior === 'smooth';
     scrollSpyTargetTopRef.current = behavior === 'smooth' ? targetTop : null;
-    container.scrollTo({
-      top: targetTop,
-      behavior,
-    });
+    if (typeof container.scrollTo === 'function') {
+      container.scrollTo({
+        top: targetTop,
+        behavior,
+      });
+    } else {
+      container.scrollTop = targetTop;
+    }
 
     if (behavior === 'smooth') {
       scrollSpyUnlockTimerRef.current = setTimeout(() => {
@@ -278,9 +285,9 @@ export function SettingsModal({
       scrollSpyLockedRef.current = false;
       scrollSpyTargetTopRef.current = null;
     };
-  }, [initialSection, open]);
+  }, [initialSection, open, pageMode]);
 
-  if (!open) {
+  if (!open && !pageMode) {
     return null;
   }
 
@@ -294,13 +301,38 @@ export function SettingsModal({
       ? t('settings.status.missingRequired')
       : t('settings.status.midsceneOptional');
 
-  return (
-    <Dialog onOpenChange={(nextOpen) => !nextOpen && onClose()} open={open}>
-      <DialogContent
-        className="settings-dialog-content flex max-h-[min(920px,calc(100vh-48px))] w-[min(960px,calc(100vw-48px))] overflow-hidden rounded-[8px] border border-border bg-card p-0 shadow-[0_18px_56px_rgba(0,0,0,0.22)]"
-        showCloseButton={false}
+  const statusBadge = (
+    <Badge
+      className={`rounded-[4px] px-3 py-1.5 ${
+        showMissingRequiredState
+          ? 'bg-destructive/12 text-destructive'
+          : midsceneReady
+            ? 'bg-primary/12 text-primary'
+            : 'bg-muted text-muted-foreground'
+      }`}
+      variant="outline"
+    >
+      {statusLabel}
+    </Badge>
+  );
+  const saveLabel = requiresMidsceneBeforeSave ? t('common.saveAndContinue') : t('common.saveSettings');
+  const pageAction = (
+    <div className="settings-page-action flex items-center gap-2">
+      {statusBadge}
+      <Button
+        className="min-w-[132px] rounded-[4px]"
+        disabled={showMissingRequiredState}
+        onClick={onSave}
+        type="button"
       >
-        <div className="settings-dialog-shell flex min-h-0 w-full flex-col overflow-hidden rounded-[8px]">
+        {saveLabel}
+      </Button>
+    </div>
+  );
+
+  const settingsShell = (
+    <div className={`settings-dialog-shell flex min-h-0 w-full flex-col overflow-hidden rounded-[8px] ${pageMode ? 'settings-page-shell' : ''}`}>
+      {!pageMode ? (
           <DialogHeader className="settings-dialog-topbar flex h-16 shrink-0 flex-row items-center justify-between border-b border-border px-5 py-0 text-left">
             <div className="flex items-center gap-3">
               <span className="flex h-9 w-9 items-center justify-center rounded-[4px] bg-primary/12 text-primary">
@@ -314,18 +346,7 @@ export function SettingsModal({
               </div>
             </div>
             <div className="flex shrink-0 items-center gap-2">
-              <Badge
-                className={`rounded-[4px] px-3 py-1.5 ${
-                  showMissingRequiredState
-                    ? 'bg-destructive/12 text-destructive'
-                    : midsceneReady
-                      ? 'bg-primary/12 text-primary'
-                      : 'bg-muted text-muted-foreground'
-                }`}
-                variant="outline"
-              >
-                {statusLabel}
-              </Badge>
+              {statusBadge}
               <DialogClose className="flex h-9 w-9 items-center justify-center rounded-[4px] border border-border bg-card text-muted-foreground shadow-sm transition hover:border-primary/45 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60 dark:bg-black/70">
                 <span aria-hidden="true" className="text-2xl leading-none">
                   ×
@@ -334,31 +355,34 @@ export function SettingsModal({
               </DialogClose>
             </div>
           </DialogHeader>
+      ) : null}
 
-          <div className="flex min-h-0 flex-1">
-            <nav className="settings-dialog-aside hidden w-48 shrink-0 border-r border-border p-4 md:grid md:content-start md:gap-1">
-              {settingsSections.map((section) => {
-                const NavIcon = section.icon;
-                return (
-                  <button
-                    className={`flex items-center gap-3 rounded-[4px] border-l-4 px-3 py-2 text-sm transition ${
-                      activeSection === section.id
-                        ? 'border-l-4 border-primary bg-primary/10 font-semibold text-primary'
-                        : 'border-transparent text-muted-foreground hover:bg-muted hover:text-foreground'
-                    }`}
-                    key={section.id}
-                    onClick={() => scrollToSection(section.id)}
-                    type="button"
-                  >
-                    <NavIcon className="h-4 w-4" />
-                    {t(section.labelKey)}
-                  </button>
-                );
-              })}
-            </nav>
+          <div className={`flex min-h-0 flex-1 ${pageMode ? 'settings-page-workspace' : ''}`}>
+            {!pageMode ? (
+              <nav className="settings-dialog-aside hidden w-48 shrink-0 border-r border-border p-4 md:grid md:content-start md:gap-1">
+                {settingsSections.map((section) => {
+                  const NavIcon = section.icon;
+                  return (
+                    <button
+                      className={`flex items-center gap-3 rounded-[4px] border-l-4 px-3 py-2 text-sm transition ${
+                        activeSection === section.id
+                          ? 'border-l-4 border-primary bg-primary/10 font-semibold text-primary'
+                          : 'border-transparent text-muted-foreground hover:bg-muted hover:text-foreground'
+                      }`}
+                      key={section.id}
+                      onClick={() => scrollToSection(section.id)}
+                      type="button"
+                    >
+                      <NavIcon className="h-4 w-4" />
+                      {t(section.labelKey)}
+                    </button>
+                  );
+                })}
+              </nav>
+            ) : null}
 
             <main
-              className="settings-dialog-scroll min-h-0 flex-1 space-y-10 overflow-y-auto p-6"
+              className={`settings-dialog-scroll min-h-0 flex-1 space-y-10 overflow-y-auto p-6 ${pageMode ? 'settings-page-scroll' : ''}`}
               onScroll={handleScroll}
               ref={scrollContainerRef}
             >
@@ -781,20 +805,47 @@ export function SettingsModal({
             </main>
           </div>
 
-          <DialogFooter className="settings-dialog-footer shrink-0 border-t border-border px-5 py-4">
-            <Button className="rounded-[4px]" onClick={onClose} type="button" variant="outline">
-              {t('common.skip')}
-            </Button>
-            <Button
-              className="min-w-[132px] rounded-[4px]"
-              disabled={showMissingRequiredState}
-              onClick={onSave}
-              type="button"
-            >
-              {requiresMidsceneBeforeSave ? t('common.saveAndContinue') : t('common.saveSettings')}
-            </Button>
-          </DialogFooter>
-        </div>
+      {!pageMode ? (
+        <DialogFooter className="settings-dialog-footer shrink-0 border-t border-border px-5 py-4">
+          <Button className="rounded-[4px]" onClick={onClose} type="button" variant="outline">
+            {t('common.skip')}
+          </Button>
+          <Button
+            className="min-w-[132px] rounded-[4px]"
+            disabled={showMissingRequiredState}
+            onClick={onSave}
+            type="button"
+          >
+            {saveLabel}
+          </Button>
+        </DialogFooter>
+      ) : null}
+    </div>
+  );
+
+  if (pageMode) {
+    return (
+      <PageShell>
+        <PageHeader
+          action={pageAction}
+          description={t('settings.description')}
+          eyebrow={t('app.nav.settings')}
+          title={t('settings.title')}
+        />
+        <PageBody className="settings-page-body">
+          {settingsShell}
+        </PageBody>
+      </PageShell>
+    );
+  }
+
+  return (
+    <Dialog onOpenChange={(nextOpen) => !nextOpen && onClose()} open={open}>
+      <DialogContent
+        className="settings-dialog-content flex max-h-[min(920px,calc(100vh-48px))] w-[min(960px,calc(100vw-48px))] overflow-hidden rounded-[8px] border border-border bg-card p-0 shadow-[0_18px_56px_rgba(0,0,0,0.22)]"
+        showCloseButton={false}
+      >
+        {settingsShell}
       </DialogContent>
     </Dialog>
   );

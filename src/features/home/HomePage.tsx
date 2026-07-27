@@ -103,7 +103,15 @@ function DashboardCard({
   );
 }
 
-function StatGlyph({ children, tone = 'cyan' }: { children: ReactNode; tone?: 'cyan' | 'pink' | 'blue' | 'amber' }) {
+function StatGlyph({
+  children,
+  tone = 'cyan',
+  testId,
+}: {
+  children: ReactNode;
+  tone?: 'cyan' | 'pink' | 'blue' | 'amber';
+  testId?: string;
+}) {
   const toneClass =
     tone === 'pink'
       ? 'border-red-200 bg-red-50 text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-200'
@@ -114,7 +122,7 @@ function StatGlyph({ children, tone = 'cyan' }: { children: ReactNode; tone?: 'c
           : 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-200';
 
   return (
-    <span className={`home-glyph flex h-9 w-9 shrink-0 items-center justify-center rounded-[4px] border ${toneClass}`}>
+    <span className={`home-glyph flex h-9 w-9 shrink-0 items-center justify-center rounded-[4px] border ${toneClass}`} data-testid={testId}>
       {children}
     </span>
   );
@@ -195,7 +203,7 @@ export function HomePage({
                 title: t('home.empty.recording.title'),
                 description: t('home.empty.recording.description'),
                 action: t('home.empty.recording.action'),
-                tone: 'bg-indigo-100 text-primary dark:bg-indigo-950/50 dark:text-indigo-200',
+                tone: 'bg-blue-100 text-blue-700 dark:bg-blue-950/50 dark:text-blue-200',
                 page: 'recording' as AppPage,
               },
             ].map((item) => {
@@ -305,6 +313,15 @@ export function HomePage({
       tone: 'cyan' as const,
     },
   ];
+  const signalBars = [
+    selectedProject.testCases.length,
+    selectedProject.recordings.length,
+    selectedProject.groups.length,
+    selectedProject.documents.length,
+    generatedPathCount,
+    projectRuns.length,
+  ];
+  const highestSignal = Math.max(...signalBars, 1);
 
   return (
     <PageShell className="home-dashboard">
@@ -332,131 +349,143 @@ export function HomePage({
       />
 
       <PageBody>
-      <section aria-label={t('home.aria.workbench')} className="grid gap-4">
-        <div className="grid gap-4 xl:grid-cols-[minmax(320px,0.95fr)_minmax(0,1.45fr)_320px]">
-          <DashboardCard className="home-hero-card p-5">
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <p className="home-faint font-mono text-[11px] uppercase tracking-[0.12em]">{t('home.health.title')}</p>
-                <h2 className="home-accent-text mt-3 text-[36px] font-bold leading-none tracking-[-0.04em]">{signal.badge}</h2>
-                <p className="home-muted mt-2 text-sm">{selectedProject.name}</p>
-              </div>
-              <StatusPill tone={failedRuns ? 'failed' : activeRuns ? 'running' : 'passed'} />
-            </div>
-            <div className="mt-6">
-              <div className="flex items-end justify-between gap-4">
-                <div>
-                  <p className="home-text text-sm font-semibold">{t('home.health.coverage')}</p>
-                  <p className="home-muted mt-1 font-mono text-xs">
-                    {t('home.health.assetCount', {
-                      groups: selectedProject.groups.length,
-                      cases: selectedProject.testCases.length,
-                    })}
-                  </p>
+        <section aria-label={t('home.aria.workbench')} className="home-dashboard-layout">
+          <div className="home-summary-grid">
+            <DashboardCard className="home-summary-card home-project-overview-card p-3">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="home-faint font-mono text-[11px] uppercase tracking-[0.1em]">{t('home.overview.title')}</p>
+                  <p className="home-text mt-2 truncate text-sm font-semibold">{selectedProject.name}</p>
                 </div>
-                <p className="home-text font-mono text-lg font-semibold">{coverageIndex}/100</p>
+                <StatGlyph testId="home-summary-icon" tone="cyan"><DatabaseZap className="h-5 w-5" /></StatGlyph>
               </div>
-              <div className="home-progress-track mt-3 h-2 overflow-hidden rounded-full">
-                <div className="home-progress-fill h-full rounded-full" style={{ width: `${coverageIndex}%` }} />
+              <p className="home-muted mt-2 text-xs leading-5">
+                {t('home.overview.assetCount', {
+                  groups: selectedProject.groups.length,
+                  environments: selectedProject.environments.length,
+                  documents: selectedProject.documents.length,
+                })}
+              </p>
+            </DashboardCard>
+            <DashboardCard className="home-summary-card home-health-card p-3">
+              <div className="flex items-start justify-between gap-3">
+                <StatGlyph testId="home-summary-icon" tone="blue"><ShieldCheck className="h-5 w-5" /></StatGlyph>
+                <StatusPill tone={failedRuns ? 'failed' : activeRuns ? 'running' : 'passed'} />
               </div>
-            </div>
-            <div className="mt-5 grid grid-cols-3 gap-2">
-              <CompactStat label={t('home.health.passRate')} value={`${passRate}%`} />
-              <CompactStat label={t('home.health.failed')} value={`${failedRuns}`} />
-              <CompactStat label={t('home.health.running')} value={`${activeRuns}`} />
-            </div>
-          </DashboardCard>
-
-          <div className="grid gap-3 sm:grid-cols-2">
+              <p className="home-faint mt-2 font-mono text-[11px] uppercase tracking-[0.1em]">{t('home.health.title')}</p>
+              <p className="home-text mt-1 text-[24px] font-bold leading-none tracking-[-0.04em]">{signal.badge}</p>
+              <p className="home-muted mt-1.5 truncate text-xs">{selectedProject.name}</p>
+            </DashboardCard>
             {[
-              [t('home.asset.groups'), `${selectedProject.groups.length}`, t('home.asset.groupsDescription')],
-              [t('home.asset.cases'), `${selectedProject.testCases.length}`, t('home.asset.casesDescription')],
-              [t('home.asset.recordings'), `${selectedProject.recordings.length}`, t('home.asset.recordingsDescription')],
-              [t('home.asset.paths'), `${generatedPathCount}`, t('home.asset.pathsDescription')],
-            ].map(([label, value, description]) => (
-              <DashboardCard className="p-4" key={label}>
-                <p className="home-faint font-mono text-[11px] uppercase tracking-[0.1em]">{label}</p>
-                <p className="home-text mt-2 text-[30px] font-bold leading-none tracking-[-0.04em]">{value}</p>
-                <p className="home-muted mt-2 text-xs leading-5">{description}</p>
+              {
+                label: t('home.asset.cases'),
+                value: `${selectedProject.testCases.length}`,
+                description: t('home.asset.casesDescription'),
+                Icon: FileText,
+                tone: 'blue' as const,
+              },
+              {
+                label: t('home.health.passRate'),
+                value: `${passRate}%`,
+                description: t('home.health.assetCount', { groups: selectedProject.groups.length, cases: selectedProject.testCases.length }),
+                Icon: CheckCircle2,
+                tone: 'cyan' as const,
+              },
+              {
+                label: t('home.asset.recordings'),
+                value: `${selectedProject.recordings.length}`,
+                description: t('home.asset.recordingsDescription'),
+                Icon: MousePointerClick,
+                tone: 'amber' as const,
+              },
+              {
+                label: t('home.health.coverage'),
+                value: `${coverageIndex}`,
+                description: t('home.asset.pathsDescription'),
+                Icon: ScanSearch,
+                tone: 'pink' as const,
+              },
+            ].map(({ label, value, description, Icon, tone }) => (
+              <DashboardCard className="home-summary-card p-3" key={label}>
+                <div className="flex items-start justify-between gap-3">
+                  <p className="home-faint font-mono text-[11px] uppercase tracking-[0.1em]">{label}</p>
+                  <StatGlyph testId="home-summary-icon" tone={tone}><Icon className="h-5 w-5" /></StatGlyph>
+                </div>
+                <p className="home-text mt-2 text-[28px] font-bold leading-none tracking-[-0.04em]">{value}</p>
+                <p className="home-muted mt-1.5 text-xs leading-5">{description}</p>
               </DashboardCard>
             ))}
           </div>
 
-          <DashboardCard className="p-4">
-            <div className="flex items-center gap-3">
-              <StatGlyph tone="amber">
-                <ShieldCheck className="h-5 w-5" />
-              </StatGlyph>
-              <div className="min-w-0">
-                <p className="home-text text-sm font-semibold">{t('home.baseline.title')}</p>
-                <p className="home-muted mt-1 line-clamp-2 text-xs leading-5">{signal.description}</p>
-              </div>
-            </div>
-            <div className="mt-4 grid gap-2">
-              <CompactStat label={t('home.baseline.environment')} value={selectedEnvironmentName ?? '-'} />
-              <CompactStat label={t('home.baseline.browser')} value={browserSession.status} />
-              <CompactStat label={t('home.baseline.runtime')} value={runtimeInfo?.platform ?? 'browser'} />
-            </div>
-          </DashboardCard>
-        </div>
-
-        <div className="grid gap-4 xl:grid-cols-[minmax(0,1.25fr)_minmax(360px,0.75fr)]">
-          <Surface className="p-4" variant="panel">
-            <div className="flex items-center justify-between gap-4">
-              <div>
-                <p className="home-faint font-mono text-[11px] uppercase tracking-[0.1em]">{t('home.pipeline.eyebrow')}</p>
-                <h2 className="mt-1 text-lg font-semibold tracking-[-0.02em]">{t('home.pipeline.title')}</h2>
-              </div>
-              <button className="home-link cursor-pointer text-sm font-semibold transition" onClick={() => onGoToPage('runs')} type="button">
-                {t('home.pipeline.viewRuns')}
-              </button>
-            </div>
-            <div className="mt-4 grid gap-3 lg:grid-cols-3">
-              {pipeline.map((item) => (
-                <button
-                  className="home-mini-row grid cursor-pointer grid-cols-[36px_minmax(0,1fr)] items-center gap-3 rounded-[4px] px-3 py-3 text-left transition"
-                  key={item.title}
-                  onClick={() => onGoToPage(item.page)}
-                  type="button"
-                >
-                  <span className="home-mini-icon flex h-9 w-9 items-center justify-center rounded-[4px]">
-                    {item.icon}
-                  </span>
-                  <span className="min-w-0">
-                    <span className="home-text block truncate text-sm font-semibold">{item.title}</span>
-                    <span className="home-faint block truncate text-xs">{item.description}</span>
-                  </span>
-                </button>
-              ))}
-            </div>
-          </Surface>
-
-          <DashboardCard className="p-4">
-            <div className="flex items-center justify-between gap-4">
-              <div>
-                <p className="home-faint font-mono text-[11px] uppercase tracking-[0.1em]">{t('home.latest.title')}</p>
-                <p className="home-text mt-2 text-lg font-semibold">{latestRun?.name ?? t('home.latest.empty')}</p>
-                <p className="home-muted mt-1 line-clamp-2 text-xs leading-5">{latestRun?.summary ?? t('home.latest.description')}</p>
-              </div>
-              {latestRun ? <StatusPill tone={latestRun.status} /> : <RadioTower className="home-accent-text h-5 w-5" />}
-            </div>
-          </DashboardCard>
-        </div>
-
-        <section aria-label={t('home.aria.timeline')} className="grid gap-3 md:grid-cols-3">
-          {optimizationCards.map((item) => (
-            <DashboardCard className="p-4" key={item.title}>
-              <div className="flex h-full items-start gap-3">
-                <StatGlyph tone={item.tone}>{item.icon}</StatGlyph>
+          <div className="home-operation-grid">
+            <Surface className="home-trace-panel p-5" variant="panel">
+              <div className="flex items-start justify-between gap-4">
                 <div>
-                  <p className="home-text text-sm font-semibold">{item.title}</p>
-                  <p className="home-muted mt-1 text-xs leading-5">{item.description}</p>
+                  <p className="home-faint font-mono text-[11px] uppercase tracking-[0.1em]">{t('home.pipeline.eyebrow')}</p>
+                  <h2 className="mt-1 text-lg font-semibold tracking-[-0.02em]">{t('home.pipeline.title')}</h2>
                 </div>
+                <button className="home-link cursor-pointer text-sm font-semibold transition" onClick={() => onGoToPage('runs')} type="button">
+                  {t('home.pipeline.viewRuns')}
+                </button>
               </div>
-            </DashboardCard>
-          ))}
+              <div aria-hidden="true" className="home-signal-chart">
+                {signalBars.map((value, index) => (
+                  <span className="home-signal-column" key={`${value}-${index}`}>
+                    <span className="home-signal-bar" style={{ height: `${Math.max(14, Math.round((value / highestSignal) * 100))}%` }} />
+                  </span>
+                ))}
+                <span className="home-signal-baseline" />
+              </div>
+              <div className="mt-5 grid gap-px overflow-hidden rounded-[6px] border border-border bg-border md:grid-cols-3">
+                {pipeline.map((item) => (
+                  <button className="home-route-row cursor-pointer text-left" key={item.title} onClick={() => onGoToPage(item.page)} type="button">
+                    <span className="home-mini-icon flex h-8 w-8 items-center justify-center rounded-[4px]">{item.icon}</span>
+                    <span className="min-w-0">
+                      <span className="home-text block truncate text-sm font-semibold">{item.title}</span>
+                      <span className="home-faint mt-1 block line-clamp-2 text-xs leading-5">{item.description}</span>
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </Surface>
+
+            <aside className="home-run-sidebar">
+              <DashboardCard className="home-active-run p-5">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="min-w-0">
+                    <p className="home-faint font-mono text-[11px] uppercase tracking-[0.1em]">{t('home.latest.title')}</p>
+                    <p className="home-text mt-2 truncate text-base font-semibold">{latestRun?.name ?? t('home.latest.empty')}</p>
+                  </div>
+                  {latestRun ? <StatusPill tone={latestRun.status} /> : <RadioTower className="home-accent-text h-5 w-5" />}
+                </div>
+                <p className="home-muted mt-3 line-clamp-2 text-xs leading-5">{latestRun?.summary ?? t('home.latest.description')}</p>
+                <div className="mt-4 flex items-center justify-between border-t border-border pt-3 font-mono text-[11px] text-muted-foreground">
+                  <span>{latestRun?.duration ?? '--:--'}</span>
+                  <span>{latestRun?.status ?? t('home.latest.empty')}</span>
+                </div>
+              </DashboardCard>
+              <DashboardCard className="home-baseline-card p-5">
+                <div className="flex items-center gap-3">
+                  <StatGlyph tone="amber"><ShieldCheck className="h-5 w-5" /></StatGlyph>
+                  <div className="min-w-0"><p className="home-text text-sm font-semibold">{t('home.baseline.title')}</p><p className="home-muted mt-1 truncate text-xs">{signal.description}</p></div>
+                </div>
+                <div className="mt-4 grid grid-cols-3 gap-px overflow-hidden rounded-[6px] bg-border">
+                  <CompactStat label={t('home.baseline.environment')} value={selectedEnvironmentName ?? '-'} />
+                  <CompactStat label={t('home.baseline.browser')} value={browserSession.status} />
+                  <CompactStat label={t('home.baseline.runtime')} value={runtimeInfo?.platform ?? 'browser'} />
+                </div>
+              </DashboardCard>
+            </aside>
+          </div>
+
+          <section aria-label={t('home.aria.timeline')} className="home-insight-grid">
+            {optimizationCards.map((item) => (
+              <DashboardCard className="home-insight-card p-4" key={item.title}>
+                <div className="flex h-full items-start gap-3"><StatGlyph tone={item.tone}>{item.icon}</StatGlyph><div><p className="home-text text-sm font-semibold">{item.title}</p><p className="home-muted mt-1 text-xs leading-5">{item.description}</p></div></div>
+              </DashboardCard>
+            ))}
+          </section>
         </section>
-      </section>
       </PageBody>
     </PageShell>
   );

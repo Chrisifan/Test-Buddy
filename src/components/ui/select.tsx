@@ -24,7 +24,7 @@ function SelectTrigger({
   return (
     <SelectPrimitive.Trigger
       className={cn(
-        'flex h-10 w-full items-center justify-between rounded-[4px] border border-input bg-card px-3 py-2 text-sm shadow-none outline-none transition-colors hover:bg-accent data-[placeholder]:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring/35 disabled:cursor-not-allowed disabled:opacity-50 [&_svg]:pointer-events-none',
+        'flex h-[34px] w-full items-center justify-between rounded-[4px] border border-input bg-card px-3 py-1.5 text-sm shadow-none outline-none transition-colors hover:bg-accent data-[placeholder]:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring/35 disabled:cursor-not-allowed disabled:opacity-50 [&_svg]:pointer-events-none',
         className,
       )}
       data-slot="select-trigger"

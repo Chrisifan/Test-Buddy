@@ -205,7 +205,7 @@ export function RecordingPage({
                         <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">{t('recording.preview.eyebrow')}</p>
                         <h3 className="mt-2 text-2xl font-bold">{t('recording.preview.title')}</h3>
                       </div>
-                      <Film className="h-6 w-6 text-indigo-600" />
+                      <Film className="h-6 w-6 text-primary" />
                     </div>
                     <div className="grid gap-3">
                       {[t('recording.preview.navigate'), t('recording.preview.click'), t('recording.preview.input')].map((item, index) => (

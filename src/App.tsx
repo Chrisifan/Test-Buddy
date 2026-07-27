@@ -57,6 +57,7 @@ import {
 import type { AgentRunResult } from '../shared/agent.js';
 import type { AppPage } from './app/pageMeta.js';
 import { NavButton } from './components/NavButton.js';
+import { StatusPill } from './components/StatusPill.js';
 import { Button } from './components/ui/button.js';
 import { TestCaseManagementPage } from './features/cases/TestCaseManagementPage.js';
 import { DocumentAnalysisPage } from './features/documents/DocumentAnalysisPage.js';
@@ -139,7 +140,6 @@ export function App() {
   const [isRunning, setIsRunning] = useState(false);
   const [isBrowserBusy, setIsBrowserBusy] = useState(false);
   const [navigateUrl, setNavigateUrl] = useState(initialState.projects[0]?.defaultUrl ?? '');
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsInitialSection, setSettingsInitialSection] = useState<SettingsSectionId>('appearance');
   const [startupGuide, setStartupGuide] = useState<StartupGuideState>(initialState.startupGuide);
   const [pendingPage, setPendingPage] = useState<AppPage | null>(null);
@@ -519,7 +519,7 @@ export function App() {
   function openSettings(page?: AppPage, section?: SettingsSectionId) {
     setPendingPage(page ?? null);
     setSettingsInitialSection(section ?? getRequiredSettingsSection(page));
-    setSettingsOpen(true);
+    switchPage('settings');
   }
 
   function goToPage(page: AppPage) {
@@ -1526,7 +1526,6 @@ export function App() {
     if (requiresMidsceneBeforeSave && !startupGuide.completed) {
       completeStartupGuide('configured');
     }
-    setSettingsOpen(false);
     if (pendingPage) {
       switchPage(pendingPage);
       setPendingPage(null);
@@ -1552,23 +1551,23 @@ export function App() {
 
   return (
     <I18nProvider locale={effectiveLocale}>
-    <div className="grid h-screen grid-cols-[240px_minmax(0,1fr)] overflow-hidden bg-background text-foreground max-md:grid-cols-1 max-md:grid-rows-[auto_minmax(0,1fr)]">
-      <nav aria-label={t('app.nav.main')} className="app-rail flex min-h-0 shrink-0 flex-col px-3 pb-4 pt-9 max-md:hidden">
+    <div className="grid h-screen grid-cols-[256px_minmax(0,1fr)] overflow-hidden bg-background text-foreground max-md:grid-cols-1 max-md:grid-rows-[auto_minmax(0,1fr)]">
+      <nav aria-label={t('app.nav.main')} className="app-rail flex min-h-0 shrink-0 flex-col px-3 pb-4 pt-7 max-md:hidden">
         <button
-          className="nav-brand flex cursor-pointer items-center gap-3 px-1 text-left transition hover:opacity-92"
+          className="nav-brand flex cursor-pointer items-center gap-3 px-3 text-left transition hover:opacity-92"
           onClick={() => goToPage('home')}
           type="button"
         >
-          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[4px] bg-primary font-mono text-xs font-black tracking-[-0.06em] text-primary-foreground">
-            PT
+          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[6px] bg-primary font-mono text-xs font-black tracking-[-0.06em] text-primary-foreground">
+            TB
           </span>
           <span className="min-w-0">
-            <span className="block truncate text-[20px] font-black leading-6 tracking-[-0.04em] text-primary">PlayTest Pro</span>
+            <span className="block truncate text-[20px] font-black leading-6 tracking-[-0.04em] text-primary">TestBuddy</span>
             <span className="block truncate font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">{t('app.brand.subtitle')}</span>
           </span>
         </button>
 
-        <div className="nav-menu mt-8 flex min-h-0 flex-1 flex-col gap-1 overflow-auto">
+        <div className="nav-menu mt-9 flex min-h-0 flex-1 flex-col gap-1 overflow-auto">
           <NavButton active={activePage === 'home'} icon={<House className="h-4 w-4" />} label={t('app.nav.overview')} onClick={() => goToPage('home')} />
           <NavButton active={activePage === 'projects'} icon={<FolderKanban className="h-4 w-4" />} label={t('app.nav.projects')} onClick={() => goToPage('projects')} />
           <NavButton active={activePage === 'documents'} icon={<FileText className="h-4 w-4" />} label={t('app.nav.documents')} onClick={() => goToPage('documents')} />
@@ -1580,11 +1579,11 @@ export function App() {
         </div>
 
         <div className="nav-tools mt-4 grid gap-1 pt-3">
-          <NavButton active={false} icon={<Settings2 className="h-4 w-4" />} label={t('app.nav.settings')} onClick={() => openSettings()} />
+          <NavButton active={activePage === 'settings'} icon={<Settings2 className="h-4 w-4" />} label={t('app.nav.settings')} onClick={() => openSettings(undefined, 'appearance')} />
           <Button
             aria-label={t('app.shell.openSettings')}
             className="hidden"
-            onClick={() => openSettings()}
+            onClick={() => openSettings(undefined, 'appearance')}
             size="icon"
             type="button"
             variant="ghost"
@@ -1600,7 +1599,7 @@ export function App() {
           onClick={() => goToPage('home')}
           type="button"
         >
-          PT
+          TB
         </button>
         <div className="flex items-center gap-1">
           <NavButton active={activePage === 'home'} icon={<House className="h-4 w-4" />} label={t('app.nav.overview')} onClick={() => goToPage('home')} />
@@ -1608,14 +1607,14 @@ export function App() {
           <NavButton active={activePage === 'cases'} icon={<ClipboardList className="h-4 w-4" />} label={t('app.nav.cases')} onClick={() => goToPage('cases')} />
           <NavButton active={activePage === 'runs'} icon={<PlaySquare className="h-4 w-4" />} label={t('app.nav.runs')} onClick={() => goToPage('runs')} />
         </div>
-        <Button aria-label={t('app.shell.openSettings')} className="h-10 w-10 rounded-[4px]" onClick={() => openSettings()} size="icon" type="button" variant="ghost">
+        <Button aria-label={t('app.shell.openSettings')} className="h-10 w-10 rounded-[4px]" onClick={() => openSettings(undefined, 'appearance')} size="icon" type="button" variant="ghost">
           <Settings2 className="h-4 w-4" />
         </Button>
       </nav>
 
-      <div className="grid min-h-0 min-w-0 grid-rows-[64px_minmax(0,1fr)]">
+      <div className="grid min-h-0 min-w-0 grid-rows-[56px_minmax(0,1fr)_42px] max-md:grid-rows-[minmax(0,1fr)]">
         <header className="app-topbar flex items-center justify-between gap-4 px-6 max-md:hidden">
-          <div className="app-search flex h-9 w-[min(420px,40vw)] items-center gap-2 rounded-[4px] px-3">
+          <div className="app-search flex h-9 w-[min(320px,30vw)] items-center gap-2 rounded-full px-3">
             <Search className="h-4 w-4 text-muted-foreground" />
             <input
               className="h-full min-w-0 flex-1 border-0 bg-transparent p-0 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:ring-0"
@@ -1623,23 +1622,30 @@ export function App() {
               type="search"
             />
           </div>
-          <div className="flex items-center gap-3">
+          <div className="app-topbar-actions flex items-center gap-2">
             <Button className="rounded-[4px]" onClick={() => goToPage('recording')} type="button">
+              <MousePointerClick className="h-4 w-4" />
               {t('app.shell.connectDevice')}
             </Button>
             <Button className="rounded-[4px]" onClick={() => goToPage('projects')} type="button" variant="ghost">
+              <FolderKanban className="h-4 w-4" />
               {t('app.shell.projectSettings')}
             </Button>
-            <div className="ml-3 flex items-center gap-3 border-l border-border pl-5">
-              <span className="max-w-[220px] truncate text-sm font-semibold">{selectedProject?.name ?? t('app.shell.noProject')}</span>
+            <div className="app-project-context ml-2 flex items-center gap-3 border-l border-border pl-4">
+              <div className="min-w-0 text-right">
+                <span className="block max-w-[220px] truncate text-sm font-semibold">{selectedProject?.name ?? t('app.shell.noProject')}</span>
+                <span className="block max-w-[220px] truncate font-mono text-[10px] uppercase tracking-[0.06em] text-muted-foreground">
+                  {selectedEnvironment?.name ?? t('app.runtime.environmentMissing')}
+                </span>
+              </div>
               <span className="flex h-8 w-8 items-center justify-center rounded-full bg-secondary text-xs font-bold text-secondary-foreground">
-                PT
+                TB
               </span>
             </div>
           </div>
         </header>
         <main
-          className={`app-main page-transition-frame h-full min-h-0 min-w-0 overflow-hidden px-6 py-5 max-md:px-3 max-md:py-3 ${
+          className={`app-main page-transition-frame h-full min-h-0 min-w-0 overflow-hidden px-[var(--density-page-x)] py-[var(--density-page-y)] max-md:px-3 max-md:py-2 ${
             isPageExiting ? 'is-page-exiting' : ''
           }`}
         >
@@ -1798,27 +1804,48 @@ export function App() {
               recording={selectedRecording}
             />
           ) : null}
+
+          {activePage === 'settings' ? (
+            <SettingsModal
+              agentModelConfig={agentModelConfig}
+              appearance={appearance}
+              effectiveTheme={effectiveTheme}
+              initialSection={settingsInitialSection}
+              locale={effectiveLocale}
+              midsceneConfig={midsceneConfig}
+              midsceneReady={midsceneReady}
+              onClose={() => switchPage('home')}
+              onSave={handleSaveSettings}
+              onUpdateAgentModelConfig={updateAgentModelConfig}
+              onUpdateAppearance={updateAppearance}
+              onUpdateMidsceneConfig={updateMidsceneConfig}
+              onUpdateRuntimeProfile={updateRuntimeProfile}
+              open
+              pageMode
+              requiresMidsceneBeforeSave={pendingPage ? isGatedFeaturePage(pendingPage) : false}
+              runtimeProfile={runtimeProfile}
+            />
+          ) : null}
         </main>
+        <footer className="app-runtimebar hidden items-center justify-between gap-4 px-6 font-mono text-[11px] max-md:hidden">
+          <div className="flex min-w-0 items-center gap-3">
+            <span
+              aria-hidden="true"
+              className={`app-runtimebar-signal ${
+                browserSession.status === 'ready' ? 'is-ready' : isRunning || browserSession.status === 'starting' || browserSession.status === 'navigating' ? 'is-busy' : ''
+              }`}
+            />
+            <span className="max-w-[min(520px,42vw)] truncate">{browserSession.message || browserSession.currentUrl || t('app.runtime.notRun')}</span>
+            {browserSession.currentUrl ? <span className="text-border">/</span> : null}
+            {browserSession.currentUrl ? <span className="max-w-[260px] truncate text-muted-foreground">{browserSession.currentUrl}</span> : null}
+          </div>
+          <div className="flex shrink-0 items-center gap-3">
+            <span className="max-w-[240px] truncate text-muted-foreground">{runTitle}</span>
+            <StatusPill tone={runStatus} />
+          </div>
+        </footer>
       </div>
 
-      <SettingsModal
-        agentModelConfig={agentModelConfig}
-        initialSection={settingsInitialSection}
-        midsceneConfig={midsceneConfig}
-        midsceneReady={midsceneReady}
-        onClose={() => setSettingsOpen(false)}
-        onSave={handleSaveSettings}
-        requiresMidsceneBeforeSave={pendingPage ? isGatedFeaturePage(pendingPage) : false}
-        appearance={appearance}
-        effectiveTheme={effectiveTheme}
-        locale={effectiveLocale}
-        onUpdateAgentModelConfig={updateAgentModelConfig}
-        onUpdateMidsceneConfig={updateMidsceneConfig}
-        onUpdateAppearance={updateAppearance}
-        onUpdateRuntimeProfile={updateRuntimeProfile}
-        open={settingsOpen}
-        runtimeProfile={runtimeProfile}
-      />
     </div>
     </I18nProvider>
   );

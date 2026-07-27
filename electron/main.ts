@@ -98,7 +98,7 @@ function createWindow(): BrowserWindow {
     height: 760,
     minWidth: 1200,
     minHeight: 760,
-    title: 'MidScene UI Test Studio',
+    title: 'TestBuddy',
     backgroundColor: '#050505',
     autoHideMenuBar: true,
     ...(process.platform === 'darwin'

@@ -6,11 +6,28 @@ import type {
   ProjectGroup,
 } from '../../../shared/studio.js';
 
-import { DatabaseZap, KeyRound, Plus, ServerCog, Trash2 } from 'lucide-react';
+import {
+  Boxes,
+  FolderKanban,
+  KeyRound,
+  Layers3,
+  ListChecks,
+  Plus,
+  ServerCog,
+  Settings2,
+  Trash2,
+} from 'lucide-react';
 
-import { EvidenceCard, MetricTile, PageHeader, Surface, PageBody, PageShell } from '../../components/workbench.js';
+import { EvidenceCard, PageBody, PageShell, Surface } from '../../components/workbench.js';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
@@ -56,307 +73,399 @@ export function ProjectManagementPage({
   const [credentialLabel, setCredentialLabel] = useState(() => t('project.credential.defaultLabel'));
   const [credentialUsername, setCredentialUsername] = useState('');
   const [credentialSecret, setCredentialSecret] = useState('');
+  const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
+  const editingProject = projects.find((project) => project.id === editingProjectId);
+
+  const totalCases = projects.reduce((total, project) => total + project.testCases.length, 0);
+  const totalGroups = projects.reduce((total, project) => total + project.groups.length, 0);
+  const totalEnvironments = projects.reduce((total, project) => total + project.environments.length, 0);
+  const totalAssets = projects.reduce(
+    (total, project) => total + project.documents.length + project.recordings.length,
+    0,
+  );
+
+  const openProjectEditor = (project: ProjectDraft) => {
+    onSelectProject(project.id);
+    setEditingProjectId(project.id);
+  };
 
   return (
     <PageShell>
-      <PageHeader
-        action={
-          <div className="flex flex-wrap gap-2">
-            <Button className="rounded-[4px]" onClick={onCreateProject} type="button">
-              <Plus className="h-4 w-4" />
-              {t('project.create')}
-            </Button>
-            <Button
-              className="rounded-[4px]"
-              disabled={!selectedProject}
-              onClick={() => selectedProject && onDeleteProject(selectedProject.id)}
-              type="button"
-              variant="outline"
-            >
-              <Trash2 className="h-4 w-4" />
-              {t('project.delete')}
-            </Button>
-          </div>
-        }
-        description={t('project.header.description')}
-        eyebrow={t('project.header.eyebrow')}
-        meta={[
-          t('project.meta.projects', { count: projects.length }),
-          t('project.meta.groups', { count: selectedProject?.groups.length ?? 0 }),
-          t('project.meta.environments', { count: selectedProject?.environments.length ?? 0 }),
-        ].map((item) => (
-          <Badge className="rounded-[4px] px-3 py-1.5" key={item} variant="outline">
-            {item}
-          </Badge>
-        ))}
-        title={t('project.header.title')}
-      />
+      <header className="page-header motion-page-header project-overview-header">
+        <div>
+          <nav aria-label={t('project.overview.breadcrumbAria')} className="project-breadcrumb">
+            <span>{t('project.overview.breadcrumbRoot')}</span>
+            <span aria-hidden="true">/</span>
+            <span className="text-foreground">{t('project.overview.breadcrumbCurrent')}</span>
+          </nav>
+          <h1>{t('project.header.title')}</h1>
+          <p>{t('project.header.description')}</p>
+        </div>
+        <Button className="project-create-button" onClick={onCreateProject} type="button">
+          <Plus className="h-4 w-4" />
+          {t('project.create')}
+        </Button>
+      </header>
+      <PageBody className="project-overview-scroll">
+        <main className="project-overview" aria-label={t('project.overview.aria')}>
+          <section aria-label={t('project.overview.summaryAria')} className="project-overview-metrics">
+            <ProjectMetric icon={ListChecks} label={t('project.overview.totalCases')} value={totalCases} />
+            <ProjectMetric icon={Layers3} label={t('project.overview.totalGroups')} value={totalGroups} />
+            <ProjectMetric icon={ServerCog} label={t('project.overview.totalEnvironments')} value={totalEnvironments} />
+            <ProjectMetric icon={Boxes} label={t('project.overview.totalAssets')} value={totalAssets} />
+          </section>
 
-      <PageBody>
-        <section className="designer-split project-console">
-          <aside className="designer-panel">
-            <div className="designer-panel-header flex items-center justify-between gap-3">
-              <div>
-                <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted-foreground">
-                  {t('project.list.active', { count: projects.length })}
-                </p>
-                <h2 className="mt-1 text-lg font-semibold tracking-[-0.03em]">{t('project.list.title')}</h2>
-              </div>
-              <DatabaseZap className="h-5 w-5 text-primary" />
-            </div>
-            <div className="designer-panel-body grid gap-3">
-              <div className="grid gap-2">
-                <Label>{t('project.list.all')}</Label>
-                <Select onValueChange={onSelectProject} value={selectedProject?.id ?? ''}>
-                  <SelectTrigger className="rounded-[4px]">
-                    <SelectValue placeholder={t('project.list.select')} />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {projects.map((project) => (
-                      <SelectItem key={project.id} value={project.id}>
-                        {project.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              {projects.map((project) => (
-                <button
-                  className={`designer-case-row ${selectedProject?.id === project.id ? 'is-active' : ''}`}
-                  key={project.id}
-                  onClick={() => onSelectProject(project.id)}
-                  type="button"
-                >
-                  <span className="flex items-start justify-between gap-3">
-                    <span className="min-w-0">
-                      <span className="block truncate text-sm font-semibold">{project.name}</span>
-                      <span className="mt-1 line-clamp-1 block text-xs text-muted-foreground">
-                        {project.description || t('project.list.noDescription')}
-                      </span>
-                    </span>
-                    <Badge className="rounded-[4px]" variant="outline">
-                      {project.testCases.length}
-                    </Badge>
-                  </span>
-                  <span className="mt-3 flex gap-3 font-mono text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
-                    <span>{t('project.list.groups', { count: project.groups.length })}</span>
-                    <span>{t('project.list.environments', { count: project.environments.length })}</span>
-                  </span>
-                </button>
-              ))}
-              {!projects.length ? (
-                <EvidenceCard title={t('project.empty.title')} description={t('project.empty.description')} />
-              ) : null}
-            </div>
-          </aside>
+          <section aria-label={t('project.overview.gridAria')} className="project-card-grid">
+            {projects.map((project) => (
+              <ProjectCard
+                active={selectedProject?.id === project.id}
+                key={project.id}
+                onDelete={() => onDeleteProject(project.id)}
+                onEdit={() => openProjectEditor(project)}
+                onSelect={() => onSelectProject(project.id)}
+                project={project}
+                t={t}
+              />
+            ))}
+            <button className="project-create-card" onClick={onCreateProject} type="button">
+              <span className="project-create-card-icon"><Plus className="h-5 w-5" /></span>
+              <span className="project-create-card-title">{t('project.overview.createCardTitle')}</span>
+              <span className="project-create-card-description">{t('project.overview.createCardDescription')}</span>
+            </button>
+          </section>
 
-          <main className="designer-panel designer-detail-stage">
-            {selectedProject ? (
-              <div className="mx-auto grid max-w-[1280px] gap-4">
-                <div className="flex flex-wrap items-end justify-between gap-4">
-                  <div>
-                    <div className="flex items-center gap-2 text-primary">
-                      <DatabaseZap className="h-4 w-4" />
-                      <span className="font-mono text-[11px] font-semibold uppercase tracking-[0.16em]">
-                        {t('project.detail.eyebrow')}
-                      </span>
-                    </div>
-                    <h2 className="mt-2 text-3xl font-bold tracking-[-0.05em]">{selectedProject.name}</h2>
-                    <p className="mt-1 max-w-2xl text-sm leading-6 text-muted-foreground">
-                      {selectedProject.description || t('project.detail.description')}
-                    </p>
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    <Button className="rounded-[4px]" onClick={onCreateProject} type="button" variant="outline">
-                      <Plus className="h-4 w-4" />
-                      {t('project.create')}
-                    </Button>
-                    <Button
-                      className="rounded-[4px]"
-                      onClick={() => onDeleteProject(selectedProject.id)}
-                      type="button"
-                      variant="outline"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                      {t('project.delete')}
-                    </Button>
-                  </div>
-                </div>
-
-                <div className="designer-bento-grid">
-                  <div className="designer-bento-main">
-                    <Surface className="grid gap-5 p-5" variant="plain">
-                      <div className="flex items-center justify-between gap-3">
-                        <h3 className="text-lg font-semibold tracking-[-0.03em]">{t('project.detail.basicInfo')}</h3>
-                        <Badge className="rounded-[4px]" variant="outline">
-                          {t('project.detail.caseCount', { count: selectedProject.testCases.length })}
-                        </Badge>
-                      </div>
-                      <div className="form-grid">
-                        <div className="form-field">
-                          <Label>{t('project.form.name')}</Label>
-                          <Input
-                            onChange={(event) =>
-                              onUpdateProject((project) => ({ ...project, name: event.target.value }))
-                            }
-                            value={selectedProject.name}
-                          />
-                        </div>
-                        <div className="form-field is-url">
-                          <Label>{t('project.detail.baseUrl')}</Label>
-                          <Input
-                            onChange={(event) =>
-                              onUpdateProject((project) => ({ ...project, defaultUrl: event.target.value }))
-                            }
-                            value={selectedProject.defaultUrl}
-                          />
-                        </div>
-                      </div>
-                      <div className="form-field">
-                        <Label>{t('project.form.description')}</Label>
-                        <Textarea
-                          className="min-h-[88px]"
-                          onChange={(event) =>
-                            onUpdateProject((project) => ({ ...project, description: event.target.value }))
-                          }
-                          value={selectedProject.description}
-                        />
-                      </div>
-                    </Surface>
-
-                    <Surface className="grid gap-4 p-5" variant="plain">
-                      <div className="flex flex-wrap items-center justify-between gap-3">
-                        <div>
-                          <h3 className="text-lg font-semibold tracking-[-0.03em]">{t('project.detail.environmentConfig')}</h3>
-                          <p className="mt-1 text-sm text-muted-foreground">
-                            {t('project.environment.description')}
-                          </p>
-                        </div>
-                        <ServerCog className="h-5 w-5 text-primary" />
-                      </div>
-                      <div className="grid gap-3">
-                        {selectedProject.environments.map((environment) => (
-                          <EnvironmentRow
-                            environment={environment}
-                            key={environment.id}
-                            onUpdateProject={onUpdateProject}
-                            selectedProject={selectedProject}
-                          />
-                        ))}
-                      </div>
-                    </Surface>
-                  </div>
-
-                  <aside className="designer-bento-side">
-                    <Surface className="p-5" variant="plain">
-                      <div className="flex items-center justify-between gap-3">
-                        <h3 className="text-lg font-semibold tracking-[-0.03em]">{t('project.detail.groups')}</h3>
-                        <Button className="rounded-[4px]" onClick={onCreateGroup} size="sm" type="button" variant="outline">
-                          <Plus className="h-4 w-4" />
-                          {t('project.detail.manage')}
-                        </Button>
-                      </div>
-                      <p className="mt-1 text-sm text-muted-foreground">{t('project.detail.groupDescription')}</p>
-                      <div className="mt-4 grid gap-2">
-                        {selectedProject.groups.map((group) => (
-                          <GroupRow
-                            active={group.id === selectedGroupId}
-                            group={group}
-                            key={group.id}
-                            onDeleteGroup={onDeleteGroup}
-                            onSelectGroup={onSelectGroup}
-                            onUpdateProject={onUpdateProject}
-                            selectedProject={selectedProject}
-                          />
-                        ))}
-                      </div>
-                    </Surface>
-
-                    <Surface className="p-5" variant="plain">
-                      <div className="flex items-center gap-2">
-                        <KeyRound className="h-4 w-4 text-primary" />
-                        <h3 className="text-lg font-semibold tracking-[-0.03em]">{t('project.detail.credentials')}</h3>
-                      </div>
-                      <div className="mt-4 grid gap-3">
-                        <div className="form-field">
-                          <Label>{t('project.credential.name')}</Label>
-                          <Input
-                            onChange={(event) => setCredentialLabel(event.target.value)}
-                            placeholder={t('project.credential.labelPlaceholder')}
-                            value={credentialLabel}
-                          />
-                        </div>
-                        <div className="form-field">
-                          <Label>{t('project.credential.username')}</Label>
-                          <Input
-                            onChange={(event) => setCredentialUsername(event.target.value)}
-                            placeholder="admin@example.com"
-                            value={credentialUsername}
-                          />
-                        </div>
-                        <div className="form-field">
-                          <Label>{t('project.credential.secret')}</Label>
-                          <Input
-                            onChange={(event) => setCredentialSecret(event.target.value)}
-                            placeholder={t('project.credential.localEncryption')}
-                            type="password"
-                            value={credentialSecret}
-                          />
-                        </div>
-                        <Button
-                          className="rounded-[4px]"
-                          disabled={!credentialLabel.trim() || !credentialSecret.trim()}
-                          onClick={async () => {
-                            const ref = await onSaveCredential({
-                              label: credentialLabel,
-                              username: credentialUsername,
-                              secret: credentialSecret,
-                            });
-                            if (ref) {
-                              setCredentialSecret('');
-                            }
-                          }}
-                          type="button"
-                          variant="outline"
-                        >
-                          {t('project.credential.save')}
-                        </Button>
-                      </div>
-                      <div className="mt-4 grid gap-2">
-                        {selectedProject.credentialRefs.map((credential) => (
-                          <div className="designer-info-block" key={credential.id}>
-                            <p className="text-sm font-semibold">{credential.label}</p>
-                            <p className="mt-1 font-mono text-xs text-muted-foreground">
-                              {credential.username || t('project.detail.usernameUnset')} · ********
-                            </p>
-                          </div>
-                        ))}
-                      </div>
-                    </Surface>
-
-                    <Surface className="p-5" variant="evidence">
-                      <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-primary">{t('project.detail.executionHealth')}</p>
-                      <div className="mt-3 flex items-end gap-2">
-                        <span className="text-4xl font-black tracking-[-0.06em]">98.4%</span>
-                        <span className="pb-1 text-sm font-semibold text-secondary">+1.2%</span>
-                      </div>
-                      <div className="mt-4 grid grid-cols-4 gap-2">
-                        <MetricTile label={t('project.metric.groups')} value={`${selectedProject.groups.length}`} />
-                        <MetricTile label={t('project.metric.environments')} value={`${selectedProject.environments.length}`} />
-                        <MetricTile label={t('project.metric.cases')} value={`${selectedProject.testCases.length}`} tone="primary" />
-                        <MetricTile label={t('project.metric.documents')} value={`${selectedProject.documents.length}`} />
-                      </div>
-                    </Surface>
-                  </aside>
-                </div>
-              </div>
-            ) : (
-              <EvidenceCard title={t('project.select.title')} description={t('project.select.description')} />
-            )}
-          </main>
-        </section>
+          {!projects.length ? (
+            <EvidenceCard title={t('project.empty.title')} description={t('project.empty.description')} />
+          ) : null}
+        </main>
       </PageBody>
+
+      <ProjectConfigurationDialog
+        credentialLabel={credentialLabel}
+        credentialSecret={credentialSecret}
+        credentialUsername={credentialUsername}
+        onClose={() => setEditingProjectId(null)}
+        onCreateGroup={onCreateGroup}
+        onDeleteGroup={onDeleteGroup}
+        onDeleteProject={onDeleteProject}
+        onSaveCredential={onSaveCredential}
+        onSelectGroup={onSelectGroup}
+        onUpdateProject={onUpdateProject}
+        open={Boolean(editingProject)}
+        project={editingProject}
+        selectedGroupId={selectedGroupId}
+        setCredentialLabel={setCredentialLabel}
+        setCredentialSecret={setCredentialSecret}
+        setCredentialUsername={setCredentialUsername}
+      />
     </PageShell>
+  );
+}
+
+function ProjectMetric({
+  icon: Icon,
+  label,
+  value,
+}: {
+  icon: typeof ListChecks;
+  label: string;
+  value: number;
+}) {
+  return (
+    <div className="project-overview-metric">
+      <div className="flex items-center justify-between gap-3">
+        <p>{label}</p>
+        <Icon className="h-[18px] w-[18px] text-primary" />
+      </div>
+      <strong>{value.toLocaleString()}</strong>
+    </div>
+  );
+}
+
+function ProjectCard({
+  active,
+  onDelete,
+  onEdit,
+  onSelect,
+  project,
+  t,
+}: {
+  active: boolean;
+  onDelete: () => void;
+  onEdit: () => void;
+  onSelect: () => void;
+  project: ProjectDraft;
+  t: (key: string, replacements?: Record<string, string | number>) => string;
+}) {
+  const assetCount = project.documents.length + project.recordings.length;
+
+  return (
+    <article className={`project-card ${active ? 'is-active' : ''}`} onClick={onSelect}>
+      <div className="project-card-topline">
+        <span className="project-card-icon"><FolderKanban className="h-4 w-4" /></span>
+        <Badge className={`project-card-status ${active ? 'is-active' : ''}`} variant="outline">
+          {active ? t('project.card.selected') : project.environments.length ? t('project.card.configured') : t('project.card.draft')}
+        </Badge>
+      </div>
+      <div className="project-card-copy">
+        <h2>{project.name}</h2>
+        <p>{project.description || t('project.list.noDescription')}</p>
+      </div>
+      <dl className="project-card-metrics">
+        <div>
+          <dt>{t('project.metric.groups')}</dt>
+          <dd>{project.groups.length}</dd>
+        </div>
+        <div>
+          <dt>{t('project.metric.cases')}</dt>
+          <dd>{project.testCases.length}</dd>
+        </div>
+        <div>
+          <dt>{t('project.card.assets')}</dt>
+          <dd>{assetCount}</dd>
+        </div>
+      </dl>
+      <footer className="project-card-footer">
+        <span>{t('project.card.environments', { count: project.environments.length })}</span>
+        <span className="flex items-center gap-1">
+          <button
+            aria-label={t('project.delete')}
+            className="project-card-icon-button"
+            onClick={(event) => {
+              event.stopPropagation();
+              onDelete();
+            }}
+            type="button"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </button>
+          <button
+            className="project-card-manage"
+            onClick={(event) => {
+              event.stopPropagation();
+              onEdit();
+            }}
+            type="button"
+          >
+            {t('project.card.manage')}
+            <Settings2 className="h-3.5 w-3.5" />
+          </button>
+        </span>
+      </footer>
+    </article>
+  );
+}
+
+function ProjectConfigurationDialog({
+  credentialLabel,
+  credentialSecret,
+  credentialUsername,
+  onClose,
+  onCreateGroup,
+  onDeleteGroup,
+  onDeleteProject,
+  onSaveCredential,
+  onSelectGroup,
+  onUpdateProject,
+  open,
+  project,
+  selectedGroupId,
+  setCredentialLabel,
+  setCredentialSecret,
+  setCredentialUsername,
+}: {
+  credentialLabel: string;
+  credentialSecret: string;
+  credentialUsername: string;
+  onClose: () => void;
+  onCreateGroup: () => void;
+  onDeleteGroup: (groupId: string) => void;
+  onDeleteProject: (projectId: string) => void;
+  onSaveCredential: (payload: { label: string; username: string; secret: string }) => Promise<CredentialRef | null>;
+  onSelectGroup: (groupId: string) => void;
+  onUpdateProject: (updater: (project: ProjectDraft) => ProjectDraft) => void;
+  open: boolean;
+  project?: ProjectDraft;
+  selectedGroupId: string;
+  setCredentialLabel: (value: string) => void;
+  setCredentialSecret: (value: string) => void;
+  setCredentialUsername: (value: string) => void;
+}) {
+  const { t } = useI18n();
+
+  if (!project) {
+    return null;
+  }
+
+  return (
+    <Dialog onOpenChange={(nextOpen) => !nextOpen && onClose()} open={open}>
+      <DialogContent className="project-config-dialog max-h-[min(900px,calc(100vh-40px))] w-[min(1120px,calc(100vw-40px))] gap-0 overflow-hidden p-0" showCloseButton>
+        <DialogHeader className="project-config-heading border-b border-border px-6 py-5 pr-16 text-left">
+          <DialogTitle>{project.name}</DialogTitle>
+          <DialogDescription>{t('project.detail.description')}</DialogDescription>
+        </DialogHeader>
+        <div className="project-config-content">
+          <section className="project-config-section project-config-basic">
+            <div className="project-config-section-heading">
+              <div>
+                <h3>{t('project.detail.basicInfo')}</h3>
+                <p>{t('project.detail.caseCount', { count: project.testCases.length })}</p>
+              </div>
+            </div>
+            <div className="project-config-form-grid">
+              <div className="form-field">
+                <Label>{t('project.form.name')}</Label>
+                <Input
+                  onChange={(event) => onUpdateProject((current) => ({ ...current, name: event.target.value }))}
+                  value={project.name}
+                />
+              </div>
+              <div className="form-field">
+                <Label>{t('project.detail.baseUrl')}</Label>
+                <Input
+                  onChange={(event) => onUpdateProject((current) => ({ ...current, defaultUrl: event.target.value }))}
+                  value={project.defaultUrl}
+                />
+              </div>
+            </div>
+            <div className="form-field">
+              <Label>{t('project.form.description')}</Label>
+              <Textarea
+                className="min-h-[80px]"
+                onChange={(event) => onUpdateProject((current) => ({ ...current, description: event.target.value }))}
+                value={project.description}
+              />
+            </div>
+          </section>
+
+          <div className="project-config-columns">
+            <section className="project-config-section">
+              <div className="project-config-section-heading">
+                <div>
+                  <h3>{t('project.detail.environmentConfig')}</h3>
+                  <p>{t('project.environment.description')}</p>
+                </div>
+                <ServerCog className="h-5 w-5 text-primary" />
+              </div>
+              <div className="grid gap-3">
+                {project.environments.map((environment) => (
+                  <EnvironmentRow
+                    environment={environment}
+                    key={environment.id}
+                    onUpdateProject={onUpdateProject}
+                    selectedProject={project}
+                  />
+                ))}
+              </div>
+            </section>
+
+            <div className="grid content-start gap-5">
+              <section className="project-config-section">
+                <div className="project-config-section-heading">
+                  <div>
+                    <h3>{t('project.detail.groups')}</h3>
+                    <p>{t('project.detail.groupDescription')}</p>
+                  </div>
+                  <Button onClick={onCreateGroup} size="sm" type="button" variant="outline">
+                    <Plus className="h-4 w-4" />
+                    {t('project.detail.manage')}
+                  </Button>
+                </div>
+                <div className="grid gap-2">
+                  {project.groups.map((group) => (
+                    <GroupRow
+                      active={group.id === selectedGroupId}
+                      group={group}
+                      key={group.id}
+                      onDeleteGroup={onDeleteGroup}
+                      onSelectGroup={onSelectGroup}
+                      onUpdateProject={onUpdateProject}
+                      selectedProject={project}
+                    />
+                  ))}
+                </div>
+              </section>
+
+              <section className="project-config-section">
+                <div className="project-config-section-heading">
+                  <div className="flex items-center gap-2">
+                    <KeyRound className="h-4 w-4 text-primary" />
+                    <h3>{t('project.detail.credentials')}</h3>
+                  </div>
+                </div>
+                <div className="grid gap-3">
+                  <div className="form-field">
+                    <Label>{t('project.credential.name')}</Label>
+                    <Input
+                      onChange={(event) => setCredentialLabel(event.target.value)}
+                      placeholder={t('project.credential.labelPlaceholder')}
+                      value={credentialLabel}
+                    />
+                  </div>
+                  <div className="form-field">
+                    <Label>{t('project.credential.username')}</Label>
+                    <Input
+                      onChange={(event) => setCredentialUsername(event.target.value)}
+                      placeholder="admin@example.com"
+                      value={credentialUsername}
+                    />
+                  </div>
+                  <div className="form-field">
+                    <Label>{t('project.credential.secret')}</Label>
+                    <Input
+                      onChange={(event) => setCredentialSecret(event.target.value)}
+                      placeholder={t('project.credential.localEncryption')}
+                      type="password"
+                      value={credentialSecret}
+                    />
+                  </div>
+                  <Button
+                    disabled={!credentialLabel.trim() || !credentialSecret.trim()}
+                    onClick={async () => {
+                      const ref = await onSaveCredential({
+                        label: credentialLabel,
+                        username: credentialUsername,
+                        secret: credentialSecret,
+                      });
+                      if (ref) {
+                        setCredentialSecret('');
+                      }
+                    }}
+                    type="button"
+                    variant="outline"
+                  >
+                    {t('project.credential.save')}
+                  </Button>
+                </div>
+                {project.credentialRefs.length ? (
+                  <div className="project-credential-list">
+                    {project.credentialRefs.map((credential) => (
+                      <div className="project-credential-row" key={credential.id}>
+                        <p>{credential.label}</p>
+                        <span>{credential.username || t('project.detail.usernameUnset')} · ********</span>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </section>
+
+              <Button
+                className="justify-start"
+                onClick={() => {
+                  onDeleteProject(project.id);
+                  onClose();
+                }}
+                type="button"
+                variant="destructive"
+              >
+                <Trash2 className="h-4 w-4" />
+                {t('project.delete')}
+              </Button>
+            </div>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -380,7 +489,7 @@ function GroupRow({
 
   return (
     <div
-      className={`cursor-pointer rounded-[4px] p-4 text-left ${active ? 'tech-active' : 'tech-list-row'}`}
+      className={`project-group-row cursor-pointer text-left ${active ? 'tech-active' : 'tech-list-row'}`}
       onClick={() => onSelectGroup(group.id)}
       role="button"
       tabIndex={0}
@@ -453,7 +562,7 @@ function EnvironmentRow({
   const { t } = useI18n();
 
   return (
-    <div className="tech-list-row rounded-[4px] p-4">
+    <div className="project-environment-row tech-list-row">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-muted-foreground">{t('project.environment.eyebrow')}</p>
