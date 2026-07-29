@@ -33,6 +33,7 @@ export interface RecordingAgentRunRequest {
   recording: RecordingAsset;
   replayResults: RecordingReplayEvidence[];
   projectId?: string;
+  testCaseId?: string;
   runId?: string;
   startedAt?: string;
   endedAt?: string;
@@ -65,6 +66,7 @@ export function createRecordingAgentRun(request: RecordingAgentRunRequest): Agen
     targetUrl: request.recording.startUrl,
     page: 'recording',
     ...(request.projectId ? { projectId: request.projectId } : {}),
+    ...(request.testCaseId ? { testCaseId: request.testCaseId } : {}),
     environmentId: request.recording.environmentId,
     groupId: request.recording.groupId,
   });

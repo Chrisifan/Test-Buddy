@@ -21,6 +21,7 @@ import {
   type AgentSourceStepType,
   type AgentUsageBucket,
 } from './agent.js';
+import type { TestCaseDraft } from './studio.js';
 
 export interface AgentStubRequest {
   mode: 'ai' | 'aiAssert' | 'aiQuery';
@@ -75,6 +76,14 @@ export interface WorkflowAgentRunRequest {
     steps: WorkflowAgentStepInput[];
   };
   stepRuns: AgentRunResult[];
+  runId?: string;
+  projectId?: string;
+  environmentId?: string;
+}
+
+export interface TestCaseAgentRunRequest {
+  testCase: TestCaseDraft;
+  stepRuns: Array<AgentRunResult | undefined>;
   runId?: string;
   projectId?: string;
   environmentId?: string;
@@ -1007,6 +1016,176 @@ export function createWorkflowAgentRun(request: WorkflowAgentRunRequest): AgentR
     ...(modelAssignments.length ? { modelAssignments } : {}),
     startedAt: request.stepRuns[0]?.startedAt ?? now,
     endedAt: request.stepRuns.at(-1)?.endedAt ?? now,
+    ...(failureReason ? { failureReason } : {}),
+  };
+}
+
+function testCaseStepAction(
+  step: TestCaseDraft['steps'][number],
+  stepRun: AgentRunResult | undefined,
+): AgentStepAction {
+  if (step.type === 'recordingReplay' || step.type === 'manual') {
+    return 'observe';
+  }
+
+  const executedStep = stepRun?.plan.steps.find((candidate) => candidate.sourceStepType === step.type);
+  if (executedStep) {
+    return executedStep.action;
+  }
+  return step.type === 'aiAssert' ? 'assert' : step.type === 'aiQuery' ? 'extract' : 'observe';
+}
+
+export function createTestCaseAgentRun(request: TestCaseAgentRunRequest): AgentRunResult {
+  const now = new Date().toISOString();
+  const runId = request.runId ?? `agent-run-test-case-${Date.now()}`;
+  const intent = createAgentIntent({
+    source: 'workflow',
+    prompt: `执行测试用例「${request.testCase.name}」`,
+    page: 'testCase',
+    targetUrl: request.testCase.url,
+    testCaseId: request.testCase.id,
+    groupId: request.testCase.groupId,
+    ...(request.projectId ? { projectId: request.projectId } : {}),
+    ...(request.environmentId ? { environmentId: request.environmentId } : {}),
+  });
+  const planSteps: AgentStep[] = request.testCase.steps.map((step, index) => {
+    const stepRun = request.stepRuns[index];
+    const executedStep = stepRun?.plan.steps.find((candidate) => candidate.sourceStepType === step.type);
+    return {
+      id: step.id,
+      action: testCaseStepAction(step, stepRun),
+      title: step.title,
+      instruction: step.body,
+      sourceStepType: step.type,
+      ...(executedStep?.expected ? { expected: executedStep.expected } : {}),
+      ...(executedStep?.selector ? { selector: executedStep.selector } : {}),
+      ...(executedStep?.value !== undefined ? { value: executedStep.value } : {}),
+      ...(executedStep?.url ? { url: executedStep.url } : {}),
+    };
+  });
+  const executedRuns = request.stepRuns.filter((run): run is AgentRunResult => Boolean(run));
+  const hasFailure = executedRuns.some((run) => run.status === 'failed');
+  const hasPending =
+    executedRuns.length < request.testCase.steps.length || executedRuns.some((run) => run.status === 'neutral');
+  const status: AgentRunStatus = hasFailure ? 'failed' : hasPending ? 'neutral' : 'passed';
+  const failedRun = executedRuns.find((run) => run.status === 'failed');
+  const failureReason = failedRun?.failureReason;
+  const plan: AgentPlan = {
+    id: `agent-plan-test-case-${Date.now()}`,
+    intentId: intent.id,
+    title: request.testCase.name,
+    summary: `测试用例已转换为统一 Agent 计划，共 ${planSteps.length} 个步骤。`,
+    steps: planSteps,
+    risks: hasPending ? ['部分测试步骤尚未获得真实执行结论，运行保持等待态。'] : [],
+    createdAt: now,
+  };
+  const events: AgentRunEvent[] = [
+    {
+      id: `${runId}-event-plan`,
+      runId,
+      type: 'agent:plan-created',
+      message: plan.summary,
+      status: 'running',
+      plan,
+      createdAt: now,
+    },
+  ];
+
+  request.testCase.steps.forEach((step, index) => {
+    const stepRun = request.stepRuns[index];
+    events.push({
+      id: `${runId}-event-step-${index}-started`,
+      runId,
+      type: 'agent:step-started',
+      stepId: step.id,
+      message: stepRun ? `执行测试步骤：${step.title}` : `测试步骤尚未执行：${step.title}`,
+      status: stepRun ? 'running' : 'neutral',
+      createdAt: stepRun?.startedAt ?? now,
+    });
+    if (!stepRun) {
+      return;
+    }
+
+    stepRun.events
+      .filter((event) =>
+        ['agent:browser-action', 'agent:observation-created', 'agent:assertion-result', 'agent:artifact-created'].includes(
+          event.type,
+        ),
+      )
+      .forEach((event, eventIndex) => {
+        events.push({
+          ...event,
+          id: `${runId}-event-step-${index}-${eventIndex}`,
+          runId,
+          stepId: step.id,
+          ...(event.observation ? { observation: { ...event.observation, stepId: step.id } } : {}),
+          ...(event.verification ? { verification: { ...event.verification, stepId: step.id } } : {}),
+        });
+      });
+    if (stepRun.status === 'failed') {
+      events.push({
+        id: `${runId}-event-step-${index}-failed`,
+        runId,
+        type: 'agent:step-failed',
+        stepId: step.id,
+        message: stepRun.failureReason ?? stepRun.summary,
+        status: 'failed',
+        createdAt: stepRun.endedAt ?? now,
+      });
+    }
+  });
+
+  events.push({
+    id: `${runId}-event-finished`,
+    runId,
+    type: 'agent:run-finished',
+    message:
+      status === 'passed'
+        ? `测试用例 Agent 已完成 ${request.testCase.steps.length} 个步骤。`
+        : status === 'failed'
+          ? `测试用例 Agent 执行失败：${failureReason ?? failedRun?.summary ?? '未知错误'}`
+          : `测试用例 Agent 已生成 ${request.testCase.steps.length} 个步骤的计划，等待完成执行。`,
+    status,
+    createdAt: executedRuns.at(-1)?.endedAt ?? now,
+  });
+
+  const artifactPaths = new Set<string>();
+  const artifacts = executedRuns.flatMap((stepRun, runIndex) =>
+    stepRun.artifacts
+      .filter((artifact) => !artifact.path.startsWith('memory://') && !artifactPaths.has(artifact.path))
+      .map((artifact, artifactIndex) => {
+        artifactPaths.add(artifact.path);
+        return { ...artifact, id: `${runId}-artifact-${runIndex}-${artifactIndex}` };
+      }),
+  );
+  const metrics = mergeExecutionMetrics(executedRuns);
+  const modelAssignments = mergeModelAssignments(executedRuns);
+
+  return {
+    runId,
+    intent,
+    plan,
+    status,
+    summary:
+      status === 'passed'
+        ? `测试用例 Agent 已完成全部 ${planSteps.length} 个步骤。`
+        : status === 'failed'
+          ? `测试用例 Agent 执行失败：${failureReason ?? failedRun?.summary ?? '未知错误'}`
+          : `测试用例 Agent 已生成 ${planSteps.length} 个步骤的计划，等待完成执行。`,
+    events,
+    artifacts: [
+      {
+        id: `${runId}-artifact-plan`,
+        type: 'report',
+        label: '测试用例 Agent 计划摘要',
+        path: `memory://agent/${runId}/plan.md`,
+      },
+      ...artifacts,
+    ],
+    ...(metrics ? { metrics } : {}),
+    ...(modelAssignments.length ? { modelAssignments } : {}),
+    startedAt: executedRuns[0]?.startedAt ?? now,
+    endedAt: executedRuns.at(-1)?.endedAt ?? now,
     ...(failureReason ? { failureReason } : {}),
   };
 }

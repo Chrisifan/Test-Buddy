@@ -265,11 +265,13 @@ fill #password with 123456
 - Workflow 步骤转换为父级 `AgentPlan`，来源标记为 `workflow`。
 - 执行前打开或导航到 Workflow 自身的目标 URL。
 - `ai`、`aiAssert`、`aiQuery` 步骤按顺序复用自然语言 Agent 执行链路。
+- 仅包含这三类步骤的测试用例也会转换为 Workflow 并复用同一执行链；因此用例运行具备浏览器动作、验证、证据和报告，而不是单独模拟通过。
 - 每个步骤的 browser action、observation、verification、artifact 和 usage 聚合到父级 `AgentRunResult`。
 - 多步骤 metrics 会合并调用数、耗时、token 以及 `byIntent` / `byModel` 用量。
 - 任一步进入 `failed` 或 `neutral` 后暂停后续执行；父运行保留对应状态，未执行步骤保持 `neutral`。
 - 无法解析为当前可执行动作的步骤保持 `neutral`，不继承旧 stub 的默认通过状态。
 - 浏览器 fallback 只生成 `neutral` 计划，不再产生假通过记录。
+- 含人工步骤或尚未由专用执行器覆盖的测试用例也保持 `neutral`，直到获得真实执行证据。
 - Workflow 结果直接写入 `RunDetail` 并进入运行记录页。
 
 ### 4.8 Recording 已进入统一 Agent Run 链路
@@ -286,11 +288,17 @@ fill #password with 123456
 - 录制步骤中的基线截图与回放后的实际截图成对进入运行产物；可读取且尺寸一致的 PNG 会逐像素比较并生成 `差异` artifact，像素变化会明确使运行失败。
 - 录制页提供“运行回放”入口，结果直接写入运行记录并持久化。
 - 新录制首个导航步骤和手动快照会绑定本次真实 BrowserSession，避免写入旧截图状态。
+- 仅包含一个 `recordingReplay` 步骤的测试用例会直接交给 RecordingRunner，复用真实回放、视觉比较、差异产物和 Recording Agent 证据；运行详情与 Agent intent 均关联原测试用例。
+- 混合测试用例中的 `recordingReplay` 也会委托给 RecordingRunner；子运行日志和产物会折叠进入父用例，且 `failed` / `neutral` 结果会将后续步骤明确标记为未执行，避免绕过前置条件。
+- 录制片段通过后，混合用例中的 `ai`、`aiAssert`、`aiQuery` 会以单步骤 Workflow 段在当前浏览器页面继续执行，不会跳回测试用例初始 URL；每段真实执行的日志与产物同样归入父用例。
+- 父用例会持久化每个子段的 `AgentRunResult`，并生成单一父级 Agent Run，统一归档测试步骤计划、事件、产物和模型指标；运行记录在多段时默认显示“用例总览”，也可切换子段查看计划、页面观察、验证、模型指标和产物。
+- 等待态人工步骤可在运行记录中填写检查说明后确认通过或失败；确认结果会更新步骤、父级 Agent 验证事件、运行摘要与持久化记录。确认通过但仍有未执行步骤时，整例继续保持 `neutral`。
 - 浏览器 fallback 只生成 `neutral` Recording Agent 计划，不模拟回放成功。
 - 图表稳定等待会临时冻结目标区域的 CSS/SVG 动画和过渡，并采样 Canvas 像素摘要；完成或超时后会清理临时样式和标记。
 
 尚未完成：
 
+- 人工步骤的自动化替代策略与可选截图/文件证据附件。
 - 真实业务图表页上的稳定性验收。
 
 因此当前截图读取失败、尺寸不一致、没有可比基线，或动态区域遮罩覆盖全部截图时，Recording Agent 明确标记为 `neutral`，不会伪造视觉通过；每条录制可设置 `0–100%` 容差阈值与按截图百分比坐标配置的动态区域遮罩。遮罩像素不进入差异比例分母，也不会在差异图中标红。

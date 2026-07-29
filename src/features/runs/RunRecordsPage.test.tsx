@@ -159,6 +159,152 @@ describe('RunRecordsPage', () => {
     expect(screen.getByText('失败率上升 · +100%')).toBeInTheDocument();
   });
 
+  it('switches between persisted agent segments for a mixed test case', () => {
+    const state = createInitialStudioState();
+    const project = state.projects[0];
+    const recordingRun = createStubAgentRun({
+      mode: 'ai',
+      prompt: '回放登录录制',
+      runtimeDescription: 'chromium / desktop',
+      targetEnvironment: 'Staging',
+    });
+    recordingRun.intent.source = 'recording';
+    const workflowRun = createStubAgentRun({
+      mode: 'aiAssert',
+      prompt: '确认登录成功',
+      runtimeDescription: 'chromium / desktop',
+      targetEnvironment: 'Staging',
+    });
+    workflowRun.intent.source = 'workflow';
+    const detail: RunDetail = {
+      id: 'mixed-case-run',
+      projectId: project.id,
+      testCaseId: project.testCases[0]!.id,
+      environmentId: project.environments[0]!.id,
+      title: '登录混合用例',
+      status: 'passed',
+      startedAt: new Date(0).toISOString(),
+      endedAt: new Date(0).toISOString(),
+      duration: '00:00:02',
+      summary: '录制回放和登录验证均已完成。',
+      logs: [],
+      steps: [],
+      artifacts: [],
+      agentRuns: [recordingRun, workflowRun],
+    };
+    const summary = {
+      ...state.recentRuns[0]!,
+      id: detail.id,
+      name: detail.title,
+      status: detail.status,
+      summary: detail.summary,
+      projectId: detail.projectId,
+      testCaseId: detail.testCaseId,
+      environmentId: detail.environmentId,
+    };
+
+    render(
+      <RunRecordsPage
+        onSelectRun={vi.fn()}
+        project={project}
+        recentRuns={[summary]}
+        runDetails={[detail]}
+        selectedRunId={detail.id}
+      />,
+    );
+
+    expect(screen.getByRole('tablist', { name: '执行段' })).toBeInTheDocument();
+    const segments = screen.getAllByRole('tab');
+    expect(segments).toHaveLength(2);
+    expect(segments[0]).toHaveAttribute('aria-selected', 'true');
+
+    fireEvent.click(segments[1]!);
+
+    expect(segments[1]).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByText('流程执行')).toBeInTheDocument();
+  });
+
+  it('submits a required evidence note for a pending manual step', () => {
+    const state = createInitialStudioState();
+    const project = {
+      ...state.projects[0]!,
+      testCases: [
+        {
+          id: 'case-manual',
+          kind: 'scenario' as const,
+          groupId: state.projects[0]!.groups[0]!.id,
+          environmentId: state.projects[0]!.environments[0]!.id,
+          source: 'manual' as const,
+          name: '人工检查用例',
+          category: '核心链路',
+          lastEdited: '刚刚',
+          url: state.projects[0]!.environments[0]!.url,
+          notes: '',
+          steps: [{ id: 'manual-step', type: 'manual' as const, title: '审核付款页', body: '确认付款信息' }],
+        },
+      ],
+    };
+    const detail: RunDetail = {
+      id: 'run-manual',
+      projectId: project.id,
+      testCaseId: 'case-manual',
+      environmentId: project.environments[0]!.id,
+      title: '人工检查用例',
+      status: 'neutral',
+      startedAt: new Date(0).toISOString(),
+      endedAt: new Date(0).toISOString(),
+      duration: '00:00:01',
+      summary: '等待人工检查。',
+      logs: [],
+      steps: [
+        {
+          id: 'run-manual-step',
+          stepId: 'manual-step',
+          title: '审核付款页',
+          status: 'neutral',
+          message: '等待人工检查。',
+        },
+      ],
+      artifacts: [],
+    };
+    const onConfirmManualStep = vi.fn();
+
+    render(
+      <RunRecordsPage
+        onConfirmManualStep={onConfirmManualStep}
+        onSelectRun={vi.fn()}
+        project={project}
+        recentRuns={[{
+          id: detail.id,
+          name: detail.title,
+          status: detail.status,
+          duration: detail.duration,
+          summary: detail.summary,
+          projectId: detail.projectId,
+          testCaseId: detail.testCaseId,
+          environmentId: detail.environmentId,
+        }]}
+        runDetails={[detail]}
+        selectedRunId={detail.id}
+      />,
+    );
+
+    const confirmButton = screen.getByRole('button', { name: '确认通过' });
+    expect(confirmButton).toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText('为 审核付款页 填写人工确认说明'), {
+      target: { value: '订单号和付款金额已核对。' },
+    });
+    fireEvent.click(confirmButton);
+
+    expect(onConfirmManualStep).toHaveBeenCalledWith(
+      detail.id,
+      'manual-step',
+      'passed',
+      '订单号和付款金额已核对。',
+    );
+  });
+
   it('shows structured agent evidence for natural language runs', () => {
     const state = createInitialStudioState();
     const project = state.projects[0];

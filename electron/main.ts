@@ -10,6 +10,7 @@ import {
   type ProjectDraft,
   type RecordingCapturedEvent,
   type RuntimeInfo,
+  type RuntimeProfile,
   type RunEventPayload,
   type RunRecordingRequest,
   type RunTestCaseRequest,
@@ -17,6 +18,9 @@ import {
   type SaveCredentialRequest,
   type SessionStartRequest,
   type StudioState,
+  getExclusiveRecordingReplayId,
+  isAgentRunnableTestCase,
+  testCaseToWorkflow,
 } from '../shared/studio.js';
 import { ArtifactManager } from './runtime/artifact-manager.js';
 import { OpenAICompatibleAgentPlanner } from './runtime/agent-planner.js';
@@ -97,6 +101,16 @@ function getArtifactManagerOrThrow(): ArtifactManager {
   return artifactManager;
 }
 
+function resolveTestCaseRuntimeProfile(request: RunTestCaseRequest): RuntimeProfile {
+  return request.runtimeProfile ?? {
+    browser: request.environment.browser,
+    baseUrl: request.environment.url,
+    viewport: request.environment.viewport,
+    locale: request.environment.locale,
+    headless: request.environment.headless,
+  };
+}
+
 function createWindow(): BrowserWindow {
   const icon = loadApplicationIcon();
   const window = new BrowserWindow({
@@ -175,7 +189,29 @@ function registerIpcHandlers(): void {
     getBrowserRuntimeOrThrow().capture(),
   );
   ipcMain.handle('runtime:run-test-case', async (_event, request: RunTestCaseRequest) => {
-    const result = await getTestRunnerOrThrow().run(request);
+    const recordingId = getExclusiveRecordingReplayId(request.testCase);
+    const recording = recordingId
+      ? request.project.recordings.find((item) => item.id === recordingId)
+      : undefined;
+    const result = recording
+      ? await getRecordingRunnerOrThrow().run({
+          project: request.project,
+          environment: request.environment,
+          recording,
+          testCaseId: request.testCase.id,
+        })
+      : isAgentRunnableTestCase(request.testCase)
+      ? await getRuntimeOrThrow().runWorkflow({
+          workflow: testCaseToWorkflow(request.testCase),
+          targetEnvironment: request.environment.name,
+          runtimeProfile: resolveTestCaseRuntimeProfile(request),
+          ...(request.midsceneConfig ? { midsceneConfig: request.midsceneConfig } : {}),
+          ...(request.agentModelConfig ? { agentModelConfig: request.agentModelConfig } : {}),
+          ...(request.browserSession ? { browserSession: request.browserSession } : {}),
+          project: request.project,
+          environment: request.environment,
+        })
+      : await getTestRunnerOrThrow().run(request);
     const state = await getStoreOrThrow().load();
     await getStoreOrThrow().save({
       ...state,
@@ -317,20 +353,17 @@ app.whenReady().then(async () => {
       },
     },
   );
-  testRunner = new TestRunner(artifactManager, browserRuntime, (event: RunEventPayload) => {
+  const emitRunEvent = (event: RunEventPayload) => {
     for (const window of BrowserWindow.getAllWindows()) {
       window.webContents.send('runtime:run-event', event);
     }
-  });
+  };
   recordingRunner = new RecordingRunner(
     browserRuntime,
-    (event: RunEventPayload) => {
-      for (const window of BrowserWindow.getAllWindows()) {
-        window.webContents.send('runtime:run-event', event);
-      }
-    },
+    emitRunEvent,
     new PixelVisualDiffService(electronNativeImageAdapter),
   );
+  testRunner = new TestRunner(artifactManager, browserRuntime, emitRunEvent, recordingRunner, getRuntimeOrThrow());
   registerIpcHandlers();
   mainWindow = createWindow();
 

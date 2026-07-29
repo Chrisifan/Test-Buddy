@@ -18,6 +18,7 @@
 - Midscene `PlaywrightAgent` adapter 已绑定当前 BrowserRuntime Page，并在 Main Process 完成装配。
 - Midscene 单动作耗时、模型调用量和 token usage 已进入 Agent Run 与运行记录，异常动作也会保留指标。
 - Workflow 已转换为统一父级 Agent plan，顺序执行自然语言步骤并聚合事件、产物、指标和失败状态。
+- 仅包含 `ai`、`aiAssert`、`aiQuery` 步骤的测试用例会复用统一 Workflow Agent Runtime，获得真实浏览器动作、验证、证据与报告；网页 fallback 和无法由专用执行器处理的步骤明确保持 `neutral`，不再模拟通过。
 - 浏览器 fallback 的 Workflow 只生成等待态，不再模拟通过。
 - Recording 已支持从录制页直接进入统一 Agent Run，真实回放节点并配对基线/实际截图证据；可比 PNG 截图会进行逐像素对比并生成差异图，差异会使回放失败，不可比截图保持 `neutral`。每条录制可配置 `0–100%` 的视觉差异阈值，默认 `0%` 保持严格比较；也可用截图相对坐标设置动态区域遮罩，遮罩像素不参与差异比例计算。
 - Planner 已接入 OpenAI-compatible 模型调用，可生成经过白名单校验的结构化计划并顺序驱动现有执行链。
@@ -258,7 +259,7 @@ Intent -> Plan -> Execute -> Observe -> Verify -> Report -> Asset
 应对：
 
 - 用统一 Agent Runtime contract 收敛。
-- Workflow 与 Recording 已使用统一 Agent Run；测试用例中的 recordingReplay 后续收敛到同一 RecordingRunner。
+- Workflow 与 Recording 已使用统一 Agent Run；仅包含一个 `recordingReplay` 步骤的测试用例已收敛到同一 RecordingRunner，并保留测试用例关联、视觉对比和回放证据。混合用例中的录制步骤会委托给 RecordingRunner，后续 `ai`、`aiAssert`、`aiQuery` 会在当前页面继续复用 Workflow Runtime；子段日志、产物与 Agent Run 都会折叠进父用例运行。父用例会生成单一 Agent Run，规范化全部测试步骤、子段事件、产物与模型指标；运行记录默认展示用例总览，也可切换查看子段。失败或等待态会阻断后续步骤。
 
 ### 风险 3：Midscene 接入后调试困难
 

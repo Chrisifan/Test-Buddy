@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { createAgentIntent, isTerminalAgentEvent, type AgentRunEvent } from './agent.js';
-import { createPlannedAgentRun, createStubAgentRun, createWorkflowAgentRun } from './agentStub.js';
+import { createPlannedAgentRun, createStubAgentRun, createTestCaseAgentRun, createWorkflowAgentRun } from './agentStub.js';
 import { createRecordingAgentRun } from './recordingAgent.js';
 
 describe('agent contract helpers', () => {
@@ -331,6 +331,82 @@ describe('agent contract helpers', () => {
         modelName: 'planner-large',
       }),
     ]);
+  });
+
+  it('composes recording, workflow, and pending steps into one test-case agent run', () => {
+    const recordingRun = createStubAgentRun({
+      mode: 'ai',
+      prompt: '回放登录录制',
+      runtimeDescription: 'chromium / desktop',
+      targetEnvironment: 'Staging',
+      verificationStatus: 'passed',
+      executionMetrics: {
+        durationMs: 120,
+        modelTimeCostMs: 0,
+        calls: 0,
+        promptTokens: 0,
+        completionTokens: 0,
+        totalTokens: 0,
+        cachedInputTokens: 0,
+        byIntent: {},
+        byModel: {},
+      },
+    });
+    recordingRun.intent.source = 'recording';
+    const assertionRun = createStubAgentRun({
+      mode: 'aiAssert',
+      prompt: '确认当前用户已登录',
+      runtimeDescription: 'chromium / desktop',
+      targetEnvironment: 'Staging',
+      verificationStatus: 'passed',
+      executionMetrics: {
+        durationMs: 80,
+        modelTimeCostMs: 50,
+        calls: 1,
+        promptTokens: 40,
+        completionTokens: 10,
+        totalTokens: 50,
+        cachedInputTokens: 0,
+        byIntent: { assert: { promptTokens: 40, completionTokens: 10, totalTokens: 50, calls: 1 } },
+        byModel: { verifier: { promptTokens: 40, completionTokens: 10, totalTokens: 50, calls: 1 } },
+      },
+    });
+    const run = createTestCaseAgentRun({
+      testCase: {
+        id: 'case-login',
+        kind: 'recording',
+        groupId: 'group-core',
+        environmentId: 'env-staging',
+        source: 'recording',
+        name: '登录混合用例',
+        category: '核心链路',
+        lastEdited: '刚刚',
+        url: 'https://example.test/login',
+        notes: '',
+        steps: [
+          { id: 'replay', type: 'recordingReplay', title: '回放登录', body: '回放登录录制', recordingId: 'recording-login' },
+          { id: 'assert', type: 'aiAssert', title: '验证登录', body: '确认当前用户已登录' },
+          { id: 'manual', type: 'manual', title: '人工确认', body: '确认欢迎语' },
+        ],
+      },
+      stepRuns: [recordingRun, assertionRun, undefined],
+      runId: 'agent-run-case-login',
+      projectId: 'project-demo',
+      environmentId: 'env-staging',
+    });
+
+    expect(run.runId).toBe('agent-run-case-login');
+    expect(run.intent.testCaseId).toBe('case-login');
+    expect(run.status).toBe('neutral');
+    expect(run.plan.steps.map((step) => [step.id, step.sourceStepType, step.action])).toEqual([
+      ['replay', 'recordingReplay', 'observe'],
+      ['assert', 'aiAssert', 'assert'],
+      ['manual', 'manual', 'observe'],
+    ]);
+    expect(run.events).toContainEqual(
+      expect.objectContaining({ type: 'agent:step-started', stepId: 'manual', status: 'neutral' }),
+    );
+    expect(run.metrics).toEqual(expect.objectContaining({ durationMs: 200, calls: 1, totalTokens: 50 }));
   });
 
   it('creates a neutral recording run with paired baseline and actual screenshot evidence', () => {

@@ -201,6 +201,13 @@ export interface RunStepLog {
   screenshotPath?: string;
 }
 
+export interface ManualStepEvidence {
+  stepId: string;
+  status: 'passed' | 'failed';
+  note: string;
+  confirmedAt: string;
+}
+
 export interface RunDetail {
   id: string;
   projectId: string;
@@ -216,6 +223,8 @@ export interface RunDetail {
   steps: RunStepLog[];
   artifacts: RunArtifact[];
   agentRun?: AgentRunResult;
+  agentRuns?: AgentRunResult[];
+  manualEvidence?: ManualStepEvidence[];
   failureReason?: string;
 }
 
@@ -330,6 +339,8 @@ export interface RunWorkflowRequest {
   workflow: WorkflowDraft;
   targetEnvironment: string;
   runtimeProfile: RuntimeProfile;
+  parentRunId?: string;
+  preserveCurrentPage?: boolean;
   project?: ProjectDraft;
   environment?: ProjectEnvironment;
   midsceneConfig?: MidsceneConfig;
@@ -341,12 +352,18 @@ export interface RunTestCaseRequest {
   project: ProjectDraft;
   testCase: TestCaseDraft;
   environment: ProjectEnvironment;
+  runtimeProfile?: RuntimeProfile;
+  midsceneConfig?: MidsceneConfig;
+  agentModelConfig?: AgentModelConfig;
+  browserSession?: BrowserSessionState;
 }
 
 export interface RunRecordingRequest {
   project: ProjectDraft;
   recording: RecordingAsset;
   environment: ProjectEnvironment;
+  testCaseId?: string;
+  parentRunId?: string;
 }
 
 export interface RunWorkflowResponse {
@@ -742,6 +759,20 @@ export function testCaseToWorkflow(testCase: TestCaseDraft): WorkflowDraft {
         body: step.body,
       })),
   };
+}
+
+export function isAgentRunnableTestCase(testCase: TestCaseDraft): boolean {
+  return (
+    testCase.steps.length > 0 &&
+    testCase.steps.every(
+      (step) => step.type === 'ai' || step.type === 'aiAssert' || step.type === 'aiQuery',
+    )
+  );
+}
+
+export function getExclusiveRecordingReplayId(testCase: TestCaseDraft): string | undefined {
+  const [step] = testCase.steps;
+  return testCase.steps.length === 1 && step?.type === 'recordingReplay' ? step.recordingId : undefined;
 }
 
 export function createDemoProject(): ProjectDraft {

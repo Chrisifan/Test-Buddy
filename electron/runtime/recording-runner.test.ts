@@ -61,12 +61,14 @@ describe('RecordingRunner', () => {
     const emitRunEvent = vi.fn<(event: RunEventPayload) => void>();
     const runner = new RecordingRunner({ start, navigate, replayRecordingSteps } as never, emitRunEvent);
 
-    const response = await runner.run({ project, environment, recording });
+    const response = await runner.run({ project, environment, recording, testCaseId: 'case-recording-login' });
 
     expect(start).toHaveBeenCalledWith({ project, environment, record: false });
     expect(navigate).toHaveBeenCalledWith({ url: recording.startUrl });
     expect(replayRecordingSteps).toHaveBeenCalledWith(recording.steps, response.runId);
     expect(response.agentRun.intent.source).toBe('recording');
+    expect(response.agentRun.intent.testCaseId).toBe('case-recording-login');
+    expect(response.detail.testCaseId).toBe('case-recording-login');
     expect(response.agentRun.status).toBe('neutral');
     expect(response.detail.agentRun).toBe(response.agentRun);
     expect(response.detail.artifacts).toEqual(

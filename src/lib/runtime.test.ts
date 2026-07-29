@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createEmptyProject, type ChatCommandRequest, type DesktopApi } from '../../shared/studio.js';
 import * as runtime from './runtime.js';
 
-const { runRecording, runWorkflow, sendChatCommand } = runtime;
+const { runRecording, runTestCase, runWorkflow, sendChatCommand } = runtime;
 
 const request: ChatCommandRequest = {
   mode: 'ai',
@@ -59,6 +59,101 @@ describe('browser fallback agent runtime', () => {
     expect(response.detail.status).toBe('neutral');
     expect(response.detail.agentRun).toBe(response.agentRun);
     expect(response.detail.summary).toContain('等待完成执行');
+  });
+
+  it('routes Agent-only test cases through the workflow runtime', async () => {
+    const project = createEmptyProject(1);
+    const environment = project.environments[0];
+    const response = await runTestCase({
+      project,
+      environment,
+      runtimeProfile: request.runtimeProfile,
+      testCase: {
+        id: 'case-agent-only',
+        kind: 'scenario',
+        groupId: project.groups[0].id,
+        environmentId: environment.id,
+        source: 'manual',
+        name: '登录验证',
+        category: '核心链路',
+        lastEdited: '刚刚',
+        url: environment.url,
+        notes: '',
+        steps: [{ id: 'step-assert', type: 'aiAssert', title: '验证登录', body: '断言页面包含 登录成功' }],
+      },
+    });
+
+    expect(response.detail.status).toBe('neutral');
+    expect(response.detail.agentRun?.intent.source).toBe('workflow');
+    expect(response.detail.steps[0]?.message).toContain('等待桌面 Agent runtime 执行');
+  });
+
+  it('keeps non-Agent test cases neutral when desktop execution is unavailable', async () => {
+    const project = createEmptyProject(1);
+    const environment = project.environments[0];
+    const response = await runTestCase({
+      project,
+      environment,
+      testCase: {
+        id: 'case-manual',
+        kind: 'scenario',
+        groupId: project.groups[0].id,
+        environmentId: environment.id,
+        source: 'manual',
+        name: '人工检查',
+        category: '核心链路',
+        lastEdited: '刚刚',
+        url: environment.url,
+        notes: '',
+        steps: [{ id: 'step-manual', type: 'manual', title: '确认页面', body: '人工确认状态' }],
+      },
+    });
+
+    expect(response.detail.status).toBe('neutral');
+    expect(response.detail.steps[0]?.status).toBe('neutral');
+    expect(response.detail.summary).toContain('未执行');
+  });
+
+  it('routes an exclusive recording replay test case through the recording Agent', async () => {
+    const project = createEmptyProject(1);
+    const environment = project.environments[0];
+    const recording = {
+      id: 'recording-case-route',
+      name: '登录回放',
+      summary: '',
+      source: 'live' as const,
+      groupId: project.groups[0].id,
+      environmentId: environment.id,
+      startUrl: environment.url,
+      comparisonGoal: '',
+      tags: [],
+      createdAt: new Date(0).toISOString(),
+      updatedAt: new Date(0).toISOString(),
+      steps: [],
+    };
+    project.recordings = [recording];
+
+    const response = await runTestCase({
+      project,
+      environment,
+      testCase: {
+        id: 'case-recording-route',
+        kind: 'recording',
+        groupId: project.groups[0].id,
+        environmentId: environment.id,
+        source: 'recording',
+        name: '登录回放用例',
+        category: '核心链路',
+        lastEdited: '刚刚',
+        url: environment.url,
+        notes: '',
+        steps: [{ id: 'step-replay', type: 'recordingReplay', title: '回放录制', body: '回放', recordingId: recording.id }],
+      },
+    });
+
+    expect(response.detail.testCaseId).toBe('case-recording-route');
+    expect(response.detail.agentRun?.intent.source).toBe('recording');
+    expect(response.detail.agentRun?.intent.testCaseId).toBe('case-recording-route');
   });
 
   it('creates a neutral recording plan when desktop replay is unavailable', async () => {

@@ -19,6 +19,7 @@ import type {
   CredentialRef,
   SessionStartRequest,
 } from '../../shared/studio.js';
+import { getExclusiveRecordingReplayId, isAgentRunnableTestCase, testCaseToWorkflow } from '../../shared/studio.js';
 import { createStubAgentRun, createWorkflowAgentRun } from '../../shared/agentStub.js';
 import { createRecordingAgentRun } from '../../shared/recordingAgent.js';
 
@@ -390,6 +391,38 @@ export async function runTestCase(request: RunTestCaseRequest): Promise<RunTestC
     return desktopApi.runTestCase(request);
   }
 
+  const recordingId = getExclusiveRecordingReplayId(request.testCase);
+  const recording = recordingId
+    ? request.project.recordings.find((item) => item.id === recordingId)
+    : undefined;
+  if (recording) {
+    return runRecording({
+      project: request.project,
+      environment: request.environment,
+      recording,
+      testCaseId: request.testCase.id,
+    });
+  }
+
+  if (isAgentRunnableTestCase(request.testCase)) {
+    return runWorkflow({
+      workflow: testCaseToWorkflow(request.testCase),
+      targetEnvironment: request.environment.name,
+      runtimeProfile: request.runtimeProfile ?? {
+        browser: request.environment.browser,
+        baseUrl: request.environment.url,
+        viewport: request.environment.viewport,
+        locale: request.environment.locale,
+        headless: request.environment.headless,
+      },
+      ...(request.midsceneConfig ? { midsceneConfig: request.midsceneConfig } : {}),
+      ...(request.agentModelConfig ? { agentModelConfig: request.agentModelConfig } : {}),
+      ...(request.browserSession ? { browserSession: request.browserSession } : {}),
+      project: request.project,
+      environment: request.environment,
+    });
+  }
+
   const runId = `run-${Date.now().toString().slice(-5)}`;
   const title = request.testCase.name;
   emit({
@@ -413,18 +446,18 @@ export async function runTestCase(request: RunTestCaseRequest): Promise<RunTestC
     testCaseId: request.testCase.id,
     environmentId: request.environment.id,
     title,
-    status: 'passed',
+    status: 'neutral',
     startedAt: new Date().toISOString(),
     endedAt: new Date().toISOString(),
     duration: `00:00:${String(Math.max(1, request.testCase.steps.length * 2)).padStart(2, '0')}`,
-    summary: `浏览器 fallback 模拟完成 ${request.testCase.steps.length} 个步骤。`,
+    summary: `浏览器 fallback 未执行 ${request.testCase.steps.length} 个步骤，结果保持等待态。`,
     logs,
     steps: request.testCase.steps.map((step, index) => ({
       id: `run-step-${runId}-${index}`,
       stepId: step.id,
       title: step.title,
-      status: 'passed',
-      message: `步骤已记录：${step.body}`,
+      status: 'neutral',
+      message: `步骤等待桌面执行器：${step.body}`,
     })),
     artifacts: [],
   };
@@ -434,7 +467,7 @@ export async function runTestCase(request: RunTestCaseRequest): Promise<RunTestC
       runId,
       title,
       type: 'complete',
-      status: 'passed',
+      status: 'neutral',
       duration: detail.duration,
       summary: detail.summary,
       detail,
@@ -456,12 +489,13 @@ export async function runRecording(request: RunRecordingRequest): Promise<RunRec
     recording: request.recording,
     replayResults: [],
     projectId: request.project.id,
+    ...(request.testCaseId ? { testCaseId: request.testCaseId } : {}),
     runId,
   });
   const detail: RunDetail = {
     id: runId,
     projectId: request.project.id,
-    testCaseId: request.recording.id,
+    testCaseId: request.testCaseId ?? request.recording.id,
     environmentId: request.environment.id,
     title,
     status: 'neutral',

@@ -68,6 +68,213 @@ describe('TestRunner recording replay', () => {
       ]),
     );
   });
+
+  it('composes recording evidence into a mixed test case and stops after a neutral replay', async () => {
+    const project = createProjectWithRecording();
+    const environment = project.environments[0];
+    const testCase = {
+      ...project.testCases[0],
+      steps: [
+        project.testCases[0].steps[0],
+        {
+          id: 'case-step-ai',
+          type: 'ai' as const,
+          title: '确认登录状态',
+          body: '确认当前用户已登录',
+        },
+      ],
+    };
+    const browserRuntime = {
+      start: vi.fn().mockResolvedValue({
+        id: 'session-test',
+        status: 'ready',
+        projectId: project.id,
+        environmentId: environment.id,
+        currentUrl: environment.url,
+        message: 'ready',
+        updatedAt: new Date(0).toISOString(),
+      }),
+    };
+    const artifacts = {
+      createSnapshot: vi.fn().mockResolvedValue({
+        id: 'artifact-start',
+        type: 'snapshot',
+        label: '运行起始快照',
+        path: '/tmp/start.svg',
+      }),
+    };
+    const recordingRunner = {
+      run: vi.fn().mockResolvedValue({
+        runId: 'agent-run-recording-child',
+        title: '登录冒烟 回放',
+        detail: {
+          id: 'agent-run-recording-child',
+          projectId: project.id,
+          testCaseId: testCase.id,
+          environmentId: environment.id,
+          title: '登录冒烟 回放',
+          status: 'neutral',
+          startedAt: new Date(0).toISOString(),
+          endedAt: new Date(0).toISOString(),
+          duration: '00:00:01',
+          summary: '缺少可比较的视觉基线，回放保持等待态。',
+          logs: ['agent:verification-result: 缺少可比较的视觉基线'],
+          steps: [
+            {
+              id: 'child-step',
+              stepId: project.recordings[0].steps[0].id,
+              title: '打开首页',
+              status: 'neutral',
+              message: '缺少可比较的视觉基线。',
+              screenshotPath: '/tmp/replay.png',
+            },
+          ],
+          artifacts: [
+            {
+              id: 'child-artifact',
+              type: 'screenshot',
+              label: '实际截图',
+              path: '/tmp/replay.png',
+            },
+          ],
+        },
+        agentRun: {},
+      }),
+    };
+    const emitRunEvent = vi.fn<(event: RunEventPayload) => void>();
+    const runner = new TestRunner(
+      artifacts as never,
+      browserRuntime as never,
+      emitRunEvent,
+      recordingRunner as never,
+    );
+
+    const response = await runner.run({ project, testCase, environment });
+
+    expect(recordingRunner.run).toHaveBeenCalledWith(
+      expect.objectContaining({ testCaseId: testCase.id, parentRunId: response.runId }),
+    );
+    expect(response.detail.status).toBe('neutral');
+    expect(response.detail.artifacts).toEqual(expect.arrayContaining([expect.objectContaining({ path: '/tmp/replay.png' })]));
+    expect(response.detail.steps).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ stepId: 'case-step-ai', status: 'neutral', message: expect.stringContaining('前序步骤') }),
+      ]),
+    );
+    expect(emitRunEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({ runId: 'agent-run-recording-child' }),
+    );
+  });
+
+  it('continues a mixed test case through the workflow runtime after a passed replay', async () => {
+    const project = createProjectWithRecording();
+    const environment = project.environments[0];
+    const testCase = {
+      ...project.testCases[0],
+      steps: [
+        project.testCases[0].steps[0],
+        {
+          id: 'case-step-assert',
+          type: 'aiAssert' as const,
+          title: '确认登录状态',
+          body: '确认当前用户已登录',
+        },
+      ],
+    };
+    const browserRuntime = {
+      start: vi.fn().mockResolvedValue({
+        id: 'session-test',
+        status: 'ready',
+        projectId: project.id,
+        environmentId: environment.id,
+        currentUrl: environment.url,
+        message: 'ready',
+        updatedAt: new Date(0).toISOString(),
+      }),
+    };
+    const artifacts = {
+      createSnapshot: vi.fn().mockResolvedValue({
+        id: 'artifact-start',
+        type: 'snapshot',
+        label: '运行起始快照',
+        path: '/tmp/start.svg',
+      }),
+    };
+    const recordingRunner = {
+      run: vi.fn().mockResolvedValue({
+        runId: 'agent-run-recording-child',
+        title: '登录冒烟 回放',
+        detail: {
+          id: 'agent-run-recording-child',
+          projectId: project.id,
+          testCaseId: testCase.id,
+          environmentId: environment.id,
+          title: '登录冒烟 回放',
+          status: 'passed',
+          startedAt: new Date(0).toISOString(),
+          endedAt: new Date(0).toISOString(),
+          duration: '00:00:01',
+          summary: '回放和视觉比较通过。',
+          logs: [],
+          steps: [],
+          artifacts: [],
+        },
+        agentRun: {},
+      }),
+    };
+    const workflowRunner = {
+      runWorkflow: vi.fn().mockResolvedValue({
+        runId: 'agent-run-workflow-child',
+        title: '登录冒烟回放',
+        detail: {
+          id: 'agent-run-workflow-child',
+          projectId: project.id,
+          testCaseId: testCase.id,
+          environmentId: environment.id,
+          title: '登录冒烟回放',
+          status: 'passed',
+          startedAt: new Date(0).toISOString(),
+          endedAt: new Date(0).toISOString(),
+          duration: '00:00:01',
+          summary: '登录状态已验证。',
+          logs: [],
+          steps: [
+            {
+              id: 'workflow-step',
+              stepId: 'case-step-assert',
+              title: '确认登录状态',
+              status: 'passed',
+              message: '登录状态已验证。',
+              screenshotPath: '/tmp/assert.png',
+            },
+          ],
+          artifacts: [],
+        },
+        agentRun: {},
+      }),
+    };
+    const runner = new TestRunner(
+      artifacts as never,
+      browserRuntime as never,
+      vi.fn(),
+      recordingRunner as never,
+      workflowRunner as never,
+    );
+
+    const response = await runner.run({ project, testCase, environment });
+
+    expect(workflowRunner.runWorkflow).toHaveBeenCalledWith(
+      expect.objectContaining({
+        parentRunId: response.runId,
+        preserveCurrentPage: true,
+        workflow: expect.objectContaining({ steps: [expect.objectContaining({ id: 'case-step-assert' })] }),
+      }),
+    );
+    expect(response.detail.status).toBe('passed');
+    expect(response.detail.steps).toEqual(
+      expect.arrayContaining([expect.objectContaining({ stepId: 'case-step-assert', status: 'passed' })]),
+    );
+  });
 });
 
 function createProjectWithRecording(): {

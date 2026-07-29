@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { createInitialStudioState } from '../../../shared/studio.js';
@@ -13,6 +13,7 @@ const selectedTestCase = project.testCases.find((item) => item.groupId === selec
 function renderPage(
   locale: 'zh-CN' | 'en-US' = 'zh-CN',
   testCase = selectedTestCase,
+  onUpdateTestCase = vi.fn(),
 ) {
   return render(
     <I18nProvider locale={locale}>
@@ -31,7 +32,7 @@ function renderPage(
         onSelectGroup={vi.fn()}
         onSelectTestCase={vi.fn()}
         onStartBrowserSession={vi.fn()}
-        onUpdateTestCase={vi.fn()}
+        onUpdateTestCase={onUpdateTestCase}
         project={project}
         runStatus="neutral"
         selectedEnvironment={project.environments[0]}
@@ -50,7 +51,9 @@ describe('TestCaseManagementPage', () => {
     expect(screen.getByRole('heading', { level: 1, name: '用例工作台' })).toBeInTheDocument();
     expect(screen.getByText('搜索用例...')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '运行用例' })).toBeInTheDocument();
-    expect(screen.getByText('设置')).toBeInTheDocument();
+    expect(screen.getByText('用例设置')).toBeInTheDocument();
+    expect(screen.getByText('开始')).toBeInTheDocument();
+    expect(screen.getByText('结束')).toBeInTheDocument();
     expect(screen.queryByText('Search cases...')).not.toBeInTheDocument();
   });
 
@@ -71,8 +74,29 @@ describe('TestCaseManagementPage', () => {
 
     expect(screen.getByRole('heading', { level: 1, name: 'Case Workbench' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Run Test' })).toBeInTheDocument();
+    fireEvent.click(screen.getByText('Replay checkout path'));
+
+    expect(screen.getByText('Step Properties')).toBeInTheDocument();
     expect(screen.getByText('Bind Recording Asset')).toBeInTheDocument();
     expect(screen.getAllByText(`${recording.steps.length} steps`).length).toBeGreaterThan(0);
     expect(screen.queryByText('绑定录制资产')).not.toBeInTheDocument();
+  });
+
+  it('reorders the sequential canvas when a node is dropped before another node', () => {
+    const onUpdateTestCase = vi.fn();
+    const [firstStep, , thirdStep] = selectedTestCase.steps;
+    renderPage('zh-CN', selectedTestCase, onUpdateTestCase);
+
+    fireEvent.drop(screen.getByLabelText(`步骤 1：${firstStep.title}`), {
+      dataTransfer: { getData: () => thirdStep.id },
+    });
+
+    const updater = onUpdateTestCase.mock.calls[0]?.[0] as ((testCase: typeof selectedTestCase) => typeof selectedTestCase) | undefined;
+    expect(updater).toBeDefined();
+    expect(updater?.(selectedTestCase).steps.map((step) => step.id)).toEqual([
+      thirdStep.id,
+      firstStep.id,
+      selectedTestCase.steps[1].id,
+    ]);
   });
 });

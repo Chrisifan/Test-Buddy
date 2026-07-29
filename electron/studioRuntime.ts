@@ -3209,8 +3209,13 @@ export class StudioRuntime {
   async runWorkflow(request: RunWorkflowRequest): Promise<RunWorkflowResponse> {
     const runId = `agent-run-workflow-${Date.now()}`;
     const title = request.workflow.name;
+    const emitRunEvent = (event: RunEventPayload) => {
+      if (!request.parentRunId) {
+        this.emitRunEvent(event);
+      }
+    };
 
-    this.emitRunEvent({
+    emitRunEvent({
       runId,
       title,
       type: 'status',
@@ -3218,28 +3223,28 @@ export class StudioRuntime {
       summary: `已排队执行 ${request.workflow.steps.length} 个步骤。`,
     });
 
-    this.emitRunEvent({
+    emitRunEvent({
       runId,
       title,
       type: 'log',
       line: `[${nowLabel()}] Workflow queued: ${request.workflow.name}`,
     });
 
-    this.emitRunEvent({
+    emitRunEvent({
       runId,
       title,
       type: 'log',
       line: `[${nowLabel()}] Target URL: ${request.workflow.url}`,
     });
 
-    this.emitRunEvent({
+    emitRunEvent({
       runId,
       title,
       type: 'log',
       line: `[${nowLabel()}] Environment: ${request.targetEnvironment}`,
     });
 
-    this.emitRunEvent({
+    emitRunEvent({
       runId,
       title,
       type: 'log',
@@ -3259,10 +3264,10 @@ export class StudioRuntime {
           record: false,
         });
       }
-      if (current.status !== 'error' && current.currentUrl !== request.workflow.url) {
+      if (!request.preserveCurrentPage && current.status !== 'error' && current.currentUrl !== request.workflow.url) {
         current = await this.browserObserver.navigate({ url: request.workflow.url });
       }
-      this.emitRunEvent({
+      emitRunEvent({
         runId,
         title,
         type: 'log',
@@ -3272,7 +3277,7 @@ export class StudioRuntime {
 
     const stepRuns: AgentRunResult[] = [];
     for (const [index, step] of request.workflow.steps.entries()) {
-      this.emitRunEvent({
+      emitRunEvent({
         runId,
         title,
         type: 'log',
@@ -3293,7 +3298,7 @@ export class StudioRuntime {
         testCaseId: request.workflow.id,
       });
       stepRuns.push(response.agentRun);
-      this.emitRunEvent({
+      emitRunEvent({
         runId,
         title,
         type: 'log',
@@ -3312,7 +3317,7 @@ export class StudioRuntime {
       ...(request.environment ? { environmentId: request.environment.id } : {}),
     });
     const detail = createWorkflowRunDetail(request, agentRun);
-    this.emitRunEvent({
+    emitRunEvent({
       runId,
       title,
       type: 'complete',

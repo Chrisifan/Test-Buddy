@@ -185,6 +185,10 @@ function formatAgentRole(role: string): string {
   return role.charAt(0).toUpperCase() + role.slice(1);
 }
 
+function getAgentSourceLabel(agentRun: AgentRunResult, t: Translator): string {
+  return t(`runs.agent.source.${agentRun.intent.source}`);
+}
+
 function getLinkedArtifacts(event: AgentRunEvent, agentRun: AgentRunResult): AgentArtifact[] {
   const seen = new Set<string>();
   const relatedEvents = agentRun.events.filter((candidate) =>
@@ -231,18 +235,22 @@ export function RunRecordsPage({
   runDetails,
   selectedRunId,
   onSelectRun,
+  onConfirmManualStep = () => {},
 }: {
   project?: ProjectDraft;
   recentRuns: RunSummary[];
   runDetails: RunDetail[];
   selectedRunId: string;
   onSelectRun: (runId: string) => void;
+  onConfirmManualStep?: (runId: string, stepId: string, status: 'passed' | 'failed', note: string) => void;
 }) {
   const { t } = useI18n();
   const [statusFilter, setStatusFilter] = useState<'all' | 'running' | 'passed' | 'failed' | 'neutral'>('all');
   const [environmentFilter, setEnvironmentFilter] = useState<string>('all');
   const [groupFilter, setGroupFilter] = useState<string>('all');
   const [selectedEvidenceEventId, setSelectedEvidenceEventId] = useState<string>('');
+  const [selectedAgentRunId, setSelectedAgentRunId] = useState<string>('');
+  const [manualNotes, setManualNotes] = useState<Record<string, string>>({});
   const projectRuns = project
     ? recentRuns.filter((run) => !run.projectId || run.projectId === project.id)
     : recentRuns;
@@ -267,7 +275,12 @@ export function RunRecordsPage({
   const selectedRun =
     runDetails.find((run) => run.id === selectedRunId) ??
     runDetails.find((run) => run.id === visibleRuns[0]?.id);
-  const selectedAgentRun = selectedRun?.agentRun;
+  const selectedAgentRuns = [
+    ...(selectedRun?.agentRun ? [selectedRun.agentRun] : []),
+    ...(selectedRun?.agentRuns ?? []),
+  ];
+  const selectedAgentRun = selectedAgentRuns.find((agentRun) => agentRun.runId === selectedAgentRunId)
+    ?? selectedAgentRuns[0];
   const selectedEvidenceEvent = selectedAgentRun?.events.find((event) => event.id === selectedEvidenceEventId)
     ?? selectedAgentRun?.events.find((event) => event.observation || event.verification || event.artifact || event.browserSession);
   const linkedEvidenceArtifacts = selectedAgentRun && selectedEvidenceEvent
@@ -280,9 +293,15 @@ export function RunRecordsPage({
     ?? (selectedEvidenceEvent ? getEvidencePreviewPath(selectedEvidenceEvent, linkedEvidenceArtifacts) : undefined);
   const selectedObservation = selectedAgentRun?.events.find((event) => event.type === 'agent:observation-created')?.observation;
   const selectedVerification = selectedAgentRun?.events.find((event) => event.type === 'agent:assertion-result')?.verification;
-  const selectedEvidenceArtifacts = selectedRun?.artifacts.filter((artifact) =>
+  const selectedEvidenceArtifacts = (selectedAgentRun?.artifacts ?? selectedRun?.artifacts ?? []).filter((artifact) =>
     ['screenshot', 'snapshot', 'trace', 'report'].includes(artifact.type),
-  ) ?? [];
+  );
+  const manualStepIds = new Set(
+    project?.testCases
+      .find((testCase) => testCase.id === selectedRun?.testCaseId)
+      ?.steps.filter((step) => step.type === 'manual')
+      .map((step) => step.id) ?? [],
+  );
   const runStats = useMemo(
     () => ({
       total: visibleRuns.length,
@@ -555,6 +574,35 @@ export function RunRecordsPage({
                     </div>
                     <StatusPill tone={selectedAgentRun.status} />
                   </div>
+                  {selectedAgentRuns.length > 1 ? (
+                    <div aria-label={t('runs.agent.segments')} className="flex flex-wrap gap-2" role="tablist">
+                      {selectedAgentRuns.map((agentRun, index) => {
+                        const selected = agentRun.runId === selectedAgentRun.runId;
+                        const parentRun = agentRun.runId === selectedRun?.agentRun?.runId;
+                        return (
+                          <button
+                            aria-selected={selected}
+                            className={`inline-flex h-8 items-center gap-2 rounded-[4px] border px-2.5 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/35 ${
+                              selected
+                                ? 'border-primary/45 bg-primary/10 text-primary'
+                                : 'border-border bg-background/70 text-muted-foreground hover:bg-muted hover:text-foreground'
+                            }`}
+                            key={agentRun.runId}
+                            onClick={() => {
+                              setSelectedAgentRunId(agentRun.runId);
+                              setSelectedEvidenceEventId('');
+                            }}
+                            role="tab"
+                            type="button"
+                          >
+                            <span>{parentRun ? t('runs.agent.parentSegment') : t('runs.agent.segment', { index: selectedRun?.agentRun ? index : index + 1 })}</span>
+                            <span className="max-w-32 truncate">{getAgentSourceLabel(agentRun, t)}</span>
+                            <StatusPill tone={agentRun.status} />
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ) : null}
                   {selectedAgentRun.metrics ? (
                     <div
                       aria-label={t('runs.agent.metrics')}
@@ -880,7 +928,11 @@ export function RunRecordsPage({
                 </section>
               ) : null}
               <div className="grid gap-3">
-                {selectedRun.steps.map((step) => (
+                {selectedRun.steps.map((step) => {
+                  const manualEvidence = selectedRun.manualEvidence?.find((evidence) => evidence.stepId === step.stepId);
+                  const isManualStep = manualStepIds.has(step.stepId);
+                  const note = manualNotes[step.stepId] ?? '';
+                  return (
                   <article className="rounded-[8px] border border-border bg-card p-4" key={step.id}>
                     <div className="flex items-start justify-between gap-4">
                       <div>
@@ -899,8 +951,48 @@ export function RunRecordsPage({
                         <p className="truncate text-xs text-muted-foreground">{t('runs.screenshot.path', { path: step.screenshotPath })}</p>
                       </div>
                     ) : null}
+                    {isManualStep ? (
+                      <div className="mt-3 border-t border-border/70 pt-3">
+                        {manualEvidence ? (
+                          <p className="text-xs leading-5 text-muted-foreground">
+                            {t('runs.manual.confirmed', { status: t(`common.status.${manualEvidence.status}`), note: manualEvidence.note })}
+                          </p>
+                        ) : step.status === 'neutral' ? (
+                          <div className="flex flex-col gap-2 sm:flex-row">
+                            <textarea
+                              aria-label={t('runs.manual.noteLabel', { title: step.title })}
+                              className="min-h-9 flex-1 resize-y rounded-[4px] border border-input bg-background px-3 py-2 text-sm outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring/35"
+                              onChange={(event) => setManualNotes((current) => ({ ...current, [step.stepId]: event.target.value }))}
+                              placeholder={t('runs.manual.notePlaceholder')}
+                              value={note}
+                            />
+                            <div className="flex shrink-0 gap-2">
+                              <button
+                                className="inline-flex h-9 items-center gap-1.5 rounded-[4px] bg-primary px-3 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:pointer-events-none disabled:opacity-45"
+                                disabled={!note.trim()}
+                                onClick={() => onConfirmManualStep(selectedRun.id, step.stepId, 'passed', note.trim())}
+                                type="button"
+                              >
+                                <CheckCircle2 className="h-3.5 w-3.5" />
+                                {t('runs.manual.pass')}
+                              </button>
+                              <button
+                                className="inline-flex h-9 items-center gap-1.5 rounded-[4px] border border-destructive/30 px-3 text-xs font-medium text-destructive transition-colors hover:bg-destructive/10 disabled:pointer-events-none disabled:opacity-45"
+                                disabled={!note.trim()}
+                                onClick={() => onConfirmManualStep(selectedRun.id, step.stepId, 'failed', note.trim())}
+                                type="button"
+                              >
+                                <AlertTriangle className="h-3.5 w-3.5" />
+                                {t('runs.manual.fail')}
+                              </button>
+                            </div>
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : null}
                   </article>
-                ))}
+                  );
+                })}
               </div>
               <div className="designer-terminal p-4">
                 <p className="text-sm font-medium text-white">{t('runs.debugLog')}</p>

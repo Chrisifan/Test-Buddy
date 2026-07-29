@@ -47,14 +47,17 @@ export class RecordingRunner {
     const runId = `agent-run-recording-${Date.now()}`;
     const title = `${request.recording.name} 回放`;
     const startedAt = new Date();
+    const emitEvents = !request.parentRunId;
 
-    this.emitRunEvent({
-      runId,
-      title,
-      type: 'status',
-      status: 'running',
-      summary: `正在回放 ${request.recording.steps.length} 个录制节点。`,
-    });
+    if (emitEvents) {
+      this.emitRunEvent({
+        runId,
+        title,
+        type: 'status',
+        status: 'running',
+        summary: `正在回放 ${request.recording.steps.length} 个录制节点。`,
+      });
+    }
 
     let session = await this.browserRuntime.start({
       project: request.project,
@@ -64,12 +67,14 @@ export class RecordingRunner {
     if (session.status !== 'error' && request.recording.startUrl && session.currentUrl !== request.recording.startUrl) {
       session = await this.browserRuntime.navigate({ url: request.recording.startUrl });
     }
-    this.emitRunEvent({
-      runId,
-      title,
-      type: 'log',
-      line: `Recording context: ${session.currentUrl || request.recording.startUrl}`,
-    });
+    if (emitEvents) {
+      this.emitRunEvent({
+        runId,
+        title,
+        type: 'log',
+        line: `Recording context: ${session.currentUrl || request.recording.startUrl}`,
+      });
+    }
     const replayResults = await this.browserRuntime.replayRecordingSteps(request.recording.steps, runId);
     const visualComparisons = await this.compareScreenshots(request, replayResults);
     const endedAt = new Date();
@@ -77,6 +82,7 @@ export class RecordingRunner {
       recording: request.recording,
       replayResults,
       projectId: request.project.id,
+      ...(request.testCaseId ? { testCaseId: request.testCaseId } : {}),
       runId,
       startedAt: startedAt.toISOString(),
       endedAt: endedAt.toISOString(),
@@ -85,7 +91,7 @@ export class RecordingRunner {
     const detail: RunDetail = {
       id: runId,
       projectId: request.project.id,
-      testCaseId: request.recording.id,
+      testCaseId: request.testCaseId ?? request.recording.id,
       environmentId: request.environment.id,
       title,
       status: agentRun.status,
@@ -110,15 +116,17 @@ export class RecordingRunner {
       ...(agentRun.failureReason ? { failureReason: agentRun.failureReason } : {}),
     };
 
-    this.emitRunEvent({
-      runId,
-      title,
-      type: 'complete',
-      status: agentRun.status,
-      duration: detail.duration,
-      summary: detail.summary,
-      detail,
-    });
+    if (emitEvents) {
+      this.emitRunEvent({
+        runId,
+        title,
+        type: 'complete',
+        status: agentRun.status,
+        duration: detail.duration,
+        summary: detail.summary,
+        detail,
+      });
+    }
 
     return { runId, title, detail, agentRun };
   }

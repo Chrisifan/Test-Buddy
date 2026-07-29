@@ -984,6 +984,115 @@ export function App() {
     }
   }
 
+  function handleConfirmManualStep(
+    runId: string,
+    stepId: string,
+    status: 'passed' | 'failed',
+    note: string,
+  ) {
+    const confirmedAt = new Date().toISOString();
+    let nextSummary = '';
+    let nextStatus: RunTone = status;
+
+    setRunDetails((current) =>
+      current.map((detail) => {
+        if (detail.id !== runId) {
+          return detail;
+        }
+
+        const steps = detail.steps.map((step) =>
+          step.stepId === stepId
+            ? {
+                ...step,
+                status,
+                message: `${step.message}\n人工确认：${status === 'passed' ? '通过' : '失败'}。${note}`,
+              }
+            : step,
+        );
+        nextStatus = steps.some((step) => step.status === 'failed')
+          ? 'failed'
+          : steps.some((step) => step.status === 'neutral')
+            ? 'neutral'
+            : 'passed';
+        nextSummary =
+          nextStatus === 'failed'
+            ? `人工检查失败：${note}`
+            : nextStatus === 'passed'
+              ? '全部步骤已完成并获得执行或人工确认。'
+              : '人工检查已确认，仍有步骤等待执行。';
+        const manualEvidence = [
+          ...(detail.manualEvidence ?? []).filter((evidence) => evidence.stepId !== stepId),
+          { stepId, status, note, confirmedAt },
+        ];
+        const agentRun = detail.agentRun
+          ? (() => {
+              const remainingEvents = detail.agentRun.events.filter(
+                (event) => event.type !== 'agent:run-finished' && !(event.type === 'agent:assertion-result' && event.stepId === stepId),
+              );
+              const verificationEvent = {
+                id: `${detail.agentRun.runId}-event-manual-${stepId}`,
+                runId: detail.agentRun.runId,
+                type: 'agent:assertion-result' as const,
+                stepId,
+                message: `人工检查${status === 'passed' ? '通过' : '失败'}：${note}`,
+                status,
+                verification: {
+                  id: `${detail.agentRun.runId}-verification-manual-${stepId}`,
+                  stepId,
+                  status,
+                  summary: `人工检查${status === 'passed' ? '通过' : '失败'}。`,
+                  evidence: note,
+                  ...(status === 'failed' ? { failureReason: note } : {}),
+                  createdAt: confirmedAt,
+                },
+                createdAt: confirmedAt,
+              };
+              return {
+                ...detail.agentRun,
+                status: nextStatus,
+                summary: nextSummary,
+                events: [
+                  ...remainingEvents,
+                  verificationEvent,
+                  {
+                    id: `${detail.agentRun.runId}-event-finished`,
+                    runId: detail.agentRun.runId,
+                    type: 'agent:run-finished' as const,
+                    message: nextSummary,
+                    status: nextStatus,
+                    createdAt: confirmedAt,
+                  },
+                ],
+                ...(nextStatus === 'failed' ? { failureReason: note } : {}),
+              };
+            })()
+          : undefined;
+
+        return {
+          ...detail,
+          status: nextStatus,
+          summary: nextSummary,
+          logs: [...detail.logs, `[${createTimestampLabel()}] 人工检查${status === 'passed' ? '通过' : '失败'}：${note}`],
+          steps,
+          manualEvidence,
+          ...(agentRun ? { agentRun } : {}),
+          ...(nextStatus === 'failed' ? { failureReason: note } : {}),
+        };
+      }),
+    );
+    setRecentRuns((current) =>
+      current.map((run) =>
+        run.id === runId
+          ? {
+              ...run,
+              status: nextStatus,
+              summary: nextSummary,
+            }
+          : run,
+      ),
+    );
+  }
+
   function handleUpdateRecording(updater: (recording: RecordingAsset) => RecordingAsset) {
     if (!selectedProject || !selectedRecording) {
       return;
@@ -1506,6 +1615,10 @@ export function App() {
         project: selectedProject,
         testCase: selectedTestCase,
         environment: selectedEnvironment,
+        runtimeProfile,
+        midsceneConfig,
+        agentModelConfig,
+        browserSession,
       });
       setRunId(result.runId);
       setRunTitle(result.title);
@@ -1729,6 +1842,7 @@ export function App() {
 
           {activePage === 'runs' ? (
             <RunRecordsPage
+              onConfirmManualStep={handleConfirmManualStep}
               onSelectRun={setSelectedRunId}
               project={selectedProject}
               recentRuns={recentRuns}
