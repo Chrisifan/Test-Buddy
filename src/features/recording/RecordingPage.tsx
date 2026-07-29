@@ -4,6 +4,7 @@ import type {
   ProjectEnvironment,
   RecordingAsset,
   RecordingStepDraft,
+  VisualDiffMask,
 } from '../../../shared/studio.js';
 
 import { CircleDashed, Film, Import, Play, Plus, Radar, Sparkles, Trash2 } from 'lucide-react';
@@ -59,6 +60,18 @@ function formatDate(value: string, locale: string): string {
     hour: '2-digit',
     minute: '2-digit',
   });
+}
+
+function normalizeVisualDiffMask(mask: VisualDiffMask): VisualDiffMask {
+  const x = Math.min(100, Math.max(0, mask.x));
+  const y = Math.min(100, Math.max(0, mask.y));
+  return {
+    ...mask,
+    x,
+    y,
+    width: Math.min(100 - x, Math.max(0, mask.width)),
+    height: Math.min(100 - y, Math.max(0, mask.height)),
+  };
 }
 
 export function RecordingPage({
@@ -415,6 +428,111 @@ export function RecordingPage({
                       type="number"
                       value={Math.round((recording.visualDiffThreshold ?? 0) * 10000) / 100}
                     />
+                  </div>
+                </div>
+                <div className="border-t border-border pt-4">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <Label>{t('recording.form.visualMasks')}</Label>
+                      <p className="mt-1 text-xs leading-5 text-muted-foreground">{t('recording.form.visualMasksDescription')}</p>
+                    </div>
+                    <Button
+                      aria-label={t('recording.action.addVisualMask')}
+                      className="rounded-[4px]"
+                      onClick={() =>
+                        onUpdateRecording((current) => {
+                          const masks = current.visualDiffMasks ?? [];
+                          return {
+                            ...current,
+                            visualDiffMasks: [
+                              ...masks,
+                              {
+                                id: `visual-mask-${Date.now()}-${masks.length + 1}`,
+                                label: t('recording.form.visualMaskDefault', { count: masks.length + 1 }),
+                                x: 0,
+                                y: 0,
+                                width: 10,
+                                height: 10,
+                              },
+                            ],
+                          };
+                        })
+                      }
+                      size="icon"
+                      title={t('recording.action.addVisualMask')}
+                      type="button"
+                      variant="outline"
+                    >
+                      <Plus className="h-4 w-4" />
+                    </Button>
+                  </div>
+                  <div className="mt-3 grid gap-3">
+                    {(recording.visualDiffMasks ?? []).map((mask, index) => (
+                      <div className="grid gap-3 border-l-2 border-primary/45 bg-background/55 p-3 sm:grid-cols-[minmax(132px,1fr)_repeat(4,minmax(72px,0.45fr))_28px]" key={mask.id}>
+                        <div className="grid gap-1">
+                          <Label htmlFor={`recording-visual-mask-${mask.id}-label`}>{t('recording.form.visualMaskLabel')}</Label>
+                          <Input
+                            id={`recording-visual-mask-${mask.id}-label`}
+                            onChange={(event) =>
+                              onUpdateRecording((current) => ({
+                                ...current,
+                                visualDiffMasks: (current.visualDiffMasks ?? []).map((item) =>
+                                  item.id === mask.id ? { ...item, label: event.target.value } : item,
+                                ),
+                              }))
+                            }
+                            value={mask.label}
+                          />
+                        </div>
+                        {([
+                          ['x', t('recording.form.visualMaskX')],
+                          ['y', t('recording.form.visualMaskY')],
+                          ['width', t('recording.form.visualMaskWidth')],
+                          ['height', t('recording.form.visualMaskHeight')],
+                        ] as const).map(([field, label]) => (
+                          <div className="grid gap-1" key={field}>
+                            <Label htmlFor={`recording-visual-mask-${mask.id}-${field}`}>{label}</Label>
+                            <Input
+                              id={`recording-visual-mask-${mask.id}-${field}`}
+                              max="100"
+                              min="0"
+                              onChange={(event) =>
+                                onUpdateRecording((current) => ({
+                                  ...current,
+                                  visualDiffMasks: (current.visualDiffMasks ?? []).map((item) =>
+                                    item.id === mask.id
+                                      ? normalizeVisualDiffMask({ ...item, [field]: Number(event.target.value) })
+                                      : item,
+                                  ),
+                                }))
+                              }
+                              step="0.1"
+                              type="number"
+                              value={mask[field]}
+                            />
+                          </div>
+                        ))}
+                        <Button
+                          aria-label={t('recording.action.removeVisualMask', { label: mask.label || `${index + 1}` })}
+                          className="mt-auto rounded-[4px]"
+                          onClick={() =>
+                            onUpdateRecording((current) => ({
+                              ...current,
+                              visualDiffMasks: (current.visualDiffMasks ?? []).filter((item) => item.id !== mask.id),
+                            }))
+                          }
+                          size="icon"
+                          title={t('recording.action.removeVisualMask', { label: mask.label || `${index + 1}` })}
+                          type="button"
+                          variant="ghost"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    ))}
+                    {!(recording.visualDiffMasks ?? []).length ? (
+                      <p className="text-xs text-muted-foreground">{t('recording.form.visualMasksEmpty')}</p>
+                    ) : null}
                   </div>
                 </div>
                   </Surface>

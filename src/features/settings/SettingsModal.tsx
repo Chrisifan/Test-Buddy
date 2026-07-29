@@ -10,7 +10,7 @@ import type {
   ThemeMode,
 } from '../../../shared/studio.js';
 
-import { Bot, BrainCircuit, Moon, MonitorCog, MousePointerClick, Palette, PlayCircle, Settings2, Sun, Waypoints, Workflow } from 'lucide-react';
+import { Bot, BrainCircuit, CircleHelp, Moon, MonitorCog, MousePointerClick, Palette, PlayCircle, Settings2, Sun, Waypoints, Workflow } from 'lucide-react';
 import { createTranslator, type SupportedLocale } from '@/i18n';
 
 import { Badge } from '@/components/ui/badge';
@@ -151,6 +151,31 @@ const agentRoleOptions: Array<{
     descriptionKey: 'settings.agent.reporterDescription',
   },
 ];
+
+function FieldLabel({ label, hint }: { label: string; hint?: string }) {
+  return (
+    <div className="flex min-w-0 items-center gap-1.5">
+      <Label>{label}</Label>
+      {hint ? (
+        <span className="group relative inline-flex shrink-0">
+          <button
+            aria-label={hint}
+            className="inline-flex h-4 w-4 items-center justify-center rounded-full text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/35"
+            type="button"
+          >
+            <CircleHelp className="h-3.5 w-3.5" />
+          </button>
+          <span
+            className="pointer-events-none absolute bottom-full left-0 z-50 mb-2 w-64 rounded-[4px] border border-border bg-popover px-2.5 py-2 text-xs leading-5 text-popover-foreground opacity-0 shadow-md transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
+            role="tooltip"
+          >
+            {hint}
+          </span>
+        </span>
+      ) : null}
+    </div>
+  );
+}
 
 export function SettingsModal({
   open,
@@ -465,13 +490,12 @@ export function SettingsModal({
                 <h2 className="text-xl font-semibold tracking-[-0.03em]">{t('settings.midscene.title')}</h2>
                 <div className="mt-5 grid gap-5">
                   <div className="form-field is-url">
-                    <Label>MIDSCENE_MODEL_BASE_URL</Label>
+                    <FieldLabel label="MIDSCENE_MODEL_BASE_URL" hint={t('settings.midscene.baseUrlHint')} />
                     <Input
                       onChange={(event) => onUpdateMidsceneConfig({ modelBaseUrl: event.target.value })}
                       placeholder="https://api.openai.com/v1"
                       value={midsceneConfig.modelBaseUrl}
                     />
-                    <p className="form-hint">{t('settings.midscene.baseUrlHint')}</p>
                   </div>
                   <div className="form-grid">
                     <div className="form-field">
@@ -492,13 +516,12 @@ export function SettingsModal({
                       />
                     </div>
                     <div className="form-field">
-                      <Label>MIDSCENE_MODEL_FAMILY</Label>
+                      <FieldLabel label="MIDSCENE_MODEL_FAMILY" hint={t('settings.midscene.familyHint')} />
                       <Input
                         onChange={(event) => onUpdateMidsceneConfig({ modelFamily: event.target.value })}
                         placeholder="openai / qwen / doubao / gemini / ui-tars"
                         value={midsceneConfig.modelFamily}
                       />
-                      <p className="form-hint">{t('settings.midscene.familyHint')}</p>
                     </div>
                     <div className="form-field">
                       <Label>MIDSCENE_PREFERRED_LANGUAGE</Label>

@@ -90,6 +90,16 @@ describe('SettingsModal', () => {
     expect(screen.getByText('界面语言')).toBeInTheDocument();
   });
 
+  it('keeps MidScene field guidance in label tooltips', () => {
+    renderSettingsModal();
+
+    const baseUrlHint = 'OpenAI 兼容模型服务地址，例如 OpenAI、Qwen、Doubao、Azure OpenAI 或自建代理。';
+    const familyHint = '用于告诉 MidScene 当前模型的能力族；不同模型供应商需要填写对应 family。';
+    expect(screen.getByRole('button', { name: baseUrlHint })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: familyHint })).toBeInTheDocument();
+    expect(screen.getAllByRole('tooltip')).toHaveLength(2);
+  });
+
   it('shows agent role model settings for the four automation roles', () => {
     renderSettingsModal();
 

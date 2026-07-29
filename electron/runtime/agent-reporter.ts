@@ -125,6 +125,7 @@ export class OpenAICompatibleAgentReporter implements AgentReporter {
                   status: event.status,
                   message: event.message,
                   stepId: event.stepId,
+                  planRevision: event.planRevision,
                   verification: event.verification,
                   observation: event.observation,
                   artifact: event.artifact,

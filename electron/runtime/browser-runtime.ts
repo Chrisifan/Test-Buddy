@@ -1,6 +1,6 @@
 import path from 'node:path';
 
-import type { AgentChartObservation, AgentTableObservation } from '../../shared/agent.js';
+import type { AgentChartObservation, AgentDomInspection, AgentTableObservation } from '../../shared/agent.js';
 import type {
   BrowserClickRequest,
   BrowserInputRequest,
@@ -364,13 +364,32 @@ export class BrowserRuntime {
       });
     }
 
-    const startedAt = Date.now();
-    let lastSignature: string | undefined;
-    let stableStartedAt = Date.now();
-    while (Date.now() - startedAt <= timeoutMs) {
-      const signature = String(
-        await this.page.evaluate(
-          ({ selector }) => {
+    const animationLockId = `testbuddy-chart-stability-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    await this.page.evaluate(
+      ({ selector, lockId }) => {
+        const root = selector ? document.querySelector(selector) : document.body;
+        if (!root) {
+          return false;
+        }
+
+        root.setAttribute('data-testbuddy-chart-stability-lock', lockId);
+        const style = document.createElement('style');
+        style.id = lockId;
+        style.textContent = `[data-testbuddy-chart-stability-lock="${lockId}"], [data-testbuddy-chart-stability-lock="${lockId}"] * { animation-play-state: paused !important; animation-duration: 0s !important; transition-duration: 0s !important; scroll-behavior: auto !important; }`;
+        document.head.append(style);
+        return true;
+      },
+      { selector: request.selector, lockId: animationLockId },
+    );
+
+    try {
+      const startedAt = Date.now();
+      let lastSignature: string | undefined;
+      let stableStartedAt = Date.now();
+      while (Date.now() - startedAt <= timeoutMs) {
+        const signature = String(
+          await this.page.evaluate(
+            ({ selector }) => {
             const root = selector ? document.querySelector(selector) : document.body;
             if (!root) {
               return JSON.stringify({ found: false, selector });
@@ -386,16 +405,48 @@ export class BrowserRuntime {
               '.highcharts-container',
               '.apexcharts-canvas',
             ].join(',');
-            const elements = Array.from(root.matches(chartSelector) ? [root] : root.querySelectorAll(chartSelector));
+            const elements = Array.from(
+              new Set([
+                ...(root.matches(chartSelector) ? [root] : []),
+                ...Array.from(root.querySelectorAll(chartSelector)),
+              ]),
+            );
             const charts = elements.slice(0, 12).map((element) => {
               const rect = element.getBoundingClientRect();
               const text = (element.textContent ?? '').replace(/\s+/g, ' ').trim().slice(0, 160);
               const style = window.getComputedStyle(element);
+              let rasterSignature: string | undefined;
+              if (element instanceof HTMLCanvasElement && element.width > 0 && element.height > 0) {
+                try {
+                  const sampleCanvas = document.createElement('canvas');
+                  sampleCanvas.width = Math.min(48, element.width);
+                  sampleCanvas.height = Math.min(48, element.height);
+                  const context = sampleCanvas.getContext('2d', { willReadFrequently: true });
+                  if (context) {
+                    context.drawImage(element, 0, 0, sampleCanvas.width, sampleCanvas.height);
+                    const pixels = context.getImageData(0, 0, sampleCanvas.width, sampleCanvas.height).data;
+                    let hash = 2_166_136_261;
+                    const stride = Math.max(4, Math.floor(pixels.length / 384 / 4) * 4);
+                    for (let offset = 0; offset < pixels.length; offset += stride) {
+                      hash ^= pixels[offset]!;
+                      hash = Math.imul(hash, 16_777_619);
+                      hash ^= pixels[offset + 1]!;
+                      hash = Math.imul(hash, 16_777_619);
+                      hash ^= pixels[offset + 2]!;
+                      hash = Math.imul(hash, 16_777_619);
+                    }
+                    rasterSignature = `${sampleCanvas.width}x${sampleCanvas.height}:${hash >>> 0}`;
+                  }
+                } catch {
+                  rasterSignature = 'unavailable';
+                }
+              }
               return {
                 tag: element.tagName.toLowerCase(),
                 width: Math.round(rect.width),
                 height: Math.round(rect.height),
                 text,
+                ...(rasterSignature ? { rasterSignature } : {}),
                 visible: rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none',
               };
             });
@@ -411,40 +462,52 @@ export class BrowserRuntime {
             });
           },
           { selector: request.selector },
-        ),
-      );
+          ),
+        );
 
-      if (signature === lastSignature) {
-        if (Date.now() - stableStartedAt >= stableMs) {
+        if (signature === lastSignature) {
+          if (Date.now() - stableStartedAt >= stableMs) {
+            const nextState = await this.capture();
+            return this.patchState({
+              ...nextState,
+              message: request.selector ? `已等待图表动画稳定：${request.selector}` : '已等待页面图表动画稳定。',
+            });
+          }
+        } else {
+          lastSignature = signature;
+          stableStartedAt = Date.now();
+        }
+
+        if (stableMs === 0) {
           const nextState = await this.capture();
           return this.patchState({
             ...nextState,
-            message: request.selector ? `已等待图表稳定：${request.selector}` : '已等待页面图表稳定。',
+            message: request.selector ? `已等待图表动画稳定：${request.selector}` : '已等待页面图表动画稳定。',
           });
         }
-      } else {
-        lastSignature = signature;
-        stableStartedAt = Date.now();
+
+        await this.page.waitForTimeout(Math.min(150, Math.max(50, timeoutMs - (Date.now() - startedAt))));
       }
 
-      if (stableMs === 0) {
-        const nextState = await this.capture();
-        return this.patchState({
-          ...nextState,
-          message: request.selector ? `已等待图表稳定：${request.selector}` : '已等待页面图表稳定。',
-        });
-      }
-
-      await this.page.waitForTimeout(Math.min(150, Math.max(50, timeoutMs - (Date.now() - startedAt))));
+      const nextState = await this.capture();
+      return this.patchState({
+        ...nextState,
+        message: request.selector
+          ? `图表动画稳定等待超时，已保留当前页面状态：${request.selector}`
+          : '页面图表动画稳定等待超时，已保留当前页面状态。',
+      });
+    } finally {
+      await this.page.evaluate(
+        ({ selector, lockId }) => {
+          const root = selector ? document.querySelector(selector) : document.body;
+          if (root?.getAttribute('data-testbuddy-chart-stability-lock') === lockId) {
+            root.removeAttribute('data-testbuddy-chart-stability-lock');
+          }
+          document.getElementById(lockId)?.remove();
+        },
+        { selector: request.selector, lockId: animationLockId },
+      ).catch(() => undefined);
     }
-
-    const nextState = await this.capture();
-    return this.patchState({
-      ...nextState,
-      message: request.selector
-        ? `图表稳定等待超时，已保留当前页面状态：${request.selector}`
-        : '页面图表稳定等待超时，已保留当前页面状态。',
-    });
   }
 
   async waitForDataReady(request: BrowserWaitForDataReadyRequest = {}): Promise<BrowserSessionState> {
@@ -638,6 +701,66 @@ export class BrowserRuntime {
     return typeof text === 'string' ? text : '';
   }
 
+  async inspectDom(selector: string, attributeName?: string): Promise<AgentDomInspection> {
+    if (!this.page) {
+      return { selector, found: false, visible: false, ...(attributeName ? { attribute: { name: attributeName } } : {}) };
+    }
+
+    try {
+      const inspection = (await this.page.evaluate(
+        ({ selector: targetSelector, attributeName: requestedAttribute }) => {
+          const element = document.querySelector(targetSelector);
+          if (!element) return { found: false, visible: false };
+          const style = window.getComputedStyle(element);
+          const visible =
+            !element.hasAttribute('hidden') &&
+            element.getAttribute('aria-hidden') !== 'true' &&
+            style.display !== 'none' &&
+            style.visibility !== 'hidden' &&
+            style.opacity !== '0';
+          const attributeValue =
+            requestedAttribute === 'value' &&
+            (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement || element instanceof HTMLSelectElement)
+              ? element.value
+              : requestedAttribute === 'checked' && element instanceof HTMLInputElement
+                ? String(element.checked)
+                : requestedAttribute === 'disabled' &&
+                  (element instanceof HTMLButtonElement ||
+                    element instanceof HTMLInputElement ||
+                    element instanceof HTMLSelectElement ||
+                    element instanceof HTMLTextAreaElement)
+                  ? String(element.disabled)
+                  : requestedAttribute
+                    ? element.getAttribute(requestedAttribute) ?? undefined
+                    : undefined;
+          return {
+            found: true,
+            visible,
+            text: (element.textContent ?? '').replace(/\s+/g, ' ').trim().slice(0, 600),
+            ...(requestedAttribute ? { attributeValue } : {}),
+          };
+        },
+        { selector, attributeName },
+      )) as { found?: boolean; visible?: boolean; text?: string; attributeValue?: string } | undefined;
+      return {
+        selector,
+        found: Boolean(inspection?.found),
+        visible: Boolean(inspection?.visible),
+        ...(typeof inspection?.text === 'string' && inspection.text ? { text: inspection.text } : {}),
+        ...(attributeName
+          ? {
+              attribute: {
+                name: attributeName,
+                ...(typeof inspection?.attributeValue === 'string' ? { value: inspection.attributeValue } : {}),
+              },
+            }
+          : {}),
+      };
+    } catch {
+      return { selector, found: false, visible: false, ...(attributeName ? { attribute: { name: attributeName } } : {}) };
+    }
+  }
+
   async captureObservation(): Promise<BrowserObservationSnapshot> {
     if (!this.page) {
       const fallbackSummary = [this.state.pageTitle, this.state.currentUrl, this.state.message]
@@ -692,6 +815,13 @@ export class BrowserRuntime {
         const parsed = rawValue ? Number.parseInt(rawValue, 10) : Number.NaN;
         return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
       };
+      const firstPositiveNumber = (...values: Array<string | null | undefined>) => {
+        for (const value of values) {
+          const parsed = value ? Number.parseInt(value, 10) : Number.NaN;
+          if (Number.isFinite(parsed) && parsed > 0) return parsed;
+        }
+        return undefined;
+      };
       const sizeOf = (element: Element) => {
         const width = numberAttribute(element, 'width') ?? Math.round(element.getBoundingClientRect().width);
         const height = numberAttribute(element, 'height') ?? Math.round(element.getBoundingClientRect().height);
@@ -700,13 +830,59 @@ export class BrowserRuntime {
           ...(height > 0 ? { height } : {}),
         };
       };
-      const tables = Array.from(document.querySelectorAll('table'))
+      const parseChartValue = (value: string | null | undefined) => {
+        const normalized = (value ?? '').replace(/,/g, '').trim();
+        if (!/^-?\d+(?:\.\d+)?$/.test(normalized)) return undefined;
+        const parsed = Number.parseFloat(normalized);
+        return Number.isFinite(parsed) ? parsed : undefined;
+      };
+      const inferChartTrend = (values: number[]) => {
+        if (values.length < 2) return undefined;
+        if (values.every((value) => value === values[0])) return 'flat' as const;
+        const rising = values.every((value, index) => index === 0 || value >= values[index - 1]!);
+        const falling = values.every((value, index) => index === 0 || value <= values[index - 1]!);
+        return rising ? ('rising' as const) : falling ? ('falling' as const) : ('mixed' as const);
+      };
+      const normalizeChartTrend = (value: string) => {
+        const normalized = value.toLowerCase();
+        if (normalized === 'rising' || normalized === 'up' || normalized === 'increasing') return 'rising' as const;
+        if (normalized === 'falling' || normalized === 'down' || normalized === 'decreasing') return 'falling' as const;
+        if (normalized === 'flat' || normalized === 'stable') return 'flat' as const;
+        return normalized === 'mixed' ? ('mixed' as const) : undefined;
+      };
+      const tables = Array.from(document.querySelectorAll('table, [role="grid"], [role="table"], [data-grid], [data-table]'))
+        .filter(
+          (table) =>
+            !(
+              table.matches('[data-grid], [data-table]') &&
+              table.querySelector('table, [role="grid"], [role="table"]')
+            ),
+        )
+        .filter(
+          (table, index, allTables) =>
+            !allTables.some(
+              (candidate, candidateIndex) =>
+                candidateIndex !== index && candidate.matches('[role="grid"], [role="table"]') && candidate.contains(table),
+            ),
+        )
         .slice(0, 6)
         .map((table, index) => {
-          const headerCells = Array.from(table.querySelectorAll('thead th'));
+          const isNativeTable = table.matches('table');
+          const isDataGrid = !isNativeTable && !table.matches('[role="grid"], [role="table"]');
+          const headerCells = Array.from(
+            table.querySelectorAll(isNativeTable ? 'thead th' : isDataGrid ? '[data-column-header]' : '[role="columnheader"]'),
+          );
           const fallbackHeaderCells = headerCells.length
             ? []
-            : Array.from(table.querySelectorAll('tr:first-child th, tr:first-child td'));
+            : isNativeTable
+              ? Array.from(table.querySelectorAll('tr:first-child th, tr:first-child td'))
+              : isDataGrid
+                ? Array.from(table.querySelector('[data-row]')?.querySelectorAll('[data-column-header], [data-cell]') ?? [])
+                : Array.from(
+                    table
+                      .querySelector('[role="row"]')
+                      ?.querySelectorAll('[role="columnheader"], [role="gridcell"], [role="cell"]') ?? [],
+                  );
           const headers = (headerCells.length ? headerCells : fallbackHeaderCells).map((cell) => cleanText(cell.textContent));
           const sortStates = (headerCells.length ? headerCells : fallbackHeaderCells)
             .map((cell) => {
@@ -728,30 +904,119 @@ export class BrowserRuntime {
               };
             })
             .filter(Boolean);
-          const bodyRows = Array.from(table.querySelectorAll('tbody tr'));
-          const allRows = Array.from(table.querySelectorAll('tr'));
-          const dataRows = bodyRows.length ? bodyRows : allRows.slice(headers.length ? 1 : 0);
+          const bodyRows = isNativeTable ? Array.from(table.querySelectorAll('tbody tr')) : [];
+          const allRows = isNativeTable ? Array.from(table.querySelectorAll('tr')) : [];
+          const ariaRows = isNativeTable
+            ? []
+            : Array.from(table.querySelectorAll('[role="row"]')).filter((row) =>
+                Boolean(row.querySelector('[role="gridcell"], [role="rowheader"], [role="cell"]')),
+              );
+          const markedRows = isNativeTable
+            ? []
+            : Array.from(table.querySelectorAll('[data-row]')).filter((row) => Boolean(row.querySelector('[data-cell]')));
+          const dataRows = isNativeTable
+            ? bodyRows.length
+              ? bodyRows
+              : allRows.slice(headers.length ? 1 : 0)
+            : isDataGrid
+              ? markedRows
+              : ariaRows;
           const sampleRows = dataRows.slice(0, 3).map((row) =>
-            Array.from(row.querySelectorAll('th,td'))
+            Array.from(
+              row.querySelectorAll(
+                isNativeTable ? 'th,td' : isDataGrid ? '[data-cell]' : '[role="gridcell"], [role="rowheader"], [role="cell"]',
+              ),
+            )
               .slice(0, 6)
               .map((cell) => cleanText(cell.textContent)),
           );
           const columnCount = Math.max(headers.length, ...sampleRows.map((row) => row.length), 0);
+          const tableScope =
+            table.closest('[data-grid], [data-table], [data-table-container], [data-testid*="table" i], [role="region"], section, article') ??
+            table.parentElement;
+          const filterStates = tableScope
+            ? Array.from(tableScope.querySelectorAll('select[data-filter], input[data-filter], [data-filter]'))
+                .map((element) => {
+                  const control = element as HTMLInputElement | HTMLSelectElement;
+                  const label =
+                    cleanText(element.getAttribute('data-filter')) ||
+                    cleanText(element.getAttribute('aria-label')) ||
+                    cleanText(element.getAttribute('name'));
+                  const value =
+                    cleanText(element.getAttribute('data-filter-value')) ||
+                    cleanText('value' in control ? control.value : element.textContent);
+                  return label && value ? { label, value } : null;
+                })
+                .filter((state): state is { label: string; value: string } => Boolean(state))
+                .slice(0, 8)
+            : [];
+          const paginationRoot = tableScope?.querySelector('[data-pagination], [role="navigation"][aria-label*="page" i], [role="navigation"][aria-label*="分页"]');
+          const paginationText = cleanText(paginationRoot?.textContent);
+          const currentPageNode = paginationRoot?.querySelector('[aria-current="page"]');
+          const currentPageMatch = paginationText.match(/(?:page\s*)?(\d+)\s*(?:of|\/|共)\s*\d+/i);
+          const totalPagesMatch = paginationText.match(/(?:of|\/|共)\s*(\d+)\s*(?:pages?|页)?/i);
+          const pagination = {
+            currentPage: firstPositiveNumber(
+              table.getAttribute('data-current-page'),
+              paginationRoot?.getAttribute('data-current-page'),
+              currentPageNode?.getAttribute('data-page'),
+              currentPageNode?.textContent,
+              currentPageMatch?.[1],
+            ),
+            totalPages: firstPositiveNumber(
+              table.getAttribute('data-total-pages'),
+              paginationRoot?.getAttribute('data-total-pages'),
+              totalPagesMatch?.[1],
+            ),
+            totalItems: firstPositiveNumber(
+              table.getAttribute('data-total-items'),
+              table.getAttribute('aria-rowcount'),
+              paginationRoot?.getAttribute('data-total-items'),
+            ),
+            pageSize: firstPositiveNumber(
+              table.getAttribute('data-page-size'),
+              paginationRoot?.getAttribute('data-page-size'),
+            ),
+          };
+          const aggregates = (isNativeTable ? Array.from(table.querySelectorAll('tfoot tr')) : [])
+            .flatMap((row) =>
+              Array.from(row.querySelectorAll('th,td')).map((cell, cellIndex) => {
+                const label = cleanText(cell.getAttribute('data-aggregate') || headers[cellIndex]);
+                const value = cleanText(cell.getAttribute('data-aggregate-value') || cell.textContent);
+                return label && value ? { label, value } : null;
+              }),
+            )
+            .concat(
+              isDataGrid
+                ? Array.from(table.querySelectorAll('[data-aggregate]')).map((cell) => {
+                    const label = cleanText(cell.getAttribute('data-aggregate'));
+                    const value = cleanText(cell.getAttribute('data-aggregate-value') || cell.textContent);
+                    return label && value ? { label, value } : null;
+                  })
+                : [],
+            )
+            .filter((aggregate): aggregate is { label: string; value: string } => Boolean(aggregate))
+            .slice(0, 12);
           return {
             index: index + 1,
             ...(cleanText(table.querySelector('caption')?.textContent) ||
             cleanText(table.getAttribute('aria-label')) ||
+            cleanText(table.getAttribute('data-label')) ||
             cleanText(table.getAttribute('data-testid'))
               ? {
                   caption:
                     cleanText(table.querySelector('caption')?.textContent) ||
                     cleanText(table.getAttribute('aria-label')) ||
+                    cleanText(table.getAttribute('data-label')) ||
                     cleanText(table.getAttribute('data-testid')),
                 }
               : {}),
             rowCount: dataRows.length,
             columnCount,
             headers,
+            ...(filterStates.length ? { filters: filterStates } : {}),
+            ...(Object.values(pagination).some((value) => value !== undefined) ? { pagination } : {}),
+            ...(aggregates.length ? { aggregates } : {}),
             ...(sortStates.length ? { sortStates } : {}),
             sampleRows,
           };
@@ -782,6 +1047,83 @@ export class BrowserRuntime {
           .map((legend) => cleanText(legend.textContent || legend.getAttribute('aria-label')))
           .filter(Boolean)
           .slice(0, 6);
+        const chartKey =
+          cleanText(element.getAttribute('id')) ||
+          cleanText(element.getAttribute('data-chart')) ||
+          cleanText(element.getAttribute('data-testid'));
+        const tooltipIds = (element.getAttribute('aria-describedby') ?? '').split(/\s+/).filter(Boolean);
+        const tooltipCandidates = Array.from(
+          document.querySelectorAll('[role="tooltip"], [data-chart-tooltip], [data-tooltip], .chart-tooltip'),
+        ).filter((tooltip) => {
+          const tooltipFor = tooltip.getAttribute('data-chart-for') || tooltip.getAttribute('data-tooltip-for');
+          return (
+            element.contains(tooltip) ||
+            tooltipIds.includes(tooltip.id) ||
+            Boolean(chartKey && tooltipFor === chartKey)
+          );
+        });
+        const tooltip = tooltipCandidates
+          .filter(
+            (candidate) =>
+              !candidate.hasAttribute('hidden') &&
+              candidate.getAttribute('aria-hidden') !== 'true' &&
+              candidate.getAttribute('data-state') !== 'closed' &&
+              candidate.getAttribute('data-visible') !== 'false',
+          )
+          .map((candidate) => cleanText(candidate.getAttribute('data-tooltip') || candidate.textContent))
+          .filter(Boolean)
+          .slice(0, 3)
+          .join(' / ');
+        const dataPoints = Array.from(
+          element.querySelectorAll('[data-chart-value], [data-point][data-value], [data-series][data-value], [data-series-name][data-value]'),
+        )
+          .map((point) => {
+            const value = parseChartValue(point.getAttribute('data-chart-value') || point.getAttribute('data-value'));
+            const label = cleanText(point.getAttribute('data-point') || point.getAttribute('data-label') || point.getAttribute('aria-label'));
+            const series = cleanText(point.getAttribute('data-series') || point.getAttribute('data-series-name'));
+            return value === undefined ? null : { ...(series ? { series } : {}), ...(label ? { label } : {}), value };
+          })
+          .filter((point): point is { series?: string; label?: string; value: number } => Boolean(point))
+          .slice(0, 24);
+        const explicitTrend = cleanText(element.getAttribute('data-trend')).toLowerCase();
+        const hasMultipleSeries = new Set(dataPoints.map((point) => point.series).filter(Boolean)).size > 1;
+        const seriesTrendsByName = new Map<string, 'rising' | 'falling' | 'flat' | 'mixed'>();
+        Array.from(
+          dataPoints.reduce((seriesValues, point) => {
+            if (point.series) {
+              seriesValues.set(point.series, [...(seriesValues.get(point.series) ?? []), point.value]);
+            }
+            return seriesValues;
+          }, new Map<string, number[]>()),
+        )
+          .map(([series, values]) => {
+            const trend = inferChartTrend(values);
+            return trend ? { series, trend } : null;
+          })
+          .filter((seriesTrend): seriesTrend is { series: string; trend: 'rising' | 'falling' | 'flat' | 'mixed' } => Boolean(seriesTrend))
+          .forEach((seriesTrend) => seriesTrendsByName.set(seriesTrend.series, seriesTrend.trend));
+        Array.from(element.querySelectorAll('[data-series][data-series-trend], [data-series-name][data-series-trend]')).forEach(
+          (seriesElement) => {
+            const series = cleanText(seriesElement.getAttribute('data-series') || seriesElement.getAttribute('data-series-name'));
+            const trend = normalizeChartTrend(cleanText(seriesElement.getAttribute('data-series-trend')));
+            if (series && trend) {
+              seriesTrendsByName.set(series, trend);
+            }
+          },
+        );
+        const seriesTrends = Array.from(seriesTrendsByName, ([series, trend]) => ({ series, trend }));
+        const trend =
+          explicitTrend === 'rising' || explicitTrend === 'up' || explicitTrend === 'increasing'
+            ? 'rising'
+            : explicitTrend === 'falling' || explicitTrend === 'down' || explicitTrend === 'decreasing'
+              ? 'falling'
+              : explicitTrend === 'flat' || explicitTrend === 'stable'
+                ? 'flat'
+                : explicitTrend === 'mixed'
+                  ? 'mixed'
+                  : hasMultipleSeries
+                    ? undefined
+                    : inferChartTrend(dataPoints.map((point) => point.value));
         const visualSize = sizeOf(visual);
         return {
           index: index + 1,
@@ -790,6 +1132,10 @@ export class BrowserRuntime {
           ...visualSize,
           rendered: Boolean(visualSize.width && visualSize.height),
           legends,
+          ...(tooltip ? { tooltip } : {}),
+          ...(dataPoints.length ? { dataPoints } : {}),
+          ...(seriesTrends.length ? { seriesTrends } : {}),
+          ...(trend ? { trend } : {}),
           selectorHint: selectorHintOf(element),
         };
       });

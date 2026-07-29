@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, nativeImage, shell } from 'electron';
 
 import {
   type BrowserNavigateRequest,
@@ -43,6 +43,11 @@ let browserRuntime: BrowserRuntime | null = null;
 let testRunner: TestRunner | null = null;
 let recordingRunner: RecordingRunner | null = null;
 let artifactManager: ArtifactManager | null = null;
+
+function loadApplicationIcon() {
+  const icon = nativeImage.createFromPath(path.join(app.getAppPath(), 'resources', 'icons', 'testbuddy.png'));
+  return icon.isEmpty() ? undefined : icon;
+}
 
 function getStoreOrThrow(): StudioStore {
   if (!studioStore) {
@@ -93,12 +98,14 @@ function getArtifactManagerOrThrow(): ArtifactManager {
 }
 
 function createWindow(): BrowserWindow {
+  const icon = loadApplicationIcon();
   const window = new BrowserWindow({
     width: 1200,
     height: 760,
     minWidth: 1200,
     minHeight: 760,
     title: 'TestBuddy',
+    icon,
     backgroundColor: '#050505',
     autoHideMenuBar: true,
     ...(process.platform === 'darwin'
@@ -266,6 +273,10 @@ function registerIpcHandlers(): void {
 }
 
 app.whenReady().then(async () => {
+  const icon = loadApplicationIcon();
+  if (icon && process.platform === 'darwin' && app.dock) {
+    app.dock.setIcon(icon);
+  }
   const rootDir = app.getPath('userData');
   studioStore = new StudioStore(rootDir);
   await studioStore.ensureReady();

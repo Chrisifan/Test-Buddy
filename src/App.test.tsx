@@ -22,6 +22,7 @@ describe('App shell', () => {
 
     expect(screen.getByRole('navigation', { name: '主导航' })).toBeInTheDocument();
     expect(screen.getByText('TestBuddy')).toBeInTheDocument();
+    expect(container.querySelectorAll('img[src*="testbuddy-hammer-bot"]').length).toBe(2);
     expect(screen.queryByText('Project Context')).not.toBeInTheDocument();
     expect(container.querySelector('.app-topbar')).toBeInTheDocument();
     expect(screen.getByPlaceholderText('搜索资源...')).toBeInTheDocument();

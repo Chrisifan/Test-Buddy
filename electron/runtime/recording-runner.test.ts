@@ -93,6 +93,7 @@ describe('RecordingRunner', () => {
       startUrl: environment.url,
       comparisonGoal: '页面与基线一致',
       visualDiffThreshold: 0.15,
+      visualDiffMasks: [{ id: 'clock', label: '实时时钟', x: 0, y: 0, width: 10, height: 10 }],
       tags: [],
       createdAt: new Date(0).toISOString(),
       updatedAt: new Date(0).toISOString(),
@@ -146,6 +147,7 @@ describe('RecordingRunner', () => {
       actualPath: '/tmp/report-actual.png',
       diffPath: '/tmp/report-actual-diff.png',
       differenceThreshold: 0.15,
+      ignoredRegions: [{ id: 'clock', label: '实时时钟', x: 0, y: 0, width: 10, height: 10 }],
     });
     expect(response.agentRun.status).toBe('passed');
     expect(response.detail.artifacts).toEqual(

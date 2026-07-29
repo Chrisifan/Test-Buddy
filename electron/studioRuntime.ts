@@ -26,6 +26,7 @@ import {
   resolveAgentModelAssignments,
 } from '../shared/studio.js';
 import type {
+  AgentDomInspection,
   AgentExecutionMetrics,
   AgentFailureCategory,
   AgentObservation,
@@ -45,6 +46,7 @@ import {
   createPlannedAgentRun,
   createStubAgentRun,
   createWorkflowAgentRun,
+  type PlannedAgentReplanningRecord,
   type PlannedAgentStepExecution,
 } from '../shared/agentStub.js';
 import type {
@@ -79,6 +81,7 @@ interface BrowserObserver {
   select?: (request: BrowserSelectRequest) => Promise<BrowserSessionState>;
   capture: () => Promise<BrowserSessionState>;
   getPageText?: () => Promise<string>;
+  inspectDom?: (selector: string, attributeName?: string) => Promise<AgentDomInspection>;
   captureObservation?: () => Promise<
     Partial<
       Pick<
@@ -107,11 +110,28 @@ type ExplicitAssertionKind =
   | 'tableColumnContains'
   | 'tableColumnSum'
   | 'tableSort'
+  | 'tableFilter'
+  | 'tableCurrentPage'
+  | 'tableTotalPages'
+  | 'tableTotalItems'
+  | 'tablePageSize'
+  | 'tableAggregateEquals'
+  | 'domSelectorExists'
+  | 'domSelectorVisible'
+  | 'domSelectorTextContains'
+  | 'domSelectorAttributeEquals'
   | 'chartContains'
   | 'chartCount'
   | 'chartRendered'
   | 'chartTitleEquals'
-  | 'chartLegendContains';
+  | 'chartLegendContains'
+  | 'chartTooltipContains'
+  | 'chartDataContains'
+  | 'chartSeriesContains'
+  | 'chartDataPointEquals'
+  | 'chartSeriesDataPointEquals'
+  | 'chartSeriesTrend'
+  | 'chartTrend';
 
 interface ExplicitAssertionIntent {
   kind: ExplicitAssertionKind;
@@ -122,6 +142,15 @@ interface ExplicitAssertionIntent {
   columnName?: string;
   sortColumn?: string;
   sortDirection?: 'ascending' | 'descending';
+  filterName?: string;
+  aggregateName?: string;
+  tableName?: string;
+  chartName?: string;
+  domSelector?: string;
+  domAttributeName?: string;
+  chartDataPointLabel?: string;
+  chartSeriesName?: string;
+  chartTrend?: 'rising' | 'falling' | 'flat' | 'mixed';
 }
 
 interface AssertionEvaluation {
@@ -275,7 +304,7 @@ function makeAssistantReply(
   }
 
   if (mode === 'aiQuery') {
-    return `主进程已接收提取指令：${prompt}。当前运行配置为 ${describeRuntimeProfile(runtimeProfile)}，后续会在这里返回结构化提取结果和变量保存值。`;
+    return `主进程已接收提取指令：${prompt}。当前运行配置为 ${describeRuntimeProfile(runtimeProfile)}，提取结果将写入本次运行证据。`;
   }
 
   return `主进程已接收动作指令：${prompt}。当前运行配置为 ${describeRuntimeProfile(runtimeProfile)}，前端和桌面端的命令流已经打通。`;
@@ -327,18 +356,85 @@ function extractInputIntent(text: string): { selector?: string; target?: string;
   return undefined;
 }
 
+function extractSelectIntent(text: string): { selector?: string; target?: string; value: string } | undefined {
+  const selectorSelect = text.match(
+    /(?:在|向|给)?\s*(`[^`]+`|#[\w-]+|\.[\w-]+|\[[^\]]+\])\s*(?:中|里)?\s*(?:选择|选中|select)\s*([^，。；,\n]+)/i,
+  );
+  if (selectorSelect?.[1] && selectorSelect[2]) {
+    return { selector: selectorSelect[1].replace(/^`|`$/g, ''), value: selectorSelect[2].trim() };
+  }
+
+  const semanticSelect = text.match(/(?:在|向|给)?\s*([^，。；,\n]+?)\s*(?:中|里)?\s*(?:选择|选中|select)\s*([^，。；,\n]+)/i);
+  if (semanticSelect?.[1] && semanticSelect[2]) {
+    return { target: semanticSelect[1].trim(), value: semanticSelect[2].trim() };
+  }
+
+  return undefined;
+}
+
+function extractQueryIntent(text: string): { target?: string } {
+  const match = text.match(
+    /(?:提取|读取|查询|获取|extract|query)\s*(?:(?:当前)?页面(?:中|里|的)?\s*)?(.+?)(?:[。；，,\n]|$)/i,
+  );
+  const target = normalizeCapturedValue(match?.[1] ?? '');
+  return target ? { target } : {};
+}
+
 function extractWaitMs(text: string): number | undefined {
-  const milliseconds = text.match(/(?:等待|wait)\s*(\d+)\s*(?:毫秒|ms)/i);
+  const milliseconds = text.match(/(?:等待|wait)[\s\S]{0,100}?(\d+)\s*(?:毫秒|ms)/i);
   if (milliseconds?.[1]) {
     return Math.min(Math.max(Number.parseInt(milliseconds[1], 10), 0), 30_000);
   }
 
-  const seconds = text.match(/(?:等待|wait)\s*(\d+(?:\.\d+)?)\s*(?:秒|s|sec|second|seconds)?/i);
+  const seconds = text.match(/(?:等待|wait)[\s\S]{0,100}?(\d+(?:\.\d+)?)\s*(?:秒|s|sec|second|seconds)/i);
   if (seconds?.[1]) {
     return Math.min(Math.max(Math.round(Number.parseFloat(seconds[1]) * 1_000), 0), 30_000);
   }
 
+  const bareSeconds = text.match(/(?:等待|wait)\s*(\d+(?:\.\d+)?)/i);
+  if (bareSeconds?.[1]) {
+    return Math.min(Math.max(Math.round(Number.parseFloat(bareSeconds[1]) * 1_000), 0), 30_000);
+  }
+
   return undefined;
+}
+
+function extractDirectWaitIntent(text: string): ExecutionIntent['waitIntent'] | undefined {
+  if (!/(?:等待|wait)/i.test(text)) {
+    return undefined;
+  }
+  const selectorMatch = text.match(/(`[^`]+`|#[\w-]+|\.[\w-]+|\[[^\]]+\])/i);
+  const selector = selectorMatch?.[1]?.replace(/^`|`$/g, '');
+  const timeoutMs = extractWaitMs(text) ?? 1_000;
+  const responseUrlPattern = selector ? undefined : extractApiPath(text);
+  const strategy = isChartStableWaitInstruction(text)
+    ? 'chartStable' as const
+    : responseUrlPattern
+      ? 'response' as const
+      : isDataReadyWaitInstruction(text)
+        ? 'dataReady' as const
+        : selector
+          ? 'selector' as const
+          : isNetworkIdleWaitInstruction(text)
+            ? 'networkIdle' as const
+            : 'timeout' as const;
+  return {
+    timeoutMs,
+    ...(selector ? { selector } : {}),
+    ...(responseUrlPattern ? { urlPattern: responseUrlPattern } : {}),
+    strategy,
+  };
+}
+
+function extractScrollIntent(text: string): { selector?: string; x?: number; y?: number } | undefined {
+  if (!/(?:滚动|scroll)/i.test(text)) {
+    return undefined;
+  }
+  const selectorMatch = text.match(/(?:滚动到|scroll\s+to)\s*(`[^`]+`|#[\w-]+|\.[\w-]+|\[[^\]]+\])/i);
+  if (selectorMatch?.[1]) {
+    return { selector: selectorMatch[1].replace(/^`|`$/g, '') };
+  }
+  return { y: /(?:向上|上滚|scroll\s+up)/i.test(text) ? -800 : 800 };
 }
 
 function isNetworkIdleWaitInstruction(text: string): boolean {
@@ -395,6 +491,20 @@ function normalizeCapturedValue(value: string): string {
 }
 
 function extractAssertionIntent(text: string): ExplicitAssertionIntent | undefined {
+  const tableTargetMatch = text.match(/(?:表格|table)\s*(?:「([^」]+)」|“([^”]+)”|["'`]([^"'`]+)["'`])/i);
+  const tableName = normalizeCapturedValue(tableTargetMatch?.[1] ?? tableTargetMatch?.[2] ?? tableTargetMatch?.[3] ?? '');
+  if (tableTargetMatch && tableName) {
+    const normalizedText = text.replace(tableTargetMatch[0], /table/i.test(tableTargetMatch[0]) ? 'table ' : '表格 ');
+    const parsed = extractAssertionIntent(normalizedText);
+    return parsed?.kind.startsWith('table') ? { ...parsed, tableName } : parsed;
+  }
+  const chartTargetMatch = text.match(/(?:图表|chart)\s*(?:「([^」]+)」|“([^”]+)”|["'`]([^"'`]+)["'`])/i);
+  const chartName = normalizeCapturedValue(chartTargetMatch?.[1] ?? chartTargetMatch?.[2] ?? chartTargetMatch?.[3] ?? '');
+  if (chartTargetMatch && chartName) {
+    const normalizedText = text.replace(chartTargetMatch[0], /chart/i.test(chartTargetMatch[0]) ? 'chart ' : '图表 ');
+    const parsed = extractAssertionIntent(normalizedText);
+    return parsed?.kind.startsWith('chart') ? { ...parsed, chartName } : parsed;
+  }
   const patterns: Array<[ExplicitAssertionKind, string, RegExp]> = [
     ['urlContains', 'URL 包含', /(?:断言|验证|检查|assert)\s*(?:url|URL|地址|链接)\s*(?:包含|含有|contains)\s*([^，。；,\n]+)/i],
     ['titleContains', '标题包含', /(?:断言|验证|检查|assert)\s*(?:标题|title)\s*(?:包含|含有|contains)\s*([^，。；,\n]+)/i],
@@ -439,6 +549,56 @@ function extractAssertionIntent(text: string): ExplicitAssertionIntent | undefin
       /(?:断言|验证|检查|assert)\s*(?:表格|table)\s*(?:按|by)\s*([^，。；,\n]+?)\s*(升序|降序|ascending|descending|asc|desc)/i,
     ],
     [
+      'tableFilter',
+      '表格筛选',
+      /(?:断言|验证|检查|assert)\s*(?:表格|table)\s*(?:筛选|filter)\s*([^，。；,\n]+?)\s*(?:为|等于|是|=|equals?)\s*([^，。；,\n]+)/i,
+    ],
+    [
+      'tableCurrentPage',
+      '表格当前页',
+      /(?:断言|验证|检查|assert)\s*(?:表格|table)\s*(?:当前页|current\s*page)\s*(?:为|等于|是|=|equals?)\s*(\d+)/i,
+    ],
+    [
+      'tableTotalPages',
+      '表格总页数',
+      /(?:断言|验证|检查|assert)\s*(?:表格|table)\s*(?:总页数|total\s*pages?)\s*(?:为|等于|是|=|equals?)\s*(\d+)/i,
+    ],
+    [
+      'tableTotalItems',
+      '表格总条数',
+      /(?:断言|验证|检查|assert)\s*(?:表格|table)\s*(?:总条数|总记录数|总数|total\s*(?:items?|records?))\s*(?:为|等于|是|=|equals?)\s*(\d+)/i,
+    ],
+    [
+      'tablePageSize',
+      '表格每页条数',
+      /(?:断言|验证|检查|assert)\s*(?:表格|table)\s*(?:每页|page\s*size)\s*(?:为|等于|是|=|equals?)?\s*(\d+)\s*(?:条|rows?|items?)?/i,
+    ],
+    [
+      'tableAggregateEquals',
+      '表格聚合值',
+      /(?:断言|验证|检查|assert)\s*(?:表格|table)\s*(?:聚合|汇总|aggregate)\s*([^，。；,\n]+?)\s*(?:为|等于|是|=|equals?)\s*([^，。；,\n]+)/i,
+    ],
+    [
+      'domSelectorTextContains',
+      'DOM 文本',
+      /(?:断言|验证|检查|assert)\s*(?:dom\s*)?(`[^`]+`|#[\w-]+|\.[\w-]+|\[[^\]]+\])\s*(?:文本|text)\s*(?:包含|含有|contains)\s*([^，。；,\n]+)/i,
+    ],
+    [
+      'domSelectorAttributeEquals',
+      'DOM 属性',
+      /(?:断言|验证|检查|assert)\s*(?:dom\s*)?(`[^`]+`|#[\w-]+|\.[\w-]+|\[[^\]]+\])\s*(?:属性|attribute)\s*([\w-]+)\s*(?:为|等于|是|=|equals?)\s*([^，。；,\n]+)/i,
+    ],
+    [
+      'domSelectorVisible',
+      'DOM 可见',
+      /(?:断言|验证|检查|assert)\s*(?:dom\s*)?(`[^`]+`|#[\w-]+|\.[\w-]+|\[[^\]]+\])\s*(?:可见|visible)/i,
+    ],
+    [
+      'domSelectorExists',
+      'DOM 存在',
+      /(?:断言|验证|检查|assert)\s*(?:dom\s*)?(`[^`]+`|#[\w-]+|\.[\w-]+|\[[^\]]+\])\s*(?:存在|exists?|present)/i,
+    ],
+    [
       'chartContains',
       '图表包含',
       /(?:断言|验证|检查|assert)\s*(?:图表|图|chart)\s*(?:包含|含有|contains)\s*([^，。；,\n]+)/i,
@@ -462,6 +622,41 @@ function extractAssertionIntent(text: string): ExplicitAssertionIntent | undefin
       'chartLegendContains',
       '图表图例',
       /(?:断言|验证|检查|assert)\s*(?:图表|图|chart)\s*(?:图例|legend)\s*(?:包含|含有|contains)\s*([^，。；,\n]+)/i,
+    ],
+    [
+      'chartTooltipContains',
+      '图表提示',
+      /(?:断言|验证|检查|assert)\s*(?:图表|图|chart)\s*(?:tooltip|提示)\s*(?:包含|含有|contains)\s*([^，。；,\n]+)/i,
+    ],
+    [
+      'chartDataContains',
+      '图表数据区域',
+      /(?:断言|验证|检查|assert)\s*(?:图表|图|chart)\s*(?:数据区域|数据|data(?:\s*region)?)\s*(?:包含|含有|contains)\s*([^，。；,\n]+)/i,
+    ],
+    [
+      'chartSeriesContains',
+      '图表系列',
+      /(?:断言|验证|检查|assert)\s*(?:图表|图|chart)\s*(?:数据系列|系列|series)\s*(?:包含|含有|contains)\s*([^，。；,\n]+)/i,
+    ],
+    [
+      'chartSeriesTrend',
+      '图表系列趋势',
+      /(?:断言|验证|检查|assert)\s*(?:图表|图|chart)\s*(?:数据系列|系列|series)\s*([^，。；,\n]+?)\s*(?:趋势|trend)\s*(上升|下降|平稳|rising|falling|flat|mixed)/i,
+    ],
+    [
+      'chartSeriesDataPointEquals',
+      '图表系列数据点',
+      /(?:断言|验证|检查|assert)\s*(?:图表|图|chart)\s*(?:数据系列|系列|series)\s*([^，。；,\n]+?)\s*(?:数据点|data\s*point)\s*([^，。；,\n]+?)\s*(?:为|等于|是|=|equals?)\s*(-?\d+(?:\.\d+)?)/i,
+    ],
+    [
+      'chartDataPointEquals',
+      '图表数据点',
+      /(?:断言|验证|检查|assert)\s*(?:图表|图|chart)\s*(?:数据点|data\s*point)\s*([^，。；,\n]+?)\s*(?:为|等于|是|=|equals?)\s*(-?\d+(?:\.\d+)?)/i,
+    ],
+    [
+      'chartTrend',
+      '图表趋势',
+      /(?:断言|验证|检查|assert)\s*(?:图表|图|chart)\s*(?:趋势|trend)\s*(上升|下降|平稳|rising|falling|flat|mixed)/i,
     ],
   ];
 
@@ -506,9 +701,87 @@ function extractAssertionIntent(text: string): ExplicitAssertionIntent | undefin
       }
       continue;
     }
+    if (kind === 'tableFilter') {
+      const filterName = match?.[1] ? normalizeCapturedValue(match[1]) : '';
+      const expected = match?.[2] ? normalizeCapturedValue(match[2]) : '';
+      if (filterName && expected) {
+        return { kind, expected: `${filterName} = ${expected}`, label, filterName };
+      }
+      continue;
+    }
+    if (kind === 'tableAggregateEquals') {
+      const aggregateName = match?.[1] ? normalizeCapturedValue(match[1]) : '';
+      const expected = match?.[2] ? normalizeCapturedValue(match[2]) : '';
+      if (aggregateName && expected) {
+        return { kind, expected: `${aggregateName} = ${expected}`, label, aggregateName };
+      }
+      continue;
+    }
+    if (kind === 'domSelectorTextContains') {
+      const domSelector = match?.[1] ? normalizeCapturedValue(match[1]) : '';
+      const expected = match?.[2] ? normalizeCapturedValue(match[2]) : '';
+      if (domSelector && expected) {
+        return { kind, expected, label, domSelector };
+      }
+      continue;
+    }
+    if (kind === 'domSelectorAttributeEquals') {
+      const domSelector = match?.[1] ? normalizeCapturedValue(match[1]) : '';
+      const domAttributeName = match?.[2] ? normalizeCapturedValue(match[2]) : '';
+      const expected = match?.[3] ? normalizeCapturedValue(match[3]) : '';
+      if (domSelector && domAttributeName && expected) {
+        return { kind, expected, label, domSelector, domAttributeName };
+      }
+      continue;
+    }
+    if (kind === 'domSelectorExists' || kind === 'domSelectorVisible') {
+      const domSelector = match?.[1] ? normalizeCapturedValue(match[1]) : '';
+      if (domSelector) {
+        return { kind, expected: domSelector, label, domSelector };
+      }
+      continue;
+    }
     if (kind === 'chartRendered') {
       if (match) {
         return { kind, expected: '已渲染', label };
+      }
+      continue;
+    }
+    if (kind === 'chartTrend') {
+      const chartTrend = normalizeChartTrend(match?.[1] ?? '');
+      if (chartTrend) {
+        return { kind, expected: formatChartTrend(chartTrend), label, chartTrend };
+      }
+      continue;
+    }
+    if (kind === 'chartSeriesTrend') {
+      const chartSeriesName = match?.[1] ? normalizeCapturedValue(match[1]) : '';
+      const chartTrend = normalizeChartTrend(match?.[2] ?? '');
+      if (chartSeriesName && chartTrend) {
+        return { kind, expected: `${chartSeriesName} ${formatChartTrend(chartTrend)}`, label, chartSeriesName, chartTrend };
+      }
+      continue;
+    }
+    if (kind === 'chartDataPointEquals') {
+      const chartDataPointLabel = match?.[1] ? normalizeCapturedValue(match[1]) : '';
+      const pointValue = match?.[2] ? normalizeCapturedValue(match[2]) : '';
+      if (chartDataPointLabel && pointValue) {
+        return { kind, expected: `${chartDataPointLabel} = ${pointValue}`, label, chartDataPointLabel };
+      }
+      continue;
+    }
+    if (kind === 'chartSeriesDataPointEquals') {
+      const chartSeriesName = match?.[1] ? normalizeCapturedValue(match[1]) : '';
+      const chartDataPointLabel = match?.[2] ? normalizeCapturedValue(match[2]) : '';
+      const pointValue = match?.[3] ? normalizeCapturedValue(match[3]) : '';
+      if (chartSeriesName && chartDataPointLabel && pointValue) {
+        return {
+          kind,
+          expected: `${chartSeriesName} / ${chartDataPointLabel} = ${pointValue}`,
+          label,
+          chartSeriesName,
+          chartDataPointLabel,
+        };
       }
       continue;
     }
@@ -527,30 +800,62 @@ function evaluateExplicitAssertion(
   session: BrowserSessionState | undefined,
   pageText?: string,
   observation?: Partial<Pick<AgentObservation, 'tables' | 'charts'>>,
+  domInspection?: AgentDomInspection,
 ): AssertionEvaluation {
+  if (
+    assertion.kind === 'domSelectorExists' ||
+    assertion.kind === 'domSelectorVisible' ||
+    assertion.kind === 'domSelectorTextContains' ||
+    assertion.kind === 'domSelectorAttributeEquals'
+  ) {
+    return evaluateDomAssertion(assertion, domInspection);
+  }
+  const tables = selectAssertionTables(observation?.tables ?? [], assertion.tableName);
+  const charts = selectAssertionCharts(observation?.charts ?? [], assertion.chartName);
   if (assertion.kind === 'tableRowCount' || assertion.kind === 'tableColumnCount') {
-    return evaluateTableCountAssertion(assertion, observation?.tables ?? []);
+    return evaluateTableCountAssertion(assertion, tables);
   }
   if (assertion.kind === 'tableCellEquals') {
-    return evaluateTableCellAssertion(assertion, observation?.tables ?? []);
+    return evaluateTableCellAssertion(assertion, tables);
   }
   if (assertion.kind === 'tableColumnContains') {
-    return evaluateTableColumnContainsAssertion(assertion, observation?.tables ?? []);
+    return evaluateTableColumnContainsAssertion(assertion, tables);
   }
   if (assertion.kind === 'tableColumnSum') {
-    return evaluateTableColumnSumAssertion(assertion, observation?.tables ?? []);
+    return evaluateTableColumnSumAssertion(assertion, tables);
   }
   if (assertion.kind === 'tableSort') {
-    return evaluateTableSortAssertion(assertion, observation?.tables ?? []);
+    return evaluateTableSortAssertion(assertion, tables);
+  }
+  if (
+    assertion.kind === 'tableFilter' ||
+    assertion.kind === 'tableCurrentPage' ||
+    assertion.kind === 'tableTotalPages' ||
+    assertion.kind === 'tableTotalItems' ||
+    assertion.kind === 'tablePageSize' ||
+    assertion.kind === 'tableAggregateEquals'
+  ) {
+    return evaluateTableStateAssertion(assertion, tables);
   }
   if (assertion.kind === 'chartCount') {
-    return evaluateChartCountAssertion(assertion, observation?.charts ?? []);
+    return evaluateChartCountAssertion(assertion, charts);
   }
   if (assertion.kind === 'chartRendered') {
-    return evaluateChartRenderedAssertion(assertion, observation?.charts ?? []);
+    return evaluateChartRenderedAssertion(assertion, charts);
   }
   if (assertion.kind === 'chartTitleEquals' || assertion.kind === 'chartLegendContains') {
-    return evaluateChartFieldAssertion(assertion, observation?.charts ?? []);
+    return evaluateChartFieldAssertion(assertion, charts);
+  }
+  if (
+    assertion.kind === 'chartTooltipContains' ||
+    assertion.kind === 'chartDataContains' ||
+    assertion.kind === 'chartSeriesContains' ||
+    assertion.kind === 'chartDataPointEquals' ||
+    assertion.kind === 'chartSeriesDataPointEquals' ||
+    assertion.kind === 'chartSeriesTrend' ||
+    assertion.kind === 'chartTrend'
+  ) {
+    return evaluateChartEvidenceAssertion(assertion, charts);
   }
 
   const actual =
@@ -559,9 +864,9 @@ function evaluateExplicitAssertion(
       : assertion.kind === 'titleContains'
         ? session?.pageTitle ?? ''
         : assertion.kind === 'tableContains'
-          ? summarizeTables(observation?.tables ?? [])
+          ? summarizeTables(tables)
           : assertion.kind === 'chartContains'
-            ? summarizeCharts(observation?.charts ?? [])
+            ? summarizeCharts(charts)
           : pageText ?? '';
   const passed = actual.includes(assertion.expected);
   const targetLabel =
@@ -610,6 +915,19 @@ function normalizeSortDirection(value: string): 'ascending' | 'descending' | und
   return undefined;
 }
 
+function normalizeChartTrend(value: string): 'rising' | 'falling' | 'flat' | 'mixed' | undefined {
+  const normalized = value.trim().toLowerCase();
+  if (normalized === '上升' || normalized === 'rising') return 'rising';
+  if (normalized === '下降' || normalized === 'falling') return 'falling';
+  if (normalized === '平稳' || normalized === 'flat') return 'flat';
+  if (normalized === 'mixed') return 'mixed';
+  return undefined;
+}
+
+function formatChartTrend(trend: NonNullable<ExplicitAssertionIntent['chartTrend']>): string {
+  return trend === 'rising' ? '上升' : trend === 'falling' ? '下降' : trend === 'flat' ? '平稳' : 'mixed';
+}
+
 function evaluateChartCountAssertion(
   assertion: ExplicitAssertionIntent,
   charts: NonNullable<AgentObservation['charts']>,
@@ -632,6 +950,42 @@ function evaluateChartCountAssertion(
     summary: `${assertion.label}「${assertion.expected}」未通过。`,
     evidence,
     failureReason: `${assertion.label}不等于「${assertion.expected}」。`,
+  };
+}
+
+function evaluateDomAssertion(
+  assertion: ExplicitAssertionIntent,
+  inspection: AgentDomInspection | undefined,
+): AssertionEvaluation {
+  const selector = assertion.domSelector ?? assertion.expected;
+  const evidence = inspection
+    ? `${inspection.selector}：${inspection.found ? (inspection.visible ? '已找到且可见' : '已找到但不可见') : '未找到'}${inspection.text ? `；文本：${inspection.text}` : ''}${inspection.attribute ? `；属性 ${inspection.attribute.name}：${inspection.attribute.value ?? '未设置'}` : ''}`
+    : `未连接 DOM 检查器，无法检查 ${selector}`;
+  const passed =
+    assertion.kind === 'domSelectorExists'
+      ? inspection?.found === true
+      : assertion.kind === 'domSelectorVisible'
+        ? inspection?.visible === true
+        : assertion.kind === 'domSelectorAttributeEquals'
+          ? inspection?.found === true && inspection.attribute?.name === assertion.domAttributeName && inspection.attribute?.value === assertion.expected
+          : inspection?.found === true && Boolean(inspection.text?.includes(assertion.expected));
+  if (passed) {
+    return { status: 'passed', summary: `${assertion.label}「${assertion.expected}」已通过。`, evidence };
+  }
+
+  const failureReason =
+    assertion.kind === 'domSelectorExists'
+      ? `未找到 DOM selector「${selector}」。`
+      : assertion.kind === 'domSelectorVisible'
+        ? `DOM selector 不可见「${selector}」。`
+        : assertion.kind === 'domSelectorAttributeEquals'
+          ? `DOM 属性「${assertion.domAttributeName ?? ''}」不等于「${assertion.expected}」。`
+        : `DOM 文本不包含「${assertion.expected}」。`;
+  return {
+    status: 'failed',
+    summary: `${assertion.label}「${assertion.expected}」未通过。`,
+    evidence,
+    failureReason,
   };
 }
 
@@ -690,6 +1044,161 @@ function evaluateChartRenderedAssertion(
     evidence,
     failureReason: '未观察到已渲染图表。',
   };
+}
+
+function evaluateChartEvidenceAssertion(
+  assertion: ExplicitAssertionIntent,
+  charts: NonNullable<AgentObservation['charts']>,
+): AssertionEvaluation {
+  const chartLabel = (chart: NonNullable<AgentObservation['charts']>[number]) => chart.title || `图表 #${chart.index}`;
+  const formatDataPoint = (point: { series?: string; label?: string; value: number }) =>
+    `${point.series ? `${point.series} / ` : ''}${point.label ? `${point.label} = ` : ''}${formatNumber(point.value)}`;
+  const formatDataEvidence = () =>
+    charts.length
+      ? charts
+          .map((chart) => `${chartLabel(chart)}：${(chart.dataPoints ?? []).map(formatDataPoint).join(' / ') || '未观察到结构化数据点'}`)
+          .join('；')
+      : '未观察到图表';
+  const formatSeriesTrendEvidence = () =>
+    charts.length
+      ? charts
+          .map(
+            (chart) =>
+              `${chartLabel(chart)}：${(chart.seriesTrends ?? [])
+                .map((seriesTrend) => `${seriesTrend.series} ${formatChartTrend(seriesTrend.trend)}`)
+                .join(' / ') || '未观察到系列趋势'}`,
+          )
+          .join('；')
+      : '未观察到图表';
+  const formatSeriesEvidence = () =>
+    charts.length
+      ? charts
+          .map((chart) => {
+            const seriesNames = Array.from(
+              new Set([
+                ...(chart.dataPoints ?? []).map((point) => point.series).filter((series): series is string => Boolean(series)),
+                ...(chart.seriesTrends ?? []).map((seriesTrend) => seriesTrend.series),
+              ]),
+            );
+            return `${chartLabel(chart)}：${seriesNames.join(' / ') || '未观察到结构化系列'}`;
+          })
+          .join('；')
+      : '未观察到图表';
+  if (assertion.kind === 'chartTooltipContains') {
+    const evidence = charts.length
+      ? charts.map((chart) => `${chartLabel(chart)}：${chart.tooltip || '未观察到可见提示'}`).join('；')
+      : '未观察到图表';
+    const passed = charts.some((chart) => chart.tooltip?.includes(assertion.expected));
+    return passed
+      ? { status: 'passed', summary: `${assertion.label}「${assertion.expected}」已通过。`, evidence }
+      : {
+          status: 'failed',
+          summary: `${assertion.label}「${assertion.expected}」未通过。`,
+          evidence,
+          failureReason: `${assertion.label}不包含「${assertion.expected}」。`,
+        };
+  }
+
+  if (assertion.kind === 'chartDataContains') {
+    const evidence = formatDataEvidence();
+    const passed = charts.some((chart) =>
+      (chart.dataPoints ?? []).some(
+        (point) => point.series === assertion.expected || point.label === assertion.expected || formatNumber(point.value) === assertion.expected,
+      ),
+    );
+    return passed
+      ? { status: 'passed', summary: `${assertion.label}「${assertion.expected}」已通过。`, evidence }
+      : {
+          status: 'failed',
+          summary: `${assertion.label}「${assertion.expected}」未通过。`,
+          evidence,
+          failureReason: `${assertion.label}不包含「${assertion.expected}」。`,
+        };
+  }
+
+  if (assertion.kind === 'chartDataPointEquals') {
+    const pointLabel = assertion.chartDataPointLabel ?? '';
+    const expectedValue = assertion.expected.replace(`${pointLabel} = `, '');
+    const evidence = formatDataEvidence();
+    const passed = charts.some((chart) =>
+      (chart.dataPoints ?? []).some((point) => point.label === pointLabel && formatNumber(point.value) === expectedValue),
+    );
+    return passed
+      ? { status: 'passed', summary: `${assertion.label}「${assertion.expected}」已通过。`, evidence }
+      : {
+          status: 'failed',
+          summary: `${assertion.label}「${assertion.expected}」未通过。`,
+          evidence,
+        failureReason: `图表数据点「${pointLabel}」不等于「${expectedValue}」。`,
+      };
+  }
+
+  if (assertion.kind === 'chartSeriesContains') {
+    const evidence = formatSeriesEvidence();
+    const passed = charts.some((chart) =>
+      (chart.dataPoints ?? []).some((point) => point.series === assertion.expected) ||
+      (chart.seriesTrends ?? []).some((seriesTrend) => seriesTrend.series === assertion.expected),
+    );
+    return passed
+      ? { status: 'passed', summary: `${assertion.label}「${assertion.expected}」已通过。`, evidence }
+      : {
+          status: 'failed',
+          summary: `${assertion.label}「${assertion.expected}」未通过。`,
+          evidence,
+          failureReason: `${assertion.label}不包含「${assertion.expected}」。`,
+        };
+  }
+
+  if (assertion.kind === 'chartSeriesDataPointEquals') {
+    const seriesName = assertion.chartSeriesName ?? '';
+    const pointLabel = assertion.chartDataPointLabel ?? '';
+    const expectedValue = assertion.expected.replace(`${seriesName} / ${pointLabel} = `, '');
+    const evidence = formatDataEvidence();
+    const passed = charts.some((chart) =>
+      (chart.dataPoints ?? []).some(
+        (point) => point.series === seriesName && point.label === pointLabel && formatNumber(point.value) === expectedValue,
+      ),
+    );
+    return passed
+      ? { status: 'passed', summary: `${assertion.label}「${assertion.expected}」已通过。`, evidence }
+      : {
+          status: 'failed',
+          summary: `${assertion.label}「${assertion.expected}」未通过。`,
+          evidence,
+          failureReason: `图表系列「${seriesName}」数据点「${pointLabel}」不等于「${expectedValue}」。`,
+      };
+  }
+
+  if (assertion.kind === 'chartSeriesTrend') {
+    const seriesName = assertion.chartSeriesName ?? '';
+    const trend = assertion.chartTrend;
+    const evidence = formatSeriesTrendEvidence();
+    const passed = trend !== undefined && charts.some((chart) =>
+      (chart.seriesTrends ?? []).some((seriesTrend) => seriesTrend.series === seriesName && seriesTrend.trend === trend),
+    );
+    return passed
+      ? { status: 'passed', summary: `${assertion.label}「${assertion.expected}」已通过。`, evidence }
+      : {
+          status: 'failed',
+          summary: `${assertion.label}「${assertion.expected}」未通过。`,
+          evidence,
+          failureReason: `图表系列「${seriesName}」趋势不匹配「${assertion.expected.replace(`${seriesName} `, '')}」。`,
+        };
+  }
+
+  const trend = assertion.chartTrend;
+  const evidence = charts.length
+    ? charts.map((chart) => `${chartLabel(chart)}：${chart.trend ? formatChartTrend(chart.trend) : '未观察到趋势'}`).join('；')
+    : '未观察到图表';
+  const passed = trend !== undefined && charts.some((chart) => chart.trend === trend);
+  return passed
+    ? { status: 'passed', summary: `${assertion.label}「${assertion.expected}」已通过。`, evidence }
+    : {
+        status: 'failed',
+        summary: `${assertion.label}「${assertion.expected}」未通过。`,
+        evidence,
+        failureReason: `${assertion.label}不匹配「${assertion.expected}」。`,
+      };
 }
 
 function evaluateTableCellAssertion(
@@ -934,6 +1443,86 @@ function evaluateTableCountAssertion(
   };
 }
 
+function evaluateTableStateAssertion(
+  assertion: ExplicitAssertionIntent,
+  tables: NonNullable<AgentObservation['tables']>,
+): AssertionEvaluation {
+  const tableLabel = (table: NonNullable<AgentObservation['tables']>[number]) => table.caption || `表格 #${table.index}`;
+  const paginationKey =
+    assertion.kind === 'tableCurrentPage'
+      ? 'currentPage'
+      : assertion.kind === 'tableTotalPages'
+        ? 'totalPages'
+        : assertion.kind === 'tableTotalItems'
+          ? 'totalItems'
+          : assertion.kind === 'tablePageSize'
+            ? 'pageSize'
+            : undefined;
+
+  if (paginationKey) {
+    const expected = Number.parseInt(assertion.expected, 10);
+    const evidence = tables.length
+      ? tables
+          .map((table) => {
+            const actual = table.pagination?.[paginationKey];
+            return `${tableLabel(table)}：${actual === undefined ? '未观察到' : actual}`;
+          })
+          .join('；')
+      : '未观察到表格';
+    const passed = Number.isFinite(expected) && tables.some((table) => table.pagination?.[paginationKey] === expected);
+    return passed
+      ? { status: 'passed', summary: `${assertion.label}「${assertion.expected}」已通过。`, evidence }
+      : {
+          status: 'failed',
+          summary: `${assertion.label}「${assertion.expected}」未通过。`,
+          evidence,
+          failureReason: `${assertion.label}不等于「${assertion.expected}」。`,
+        };
+  }
+
+  if (assertion.kind === 'tableFilter') {
+    const filterName = assertion.filterName ?? '';
+    const expectedValue = assertion.expected.replace(`${filterName} = `, '');
+    const evidence = tables.length
+      ? tables
+          .map((table) =>
+            `${tableLabel(table)}：${(table.filters ?? []).map((filter) => `${filter.label} = ${filter.value}`).join(' / ') || '未观察到筛选状态'}`,
+          )
+          .join('；')
+      : '未观察到表格';
+    const passed = tables.some((table) => (table.filters ?? []).some((filter) => filter.label === filterName && filter.value === expectedValue));
+    return passed
+      ? { status: 'passed', summary: `${assertion.label}「${assertion.expected}」已通过。`, evidence }
+      : {
+          status: 'failed',
+          summary: `${assertion.label}「${assertion.expected}」未通过。`,
+          evidence,
+          failureReason: `${assertion.label}不匹配「${assertion.expected}」。`,
+        };
+  }
+
+  const aggregateName = assertion.aggregateName ?? '';
+  const expectedValue = assertion.expected.replace(`${aggregateName} = `, '');
+  const evidence = tables.length
+    ? tables
+        .map((table) =>
+          `${tableLabel(table)}：${(table.aggregates ?? []).map((aggregate) => `${aggregate.label} = ${aggregate.value}`).join(' / ') || '未观察到聚合值'}`,
+        )
+        .join('；')
+    : '未观察到表格';
+  const passed = tables.some((table) =>
+    (table.aggregates ?? []).some((aggregate) => aggregate.label === aggregateName && aggregate.value === expectedValue),
+  );
+  return passed
+    ? { status: 'passed', summary: `${assertion.label}「${assertion.expected}」已通过。`, evidence }
+    : {
+        status: 'failed',
+        summary: `${assertion.label}「${assertion.expected}」未通过。`,
+        evidence,
+        failureReason: `${assertion.label}不等于「${assertion.expected}」。`,
+      };
+}
+
 function summarizeTables(tables: NonNullable<AgentObservation['tables']>): string {
   return tables
     .map((table) =>
@@ -941,6 +1530,9 @@ function summarizeTables(tables: NonNullable<AgentObservation['tables']>): strin
         table.caption,
         `${table.rowCount} 行`,
         `${table.columnCount} 列`,
+        ...(table.filters ?? []).flatMap((filter) => [filter.label, filter.value]),
+        ...(table.pagination ? Object.values(table.pagination).map(String) : []),
+        ...(table.aggregates ?? []).flatMap((aggregate) => [aggregate.label, aggregate.value]),
         ...table.headers,
         ...table.sampleRows.flat(),
       ]
@@ -948,6 +1540,26 @@ function summarizeTables(tables: NonNullable<AgentObservation['tables']>): strin
         .join(' / '),
     )
     .join(' | ');
+}
+
+function selectAssertionTables(
+  tables: NonNullable<AgentObservation['tables']>,
+  tableName: string | undefined,
+): NonNullable<AgentObservation['tables']> {
+  if (!tableName) {
+    return tables;
+  }
+  return tables.filter((table) => table.caption === tableName);
+}
+
+function selectAssertionCharts(
+  charts: NonNullable<AgentObservation['charts']>,
+  chartName: string | undefined,
+): NonNullable<AgentObservation['charts']> {
+  if (!chartName) {
+    return charts;
+  }
+  return charts.filter((chart) => chart.title === chartName);
 }
 
 function summarizeCharts(charts: NonNullable<AgentObservation['charts']>): string {
@@ -958,6 +1570,10 @@ function summarizeCharts(charts: NonNullable<AgentObservation['charts']>): strin
         chart.kind,
         chart.width && chart.height ? `${chart.width}x${chart.height}` : undefined,
         ...(chart.legends ?? []),
+        chart.tooltip,
+        ...(chart.dataPoints ?? []).flatMap((point) => [point.series, point.label, formatNumber(point.value)]),
+        ...(chart.seriesTrends ?? []).flatMap((seriesTrend) => [seriesTrend.series, formatChartTrend(seriesTrend.trend)]),
+        chart.trend ? formatChartTrend(chart.trend) : undefined,
       ]
         .filter(Boolean)
         .join(' / '),
@@ -1378,10 +1994,18 @@ function resolveExecutionIntent(request: ChatCommandRequest, plannedStep?: Agent
     const explicitUrl = extractExplicitUrl(request.prompt);
     const clickIntent = extractClickIntent(request.prompt);
     const inputIntent = extractInputIntent(request.prompt);
+    const selectIntent = extractSelectIntent(request.prompt);
+    const extractIntent = request.mode === 'aiQuery' ? extractQueryIntent(request.prompt) : undefined;
+    const waitIntent = extractDirectWaitIntent(request.prompt);
+    const scrollIntent = extractScrollIntent(request.prompt);
     return {
       ...(explicitUrl ? { explicitUrl } : {}),
       ...(clickIntent ? { clickIntent } : {}),
       ...(inputIntent ? { inputIntent } : {}),
+      ...(selectIntent ? { selectIntent } : {}),
+      ...(extractIntent ? { extractIntent } : {}),
+      ...(waitIntent ? { waitIntent } : {}),
+      ...(scrollIntent ? { scrollIntent } : {}),
       ...(assertionIntent ? { assertionIntent } : {}),
       ...(request.mode === 'aiAssert' && !assertionIntent ? { semanticAssertion: request.prompt.trim() } : {}),
     };
@@ -1505,6 +2129,33 @@ function createPrimaryExecution(browserPreparation: BrowserPreparationResult) {
       primaryInstruction: `在「${browserPreparation.inputTarget}」输入 ${browserPreparation.inputValue}`,
       primaryExpected: '等待 Midscene 语义定位输入控件后填写内容。',
       primaryValue: browserPreparation.inputValue,
+    };
+  }
+
+  if (browserPreparation.selectedSelector && browserPreparation.selectedValue !== undefined) {
+    return {
+      primaryAction: 'select' as const,
+      primaryInstruction: `在 ${browserPreparation.selectedSelector} 选择 ${browserPreparation.selectedValue}`,
+      primaryExpected: '目标下拉控件可选择，并成功捕获选择后的页面状态。',
+      primarySelector: browserPreparation.selectedSelector,
+      primaryValue: browserPreparation.selectedValue,
+    };
+  }
+
+  if (browserPreparation.waitedMs !== undefined) {
+    return {
+      primaryAction: 'wait' as const,
+      primaryInstruction: `等待页面稳定 ${browserPreparation.waitedMs}ms`,
+      primaryExpected: '等待策略完成，并成功捕获等待后的页面状态。',
+    };
+  }
+
+  if (browserPreparation.scrolledSelector || browserPreparation.scrolledPage) {
+    return {
+      primaryAction: 'scroll' as const,
+      primaryInstruction: browserPreparation.scrolledSelector ? `滚动到 ${browserPreparation.scrolledSelector}` : '滚动当前页面',
+      primaryExpected: '页面或目标区域已完成滚动，并成功捕获当前页面状态。',
+      ...(browserPreparation.scrolledSelector ? { primarySelector: browserPreparation.scrolledSelector } : {}),
     };
   }
 
@@ -1866,6 +2517,7 @@ export class StudioRuntime {
 
     if (planningAttempt.result) {
       const executions: PlannedAgentStepExecution[] = [];
+      const replanningHistory: PlannedAgentReplanningRecord[] = [];
       const replanningCycleLimit = resolvePlannerReplanningCycleLimit(request);
       let executionMetrics = withReplanningCycleLimit(planningAttempt.result.metrics, replanningCycleLimit);
       let plannedPlan = planningAttempt.result.plan;
@@ -1916,14 +2568,24 @@ export class StudioRuntime {
             ? undefined
             : await this.createReplannedAgentPlan(request, plannedPlan, step, execution);
           if (revisedPlan) {
+            const previousPlan = plannedPlan;
+            executions.push(execution);
             replanningCycles += 1;
-            plannedPlan = {
+            const nextPlan = {
               ...revisedPlan.plan,
               risks: [
                 ...revisedPlan.plan.risks,
                 `已在步骤「${step.title}」${execution.status === 'failed' ? '失败' : '未完成'}后触发第 ${replanningCycles} 次重规划。`,
               ],
             };
+            replanningHistory.push({
+              cycle: replanningCycles,
+              previousPlan,
+              revisedPlan: nextPlan,
+              executions: [...executions],
+              failedStepIndex: stepIndex,
+            });
+            plannedPlan = nextPlan;
             executionMetrics = mergeExecutionMetrics(executionMetrics, withReplanningCycle(revisedPlan.metrics)) ?? executionMetrics;
             executions.length = 0;
             stepIndex = -1;
@@ -1943,6 +2605,7 @@ export class StudioRuntime {
         plannedPlan,
         planner: planningAttempt.provenance,
         executions,
+        ...(replanningHistory.length ? { replanningHistory } : {}),
         executionMetrics,
         modelAssignments,
         ...(request.projectId ? { projectId: request.projectId } : {}),
@@ -2093,16 +2756,20 @@ export class StudioRuntime {
       text: request.prompt,
     };
 
+    const extractionEvidence =
+      request.mode === 'aiQuery'
+        ? agentRun.events.find((event) => event.type === 'agent:assertion-result')?.verification?.evidence
+        : undefined;
     const assistantEntry: ChatEntry = {
       id: `chat-${Date.now()}-assistant`,
       role: 'assistant',
-      text: `${makeAssistantReply(request.mode, request.prompt, request.runtimeProfile)}\n\nAgent 计划已生成：${agentRun.plan.steps
+      text: `${makeAssistantReply(request.mode, request.prompt, request.runtimeProfile)}${extractionEvidence ? `\n\n提取结果：${extractionEvidence}` : ''}\n\nAgent 计划已生成：${agentRun.plan.steps
         .map((step, index) => `${index + 1}. ${step.title}`)
         .join(' / ')}`,
     };
 
     if (!this.sessionActive) {
-      assistantEntry.text = `当前还没有活动会话，已先记录这条 ${request.mode} 指令草稿。\n\nAgent 计划已生成，但真实执行需要先启动浏览器会话。`;
+      assistantEntry.text = `当前还没有活动会话，已先记录这条 ${request.mode} 指令草稿。${extractionEvidence ? `\n\n提取结果：${extractionEvidence}` : ''}\n\nAgent 计划已生成，但后续真实执行需要先启动浏览器会话。`;
     }
 
     return {
@@ -2416,17 +3083,34 @@ export class StudioRuntime {
         reportArtifactPath = result.reportPath;
         executionMetrics = result.metrics;
         message = `${message}；${result.message}`;
+      } else if (extractIntent?.target) {
+        const pendingMessage = `已识别提取目标「${extractIntent.target}」，等待 Midscene 语义提取执行。`;
+        semanticEvaluation = createPendingSemanticEvaluation(pendingMessage);
+        message = `${message}；${pendingMessage}`;
       }
 
       const observation = await this.captureBrowserObservation();
-      const extracted = Boolean(extractIntent && (observation || semanticEvaluation));
+      const extracted = Boolean(
+        extractIntent && (extractIntent.target ? semanticEvaluation?.status === 'passed' : observation),
+      );
       let assertionEvaluation: AssertionEvaluation | undefined;
       if (assertionIntent) {
         const pageText =
           assertionIntent.kind === 'pageContains' && this.browserObserver.getPageText
             ? await this.browserObserver.getPageText()
             : undefined;
-        assertionEvaluation = evaluateExplicitAssertion(assertionIntent, session, pageText, observation);
+        const domInspection =
+          (assertionIntent.kind === 'domSelectorExists' ||
+            assertionIntent.kind === 'domSelectorVisible' ||
+            assertionIntent.kind === 'domSelectorTextContains' ||
+            assertionIntent.kind === 'domSelectorAttributeEquals') &&
+          assertionIntent.domSelector &&
+          this.browserObserver.inspectDom
+            ? assertionIntent.domAttributeName
+              ? await this.browserObserver.inspectDom(assertionIntent.domSelector, assertionIntent.domAttributeName)
+              : await this.browserObserver.inspectDom(assertionIntent.domSelector)
+            : undefined;
+        assertionEvaluation = evaluateExplicitAssertion(assertionIntent, session, pageText, observation, domInspection);
         message = `${message}；${assertionEvaluation.summary}`;
       } else if (semanticAssertion) {
         const verifierConfig = verifierConfigForRequest(request);

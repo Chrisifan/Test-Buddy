@@ -40,6 +40,25 @@ describe('OpenAICompatibleAgentReporter', () => {
       verificationEvidence: '页面仍显示加载中。',
       verificationFailureReason: '图表未刷新完成。',
     });
+    run.events.splice(1, 0, {
+      id: `${run.runId}-event-plan-revised-1`,
+      runId: run.runId,
+      type: 'agent:plan-revised',
+      message: '第 1 次重规划：旧计划 -> 新计划',
+      status: 'neutral',
+      stepId: 'historical-step',
+      planRevision: {
+        cycle: 1,
+        previousPlanTitle: '旧计划',
+        revisedPlanTitle: '新计划',
+        triggerStepId: 'historical-step',
+        triggerStepTitle: '进入工作台',
+        triggerStatus: 'failed',
+        failureCategory: 'navigation',
+        recoveryStrategy: 'replanNavigation',
+      },
+      createdAt: '2026-07-28T00:00:00.000Z',
+    });
 
     const result = await reporter.report({
       config: {
@@ -69,11 +88,20 @@ describe('OpenAICompatibleAgentReporter', () => {
         temperature: 0.1,
       }),
     );
-    expect(JSON.parse(requestBody.messages[1].content)).toEqual(
+    const reporterInput = JSON.parse(requestBody.messages[1].content);
+    expect(reporterInput).toEqual(
       expect.objectContaining({
         status: 'failed',
         failureReason: '图表未刷新完成。',
       }),
+    );
+    expect(reporterInput.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'agent:plan-revised',
+          planRevision: expect.objectContaining({ cycle: 1, recoveryStrategy: 'replanNavigation' }),
+        }),
+      ]),
     );
     expect(result).toEqual(
       expect.objectContaining({

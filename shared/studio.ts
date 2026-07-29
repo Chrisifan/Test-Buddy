@@ -81,6 +81,15 @@ export interface RecordingStepDraft {
   value?: string;
 }
 
+export interface VisualDiffMask {
+  id: string;
+  label: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
 export interface RecordingCapturedEvent {
   id: string;
   kind: RecordingStepKind;
@@ -102,6 +111,7 @@ export interface RecordingAsset {
   startUrl: string;
   comparisonGoal: string;
   visualDiffThreshold?: number;
+  visualDiffMasks?: VisualDiffMask[];
   tags: string[];
   steps: RecordingStepDraft[];
   createdAt: string;
@@ -1035,6 +1045,7 @@ function normalizeProjectDraft(rawProject: ProjectDraft): ProjectDraft {
           typeof recording.visualDiffThreshold === 'number' && Number.isFinite(recording.visualDiffThreshold)
             ? Math.min(1, Math.max(0, recording.visualDiffThreshold))
             : 0,
+        visualDiffMasks: normalizeVisualDiffMasks(recording.visualDiffMasks),
         tags: Array.isArray(recording.tags) ? recording.tags : [],
         steps: Array.isArray(recording.steps)
           ? recording.steps.map((step) => ({
@@ -1070,6 +1081,41 @@ function normalizeProjectDraft(rawProject: ProjectDraft): ProjectDraft {
         }))
       : fallback.testCases,
   };
+}
+
+function normalizeVisualDiffMasks(rawMasks: unknown): VisualDiffMask[] {
+  if (!Array.isArray(rawMasks)) {
+    return [];
+  }
+
+  return rawMasks.flatMap((rawMask, index) => {
+    if (!rawMask || typeof rawMask !== 'object') {
+      return [];
+    }
+
+    const mask = rawMask as Partial<VisualDiffMask>;
+    const values = [mask.x, mask.y, mask.width, mask.height];
+    if (!values.every((value) => typeof value === 'number' && Number.isFinite(value))) {
+      return [];
+    }
+
+    const x = Math.min(100, Math.max(0, mask.x!));
+    const y = Math.min(100, Math.max(0, mask.y!));
+    const width = Math.min(100 - x, Math.max(0, mask.width!));
+    const height = Math.min(100 - y, Math.max(0, mask.height!));
+    if (!width || !height) {
+      return [];
+    }
+
+    return [{
+      id: typeof mask.id === 'string' && mask.id ? mask.id : `visual-mask-${index + 1}`,
+      label: typeof mask.label === 'string' && mask.label.trim() ? mask.label.trim() : `动态区域 ${index + 1}`,
+      x,
+      y,
+      width,
+      height,
+    }];
+  });
 }
 
 export function createEmptyWorkflow(

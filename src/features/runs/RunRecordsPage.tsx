@@ -1,5 +1,6 @@
 import { useMemo, useState, type ReactNode } from 'react';
 import type { ProjectDraft, RunDetail, RunSummary, RunTone } from '../../../shared/studio.js';
+import type { AgentArtifact, AgentRunEvent, AgentRunResult } from '../../../shared/agent.js';
 
 import {
   AlertTriangle,
@@ -13,12 +14,16 @@ import {
   ExternalLink,
   FileSearch,
   Gauge,
+  Image,
   Layers3,
+  LocateFixed,
   MonitorDot,
   PackageOpen,
   RefreshCcw,
   Table2,
   TerminalSquare,
+  TrendingDown,
+  TrendingUp,
 } from 'lucide-react';
 
 import { StatusPill } from '../../components/StatusPill.js';
@@ -38,6 +43,16 @@ type Bucket = {
   label: string;
   total: number;
   failed: number;
+};
+
+type FailureCluster = {
+  reason: string;
+  count: number;
+};
+
+type FailureTrend = {
+  direction: 'rising' | 'falling' | 'steady';
+  delta: number;
 };
 
 type Translator = (key: string, replacements?: Record<string, string | number>) => string;
@@ -82,6 +97,38 @@ function getWorstBucket(buckets: Bucket[]): Bucket | null {
     .sort((left, right) => right.failed - left.failed || right.total - left.total)[0] ?? null;
 }
 
+function getFailureReason(detail: RunDetail): string {
+  return (
+    detail.failureReason ??
+    detail.agentRun?.failureReason ??
+    detail.agentRun?.events.find((event) => event.verification?.failureReason)?.verification?.failureReason ??
+    detail.summary
+  ).trim();
+}
+
+function normalizeFailureReason(reason: string): string {
+  return reason.trim().toLocaleLowerCase().replace(/\s+/g, ' ').replace(/[。.!！]+$/g, '');
+}
+
+function getFailureTrend(runs: RunSummary[]): FailureTrend | undefined {
+  const chronologicalRuns = runs
+    .map((run) => ({ run, timestamp: run.startedAt ? Date.parse(run.startedAt) : Number.NaN }))
+    .filter((entry) => Number.isFinite(entry.timestamp))
+    .sort((left, right) => left.timestamp - right.timestamp);
+  if (chronologicalRuns.length < 4) {
+    return undefined;
+  }
+  const midpoint = Math.floor(chronologicalRuns.length / 2);
+  const earlierRuns = chronologicalRuns.slice(0, midpoint);
+  const recentRuns = chronologicalRuns.slice(midpoint);
+  const failureRate = (entries: typeof chronologicalRuns) => entries.filter((entry) => entry.run.status === 'failed').length / entries.length;
+  const delta = Math.round((failureRate(recentRuns) - failureRate(earlierRuns)) * 100);
+  if (Math.abs(delta) < 15) {
+    return { direction: 'steady', delta: 0 };
+  }
+  return { direction: delta > 0 ? 'rising' : 'falling', delta: Math.abs(delta) };
+}
+
 function formatTableTitle(caption: string | undefined, index: number, t: Translator): string {
   return t('runs.agent.tableTitle', { title: caption || `#${index}` });
 }
@@ -107,8 +154,75 @@ function formatChartMeta(chart: {
   return `${chart.kind} · ${size} · ${rendered} · ${legends}`;
 }
 
+function formatChartEvidence(chart: {
+  tooltip?: string;
+  dataPoints?: Array<{ series?: string; label?: string; value: number }>;
+  seriesTrends?: Array<{ series: string; trend: 'rising' | 'falling' | 'flat' | 'mixed' }>;
+  trend?: 'rising' | 'falling' | 'flat' | 'mixed';
+}, t: Translator): string | undefined {
+  const signals = [
+    chart.tooltip ? t('runs.agent.chartTooltip', { tooltip: chart.tooltip }) : undefined,
+    chart.dataPoints?.length
+      ? t('runs.agent.chartData', {
+          points: chart.dataPoints
+            .map((point) => `${point.series ? `${point.series} / ` : ''}${point.label ? `${point.label} = ` : ''}${point.value}`)
+            .join(' / '),
+        })
+      : undefined,
+    chart.seriesTrends?.length
+      ? t('runs.agent.chartSeriesTrends', {
+          trends: chart.seriesTrends
+            .map((seriesTrend) => `${seriesTrend.series} ${t(`runs.agent.chartTrend.${seriesTrend.trend}`)}`)
+            .join(' / '),
+        })
+      : undefined,
+    chart.trend ? t('runs.agent.chartTrend', { trend: t(`runs.agent.chartTrend.${chart.trend}`) }) : undefined,
+  ].filter(Boolean);
+  return signals.length ? signals.join(' · ') : undefined;
+}
+
 function formatAgentRole(role: string): string {
   return role.charAt(0).toUpperCase() + role.slice(1);
+}
+
+function getLinkedArtifacts(event: AgentRunEvent, agentRun: AgentRunResult): AgentArtifact[] {
+  const seen = new Set<string>();
+  const relatedEvents = agentRun.events.filter((candidate) =>
+    candidate.artifact && (candidate.id === event.id || (event.stepId && candidate.stepId === event.stepId)),
+  );
+
+  return relatedEvents.flatMap((candidate) => (candidate.artifact ? [candidate.artifact] : [])).filter((artifact) => {
+    if (seen.has(artifact.id)) {
+      return false;
+    }
+
+    seen.add(artifact.id);
+    return true;
+  });
+}
+
+function getLinkedEvidence(events: AgentRunEvent[], selected: AgentRunEvent): {
+  observation?: AgentRunEvent['observation'];
+  verification?: AgentRunEvent['verification'];
+  browserSession?: AgentRunEvent['browserSession'];
+} {
+  const relatedEvents = selected.stepId
+    ? events.filter((event) => event.stepId === selected.stepId)
+    : [selected];
+
+  return {
+    observation: selected.observation ?? relatedEvents.find((event) => event.observation)?.observation,
+    verification: selected.verification ?? relatedEvents.find((event) => event.verification)?.verification,
+    browserSession: selected.browserSession ?? relatedEvents.find((event) => event.browserSession)?.browserSession,
+  };
+}
+
+function getEvidencePreviewPath(event: AgentRunEvent, artifacts: AgentArtifact[]): string | undefined {
+  if (event.browserSession?.screenshotPath) {
+    return event.browserSession.screenshotPath;
+  }
+
+  return artifacts.find((artifact) => artifact.type === 'screenshot' || artifact.type === 'snapshot')?.path;
 }
 
 export function RunRecordsPage({
@@ -128,6 +242,7 @@ export function RunRecordsPage({
   const [statusFilter, setStatusFilter] = useState<'all' | 'running' | 'passed' | 'failed' | 'neutral'>('all');
   const [environmentFilter, setEnvironmentFilter] = useState<string>('all');
   const [groupFilter, setGroupFilter] = useState<string>('all');
+  const [selectedEvidenceEventId, setSelectedEvidenceEventId] = useState<string>('');
   const projectRuns = project
     ? recentRuns.filter((run) => !run.projectId || run.projectId === project.id)
     : recentRuns;
@@ -153,6 +268,16 @@ export function RunRecordsPage({
     runDetails.find((run) => run.id === selectedRunId) ??
     runDetails.find((run) => run.id === visibleRuns[0]?.id);
   const selectedAgentRun = selectedRun?.agentRun;
+  const selectedEvidenceEvent = selectedAgentRun?.events.find((event) => event.id === selectedEvidenceEventId)
+    ?? selectedAgentRun?.events.find((event) => event.observation || event.verification || event.artifact || event.browserSession);
+  const linkedEvidenceArtifacts = selectedAgentRun && selectedEvidenceEvent
+    ? getLinkedArtifacts(selectedEvidenceEvent, selectedAgentRun)
+    : [];
+  const linkedEvidence = selectedAgentRun && selectedEvidenceEvent
+    ? getLinkedEvidence(selectedAgentRun.events, selectedEvidenceEvent)
+    : {};
+  const evidencePreviewPath = linkedEvidence.browserSession?.screenshotPath
+    ?? (selectedEvidenceEvent ? getEvidencePreviewPath(selectedEvidenceEvent, linkedEvidenceArtifacts) : undefined);
   const selectedObservation = selectedAgentRun?.events.find((event) => event.type === 'agent:observation-created')?.observation;
   const selectedVerification = selectedAgentRun?.events.find((event) => event.type === 'agent:assertion-result')?.verification;
   const selectedEvidenceArtifacts = selectedRun?.artifacts.filter((artifact) =>
@@ -196,6 +321,19 @@ export function RunRecordsPage({
     const passRate = runStats.total ? Math.round((runStats.passed / runStats.total) * 100) : 0;
     const failedRunIds = new Set(visibleRuns.filter((run) => run.status === 'failed').map((run) => run.id));
     const latestFailure = runDetails.find((detail) => failedRunIds.has(detail.id) && detail.failureReason);
+    const clusters = new Map<string, FailureCluster>();
+    runDetails
+      .filter((detail) => failedRunIds.has(detail.id))
+      .forEach((detail) => {
+        const reason = getFailureReason(detail);
+        if (!reason) {
+          return;
+        }
+        const key = normalizeFailureReason(reason);
+        const cluster = clusters.get(key) ?? { reason, count: 0 };
+        cluster.count += 1;
+        clusters.set(key, cluster);
+      });
 
     return {
       passRate,
@@ -203,6 +341,8 @@ export function RunRecordsPage({
       latestFailureReason: latestFailure?.failureReason ?? '',
       worstGroup: getWorstBucket([...groupBuckets.values()]),
       worstEnvironment: getWorstBucket([...environmentBuckets.values()]),
+      failureClusters: [...clusters.values()].sort((left, right) => right.count - left.count || left.reason.localeCompare(right.reason)).slice(0, 3),
+      failureTrend: getFailureTrend(visibleRuns),
     };
   }, [project, runDetails, runStats.failed, runStats.passed, runStats.running, runStats.total, t, visibleRuns]);
 
@@ -308,7 +448,7 @@ export function RunRecordsPage({
           </div>
           {selectedRun ? (
             <div className="mt-5 grid gap-5">
-              <div className="grid gap-3 md:grid-cols-3">
+              <div className="grid gap-3 md:grid-cols-4">
                   <InsightCard
                     icon={<Gauge className="h-4 w-4" />}
                     label={t('runs.metric.health')}
@@ -343,12 +483,58 @@ export function RunRecordsPage({
                         : t('runs.insight.noSamples')
                     }
                   />
+                  <InsightCard
+                    icon={
+                      runAnalytics.failureTrend?.direction === 'falling'
+                        ? <TrendingDown className="h-4 w-4" />
+                        : runAnalytics.failureTrend?.direction === 'rising'
+                          ? <TrendingUp className="h-4 w-4" />
+                          : <Gauge className="h-4 w-4" />
+                    }
+                    label={t('runs.insight.failureTrend')}
+                    tone={
+                      runAnalytics.failureTrend?.direction === 'rising'
+                        ? 'failed'
+                        : runAnalytics.failureTrend?.direction === 'falling'
+                          ? 'passed'
+                          : 'neutral'
+                    }
+                    value={
+                      runAnalytics.failureTrend
+                        ? t(`runs.trend.${runAnalytics.failureTrend.direction}`, { delta: runAnalytics.failureTrend.delta })
+                        : t('runs.trend.insufficient')
+                    }
+                  />
               </div>
 
               {runAnalytics.latestFailureReason ? (
                 <div className="rounded-[6px] bg-destructive/10 p-4 text-sm leading-7 text-foreground">
                   {t('runs.failure.latest', { reason: runAnalytics.latestFailureReason })}
                 </div>
+              ) : null}
+
+              {runAnalytics.failureClusters.length ? (
+                <section aria-label={t('runs.failure.clusters')} className="border-y border-border/70 py-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="inline-flex items-center gap-2 text-xs font-medium text-muted-foreground">
+                      <AlertTriangle className="h-3.5 w-3.5 text-destructive" />
+                      {t('runs.failure.clusters')}
+                    </p>
+                    <span className="font-mono text-[11px] text-muted-foreground">
+                      {t('runs.failure.clusterCount', { count: runAnalytics.failureClusters.length })}
+                    </span>
+                  </div>
+                  <div className="mt-2 grid gap-2">
+                    {runAnalytics.failureClusters.map((cluster) => (
+                      <div className="flex min-w-0 items-start justify-between gap-4" key={normalizeFailureReason(cluster.reason)}>
+                        <p className="min-w-0 truncate text-sm text-foreground" title={cluster.reason}>{cluster.reason}</p>
+                        <span className="shrink-0 rounded-[4px] bg-destructive/10 px-2 py-0.5 font-mono text-[11px] text-destructive">
+                          {t('runs.failure.clusterOccurrences', { count: cluster.count })}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </section>
               ) : null}
 
               <div className="grid gap-3 md:grid-cols-4">
@@ -494,6 +680,28 @@ export function RunRecordsPage({
                                   {t('runs.agent.sort', { states: table.sortStates.map((state) => `${state.column} ${state.direction}`).join(' / ') })}
                                 </p>
                               ) : null}
+                              {table.filters?.length ? (
+                                <p className="truncate text-[11px] text-muted-foreground">
+                                  {t('runs.agent.filters', { states: table.filters.map((filter) => `${filter.label} = ${filter.value}`).join(' / ') })}
+                                </p>
+                              ) : null}
+                              {table.pagination ? (
+                                <p className="truncate font-mono text-[11px] text-muted-foreground">
+                                  {t('runs.agent.pagination', {
+                                    currentPage: table.pagination.currentPage ?? '-',
+                                    totalPages: table.pagination.totalPages ?? '-',
+                                    totalItems: table.pagination.totalItems ?? '-',
+                                    pageSize: table.pagination.pageSize ?? '-',
+                                  })}
+                                </p>
+                              ) : null}
+                              {table.aggregates?.length ? (
+                                <p className="truncate text-[11px] text-muted-foreground">
+                                  {t('runs.agent.aggregates', {
+                                    states: table.aggregates.map((aggregate) => `${aggregate.label} = ${aggregate.value}`).join(' / '),
+                                  })}
+                                </p>
+                              ) : null}
                               {table.sampleRows[0]?.length ? (
                                 <p className="truncate text-[11px] text-muted-foreground">
                                   {table.sampleRows[0].join(' · ')}
@@ -508,6 +716,9 @@ export function RunRecordsPage({
                                 <span className="truncate">{formatChartTitle(chart.title, chart.index, t)}</span>
                               </p>
                               <p className="truncate text-[11px] text-muted-foreground">{formatChartMeta(chart, t)}</p>
+                              {formatChartEvidence(chart, t) ? (
+                                <p className="truncate font-mono text-[11px] text-muted-foreground">{formatChartEvidence(chart, t)}</p>
+                              ) : null}
                             </div>
                           ))}
                         </div>
@@ -588,6 +799,62 @@ export function RunRecordsPage({
                       <SignalList emptyLabel={t('runs.agent.noSignals')} title={t('runs.agent.networkSignals')} items={selectedObservation.networkHints ?? []} />
                     </div>
                   ) : null}
+                  {selectedEvidenceEvent ? (
+                    <Surface className="p-4" variant="evidence">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="font-mono text-[11px] font-semibold uppercase tracking-[0.08em] text-primary">{t('runs.agent.trailEyebrow')}</p>
+                          <h4 className="mt-1 text-sm font-semibold">{t('runs.agent.trailTitle')}</h4>
+                          <p className="mt-2 text-sm leading-6 text-muted-foreground">{selectedEvidenceEvent.message}</p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Badge className="rounded-[4px]" variant="outline">{selectedEvidenceEvent.type}</Badge>
+                          <StatusPill tone={selectedEvidenceEvent.status} />
+                        </div>
+                      </div>
+                      <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(208px,0.62fr)]">
+                        <div className="grid content-start gap-3">
+                          {linkedEvidence.observation ? (
+                            <EvidenceTrailBlock label={t('runs.agent.trailObservation')} value={linkedEvidence.observation.textSummary || linkedEvidence.observation.domSummary} />
+                          ) : null}
+                          {linkedEvidence.verification ? (
+                            <EvidenceTrailBlock
+                              label={t('runs.agent.trailVerification')}
+                              value={linkedEvidence.verification.evidence || linkedEvidence.verification.summary}
+                            />
+                          ) : null}
+                          {linkedEvidence.browserSession?.currentUrl ? (
+                            <EvidenceTrailBlock label={t('runs.agent.trailBrowser')} value={linkedEvidence.browserSession.currentUrl} />
+                          ) : null}
+                          {linkedEvidenceArtifacts.length ? (
+                            <div className="grid gap-2">
+                              <p className="text-xs font-medium text-muted-foreground">{t('runs.agent.trailFiles')}</p>
+                              <div className="flex flex-wrap gap-2">
+                                {linkedEvidenceArtifacts.map((artifact) => (
+                                  <ArtifactActions artifact={artifact} key={artifact.id} t={t} />
+                                ))}
+                              </div>
+                            </div>
+                          ) : null}
+                          {!linkedEvidence.observation && !linkedEvidence.verification && !linkedEvidence.browserSession && !linkedEvidenceArtifacts.length ? (
+                            <p className="text-sm text-muted-foreground">{t('runs.agent.trailNoDetail')}</p>
+                          ) : null}
+                        </div>
+                        {evidencePreviewPath ? (
+                          <img
+                            alt={t('runs.agent.trailPreview')}
+                            className="aspect-video w-full rounded-[6px] border border-border bg-background object-cover"
+                            src={`file://${evidencePreviewPath}`}
+                          />
+                        ) : (
+                          <div className="flex aspect-video items-center justify-center rounded-[6px] border border-dashed border-border bg-background/60 text-muted-foreground">
+                            <Image className="h-5 w-5" aria-hidden="true" />
+                            <span className="sr-only">{t('runs.agent.trailNoPreview')}</span>
+                          </div>
+                        )}
+                      </div>
+                    </Surface>
+                  ) : null}
                   <Surface className="p-4" variant="subtle">
                     <div className="flex items-center gap-2">
                       <TerminalSquare className="h-4 w-4 text-primary" />
@@ -595,13 +862,20 @@ export function RunRecordsPage({
                     </div>
                     <div className="mt-3 grid gap-2">
                       {selectedAgentRun.events.map((event) => (
-                        <div className="grid gap-1 rounded-[6px] bg-background/70 p-3" key={event.id}>
+                        <button
+                          aria-label={t('runs.agent.inspectEvent', { type: event.type })}
+                          className={`grid gap-1 rounded-[6px] bg-background/70 p-3 text-left transition-colors hover:bg-accent/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/35 ${selectedEvidenceEvent?.id === event.id ? 'ring-1 ring-primary/45' : ''}`}
+                          key={event.id}
+                          onClick={() => setSelectedEvidenceEventId(event.id)}
+                          type="button"
+                        >
                           <div className="flex flex-wrap items-center gap-2">
                             <Badge className="rounded-[4px]" variant="outline">{event.type}</Badge>
                             <StatusPill tone={event.status} />
+                            <LocateFixed className="ml-auto h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
                           </div>
                           <p className="text-xs leading-5 text-muted-foreground">{event.message}</p>
-                        </div>
+                        </button>
                       ))}
                     </div>
                   </Surface>
@@ -650,6 +924,51 @@ export function RunRecordsPage({
       </section>
       </PageBody>
     </PageShell>
+  );
+}
+
+function EvidenceTrailBlock({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="grid gap-1 rounded-[4px] bg-background/65 p-3">
+      <p className="text-[11px] font-medium text-muted-foreground">{label}</p>
+      <p className="break-words text-xs leading-5 text-foreground">{value}</p>
+    </div>
+  );
+}
+
+function ArtifactActions({ artifact, t }: { artifact: AgentArtifact; t: Translator }) {
+  const isManagedArtifact = !artifact.path.startsWith('memory://');
+
+  return (
+    <div className="inline-flex max-w-full items-center gap-1 rounded-[4px] border border-border bg-background/70 py-1 pl-2 pr-1">
+      <span className="max-w-44 truncate text-xs text-foreground" title={artifact.path}>{artifact.label}</span>
+      {isManagedArtifact ? (
+        <>
+          <button
+            aria-label={t('runs.agent.openArtifact', { name: artifact.label })}
+            className="inline-flex size-6 items-center justify-center rounded-[3px] text-primary transition-colors hover:bg-primary/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/35"
+            onClick={() => {
+              void openArtifact(artifact.path);
+            }}
+            title={t('runs.agent.openArtifact', { name: artifact.label })}
+            type="button"
+          >
+            <ExternalLink className="h-3.5 w-3.5" />
+          </button>
+          <button
+            aria-label={t('runs.agent.exportArtifact', { name: artifact.label })}
+            className="inline-flex size-6 items-center justify-center rounded-[3px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/35"
+            onClick={() => {
+              void exportArtifact(artifact.path);
+            }}
+            title={t('runs.agent.exportArtifact', { name: artifact.label })}
+            type="button"
+          >
+            <Download className="h-3.5 w-3.5" />
+          </button>
+        </>
+      ) : null}
+    </div>
   );
 }
 

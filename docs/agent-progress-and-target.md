@@ -139,6 +139,7 @@ Intent -> Plan -> Execute -> Observe -> Verify -> Report -> Asset
 - 任一步进入 `failed` 或 `neutral` 后停止，未执行步骤保留在计划中但不会伪造执行事件。
 - Verifier 已支持复用 Midscene 或独立 OpenAI-compatible 模型处理规则断言覆盖不了的语义断言。
 - Reporter 已支持复用 Midscene 或独立 OpenAI-compatible 模型，为失败/等待态运行生成结构化证据摘要、失败归因和修复建议。
+- 运行记录支持在 Agent 事件流中选择证据节点，并查看其页面观察、验证依据、浏览器状态、截图预览与同步骤产物；受应用管理的文件仍只通过受控 IPC 打开或导出。
 
 ### 4.4 Agent Contract
 
@@ -286,12 +287,13 @@ fill #password with 123456
 - 录制页提供“运行回放”入口，结果直接写入运行记录并持久化。
 - 新录制首个导航步骤和手动快照会绑定本次真实 BrowserSession，避免写入旧截图状态。
 - 浏览器 fallback 只生成 `neutral` Recording Agent 计划，不模拟回放成功。
+- 图表稳定等待会临时冻结目标区域的 CSS/SVG 动画和过渡，并采样 Canvas 像素摘要；完成或超时后会清理临时样式和标记。
 
 尚未完成：
 
-- 动态区域遮罩和图表动画稳定策略。
+- 真实业务图表页上的稳定性验收。
 
-因此当前截图读取失败、尺寸不一致或没有可比基线时，Recording Agent 明确标记为 `neutral`，不会伪造视觉通过；每条录制可设置 `0–100%` 容差阈值，默认 `0%`，但尚不包含动态区域遮罩。
+因此当前截图读取失败、尺寸不一致、没有可比基线，或动态区域遮罩覆盖全部截图时，Recording Agent 明确标记为 `neutral`，不会伪造视觉通过；每条录制可设置 `0–100%` 容差阈值与按截图百分比坐标配置的动态区域遮罩。遮罩像素不进入差异比例分母，也不会在差异图中标红。
 
 ## 5. 当前仍是 stub 或半成品的地方
 
@@ -307,6 +309,9 @@ fill #password with 123456
 - 按顺序将模型计划步骤交给现有 Browser/Midscene 执行链。
 - 模型请求失败、配置不完整或响应非法时降级到现有规则规划，并在计划事件中记录原因。
 - `navigate`、明确 selector 或语义 `click/input/select`、`wait`、`scroll`、`assert`、`observe` 和 `extract` 可以逐步产生真实执行证据；语义 `select` 使用 Midscene `aiAct` 描述“在下拉框选择选项”的任务，带明确 `target` 的 `extract` 使用 Midscene `aiQuery` 获取目标化结果，两者均复用报告与 usage 证据链。
+- 自然语言页直接提交的 `aiQuery` 会识别“提取/读取/查询/获取”后的目标并直接调用语义 `extract`，无需先由 Planner 生成步骤；返回 evidence 会同时写入 Agent Run 并回显到会话。目标化提取缺少 Midscene 配置时保持 `neutral`，不会把普通 Observer 快照伪造为目标值。
+- 自然语言页直接提交“在 `#status` 中选择 success”一类命令，会解析明确 selector 与选项值并调用 Browser Runtime `select`；选择后的页面快照、观察和运行证据与 Planner `select` 步骤复用同一链路。未带 selector 的语义选择仍需要 Midscene。
+- 自然语言页直接提交“等待 `#orders-table` 数据加载完成 2 秒”“等待网络空闲”或“滚动到 `#filters`”时，会复用条件化等待和滚动执行器；等待时长可以出现在 selector 或数据就绪描述之后，避免自然语序导致默认等待时长被误用。
 - Planner 显式 `wait` 步骤已经支持条件化等待：指令表达图表稳定时等待图表签名稳定；指令表达数据、表格或列表就绪时等待数据签名就绪；带 `selector` 时等待目标可见；带明确 URL 或 `/api/...` 路径时等待特定接口响应；指令包含网络空闲、接口稳定、请求稳定时等待 `networkidle`；其他等待继续使用固定 timeout。
 - 每一步都生成独立的 started、browser action、observation、verification 和 artifact 事件。
 - 只有全部计划步骤通过时整次运行才为 `passed`；失败或执行器缺失动作会停止后续步骤。
@@ -323,6 +328,8 @@ fill #password with 123456
 - 明确 selector 的 `click`、`input`、`select` 会从最新 `AgentObservation.interactiveElements` 中解析最多 3 个可解释候选；当失败策略是 `replaceSelector` 时按 `原 selector -> selector fallback -> Planner 重规划` 恢复，其他可重试失败仍保留动态等待和同计划重试。
 - selector fallback 候选必须与原 selector、步骤标题、步骤指令或目标文案存在词元重合，并且动作类型要兼容；尝试结果会写入 `agent:selector-fallback` 事件和 `metrics.selectorFallbackAttempts`。
 - 重规划成功后从修正版计划重新执行；Planner 层会读取 `replanningCycleLimit`，在配置上限内允许多轮重规划，并在 metrics 中记录 `replanningCycleLimit` 和实际 `replanningCycles`；达到上限或重规划失败时保留当前失败结果。
+- 每次成功重规划都会保留旧计划截至失败步骤的完整执行证据，并生成结构化 `agent:plan-revised` 事件关联前后计划、触发步骤、失败分类和恢复策略；恢复成功仍只按最终计划结果保持 `passed`。
+- 重规划历史覆盖动态等待、重试、selector fallback、观察、验证、浏览器状态、截图和报告产物；截图和报告按路径跨轮次去重，选择重规划事件可查看同一步骤的关联证据，Reporter 在失败或等待态运行中接收结构化重规划上下文。
 - 断言失败不会被自动重规划吞掉，仍交给 Verifier / Report 链路明确呈现。
 
 规则降级目前能识别：
@@ -389,18 +396,37 @@ fill #password with 123456
 断言 url 包含 /dashboard
 断言标题包含 Dashboard
 断言页面包含 登录成功
+断言 DOM #summary 存在
+断言 DOM #summary 文本包含 登录成功
+断言 DOM #save 可见
+断言 DOM #active-tab 属性 aria-selected 为 true
 断言表格包含 成交量
 断言表格行数为 2
+断言表格「订单列表」行数为 2
 断言表格列数为 3
 断言表格第1行第2列为 120
 断言表格列 状态 包含 成功
 断言表格列 成交量 合计为 200
 断言表格按 成交量 降序
+断言表格筛选 状态 为 成功
+断言表格当前页为 2
+断言表格总页数为 4
+断言表格总条数为 36
+断言表格每页 10 条
+断言表格聚合 成交量 为 200
 断言图表包含 买入
 断言图表数量为 2
 断言图表已渲染
 断言图表标题为 成交趋势
 断言图表图例包含 买入
+断言图表「成交趋势」图例包含 买入
+断言图表提示包含 二月
+断言图表数据区域包含 180
+断言图表「成交趋势」系列包含 买入
+断言图表数据点 二月 为 180
+断言图表「成交趋势」系列 买入 数据点 二月 为 180
+断言图表「成交趋势」系列 买入 趋势上升
+断言图表趋势上升
 ```
 
 行为：
@@ -408,17 +434,32 @@ fill #password with 123456
 - URL 断言基于当前浏览器 `currentUrl` 判断。
 - 标题断言基于当前浏览器 `pageTitle` 判断。
 - 页面文本断言会读取真实页面 `innerText`，无真实页面时使用会话快照信息作为降级文本。
+- DOM selector 断言会检查明确 CSS selector 的存在性、可见性、元素文本或指定属性等值；可见性会排除 `hidden`、`aria-hidden`、`display: none`、`visibility: hidden` 和完全透明元素。属性检查仅读取断言请求的一个属性，可用于 `value`、`checked`、`disabled`、ARIA 和 `data-*` 状态。
 - 表格断言基于 `AgentObservation.tables` 中的标题、行列数、表头和样例行做基础 contains 判断。
+- 多表页面可将表格标题写为 `表格「标题」`、`table "Title"` 或 `table 'Title'` 来限定断言目标；该标题与观察到的 caption 严格匹配，未指定时保留对全部表格的原有判断。
+- 表格观察同时支持原生 `<table>` 与标准 ARIA `role="grid"` / `role="table"`；ARIA 网格使用 `columnheader`、`row`、`gridcell` / `rowheader` / `cell` 归一为表头和样例行。
+- 自定义 `div` 网格可通过 `data-grid` / `data-table` 根节点及 `data-column-header`、`data-row`、`data-cell`、`data-aggregate` 钩子进入相同的表格观察与断言链路。
 - 表格行数/列数断言基于 `AgentObservation.tables` 做严格数值比较。
 - 表格单元格断言基于 `AgentObservation.tables.sampleRows` 做严格相等比较，当前以观察到的样例行为准。
 - 表格列包含断言基于表头定位列，并在 `AgentObservation.tables.sampleRows` 中查找目标值。
 - 表格列合计断言基于表头定位列，并对 `AgentObservation.tables.sampleRows` 中可解析的数值单元格求和。
 - 表格排序断言优先基于 `AgentObservation.tables.sortStates` 做列名与方向严格匹配；没有排序状态时，会基于表头和样例行推断升序/降序。
+- 表格筛选断言基于表格范围内具有 `data-filter` 的控件状态；筛选名称和当前值必须严格匹配。
+- 表格分页断言基于 `data-current-page`、`data-total-pages`、`data-total-items`、`data-page-size`、`aria-rowcount` 或明确分页导航的当前页/页数文本；没有可识别元数据时不会推断状态。
+- 表格聚合值断言基于 `tfoot` 中按表头或 `data-aggregate` 标记采集的值；它与仅对样例行求和的列合计断言保持区分。
 - 图表断言基于 `AgentObservation.charts` 中的标题、类型、尺寸和图例做基础 contains 判断。
+- 多图表页面可将图表标题写为 `图表「标题」`、`chart "Title"` 或 `chart 'Title'` 来限定断言目标；标题与观察到的图表标题严格匹配，未指定时保留对全部图表的原有判断。
 - 图表数量断言基于 `AgentObservation.charts.length` 做严格数值比较。
 - 图表渲染断言基于 `AgentObservation.charts.rendered` 做可见尺寸状态判断。
 - 图表标题断言基于 `AgentObservation.charts.title` 做严格相等比较。
 - 图表图例断言基于 `AgentObservation.charts.legends` 做列表包含判断。
+- 图表提示断言基于图表内部、`aria-describedby` 关联或以图表标识显式关联的可见 tooltip；隐藏或关闭的提示不会作为证据。
+- 图表数据区域断言基于显式 `data-point` / `data-chart-value` 数值点的系列、标签和值做严格包含判断。
+- 图表系列存在断言会严格匹配显式数据点或系列趋势中的系列名；可与带引号的图表标题组合，避免其他图表的同名系列误判通过。
+- 图表数据点断言会同时匹配同一个显式数据点的标签和值；例如“二月为 180”不会因为另一数据点值为 `180` 而通过。
+- 图表系列数据点断言会同时匹配 `data-series` / `data-series-name`、标签和值；例如“买入系列二月为 180”不会因为卖出系列二月为 `180` 而通过。数据系列可与图表标题一起限定。
+- 图表系列趋势断言优先读取指定系列的 `data-series-trend`，否则才根据该系列至少两个显式数值点的顺序判断上升、下降、平稳或混合；证据不足时不会通过。显式标记会覆盖数据点推导结果，系列趋势会同时写入运行记录的图表证据。
+- 图表趋势断言优先使用 `data-trend`；未标注时仅在单系列（或没有系列信息）的至少两个结构化数值点单调上升、单调下降、完全持平或混合时给出对应趋势。多个不同系列的交错数值不会自动推导趋势。
 - 复杂语义断言会携带 URL、标题、DOM 摘要、文本摘要、表格和图表观察结果进入 Verifier 模型。
 - Verifier 模型必须返回 `passed`、`failed` 或 `neutral` 结构化结果；证据不足时保持 `neutral`，不会默认通过。
 - Verifier 模型 usage 会合并进入 Agent Run metrics，并且 API Key 不写入运行记录。
@@ -426,9 +467,7 @@ fill #password with 123456
 
 还没有真实支持：
 
-- DOM 断言。
-- 表格筛选、分页和聚合值断言。
-- 图表 tooltip、数据点和可解释的视觉趋势专项断言。
+- 从 Canvas/SVG 像素或任意第三方图表组件读取 tooltip、数据点和视觉趋势。
 - 视觉对比。
 
 ### 5.4 Reporter 已有独立模型路由
@@ -445,11 +484,13 @@ fill #password with 123456
 - 同步生成 `Reporter HTML 报告` artifact，并写入 `studio-data/artifacts/<runId>-reporter.html`。
 - 运行记录中的报告使用主进程受控 IPC 打开或导出：只有 `studio-data/artifacts` 下的应用管理产物可调用系统打开或复制到用户选择的位置，渲染进程不再直接构造任意 `file://` 报告链接。
 - Reporter 调用失败时保留原 Agent Run，不阻断主执行链路。
+- 运行记录可沿同一事件步骤查看关联观察、验证、浏览器状态、截图预览及 artifact，并对关联报告执行打开或导出。
+- 运行智能分析会在当前筛选范围内按失败原因聚类并展示最多 3 个高频模式；仅归并空白和末尾标点差异，避免把不同故障原因猜测为同类。
+- 运行智能分析会在至少 4 条具有有效开始时间的样本中对比早期和近期失败率；相差不足 15 个百分点显示稳定，样本不足时不输出趋势结论。
 
 还没有完成：
 
-- 跨 artifact 的证据链导航入口。
-- 跨运行失败聚类、趋势分析和覆盖风险总结。
+- 跨运行覆盖风险总结。
 - 把 Reporter 建议转成可执行重试策略或用例修复草稿。
 
 ### 5.5 Observer 已有轻量观察快照
@@ -458,6 +499,7 @@ fill #password with 123456
 
 - 当前 URL。
 - 页面标题。
+- 明确 selector 的 DOM 存在性、可见性、文本摘要与指定属性值（按断言请求即时采集）。
 - 截图路径。
 - 页面文本摘要。
 - 关键可交互元素摘要。
@@ -465,7 +507,9 @@ fill #password with 123456
 - network failed request。
 - 表格标题、行列数、表头和样例行。
 - 表格排序列与排序方向。
+- 表格范围内 `data-filter` 控件的筛选状态、ARIA/data 属性或分页导航给出的分页状态，以及 `tfoot` 聚合值。
 - 图表标题、类型、尺寸和图例。
+- 图表关联的可见 tooltip、显式数据点和由显式数值点得到的趋势。
 
 当前这些数据会进入 `AgentObservation`：
 
@@ -481,8 +525,8 @@ fill #password with 123456
 
 - 更完整的 DOM 结构摘要。
 - trace。
-- 图表数据点、tooltip 和视觉状态读取。
-- 表格筛选、分页等行为状态读取。
+- Canvas/SVG 内部数据、任意第三方图表 tooltip 和像素级视觉趋势读取。
+- 仅依赖框架私有 class 名、且未提供原生、ARIA 或 `data-*` 结构钩子的第三方数据网格读取。
 
 ### 5.5 Report 已能展示 Agent 证据
 
@@ -622,20 +666,20 @@ MVP 支持的动作：
    - 核验模型错误、耗时、usage、报告和截图证据是否完整且与供应商账单口径一致。
 
 2. Agent 动态重规划与角色模型路由。
-   - 已完成 selector readiness 动态等待、特定接口响应等待、图表稳定判断、数据就绪判断、失败分类、恢复策略建议、`waitForReadiness` 策略驱动数据就绪或网络空闲等待、`replanNavigation` 与 `replanFromCurrentState` 策略驱动重规划、`replaceSelector` 策略驱动 selector fallback、500ms 回退等待、Planner 条件化 wait、单次确定性重试、受控 selector fallback、语义 `select` 和配置上限内多轮 Planner 重规划，后续让更多恢复策略直接驱动路径选择。
+   - 已完成 selector readiness 动态等待、特定接口响应等待、图表稳定判断、数据就绪判断、失败分类、恢复策略建议、`waitForReadiness` 策略驱动数据就绪或网络空闲等待、`replanNavigation` 与 `replanFromCurrentState` 策略驱动重规划、`replaceSelector` 策略驱动 selector fallback、500ms 回退等待、Planner 条件化 wait、单次确定性重试、受控 selector fallback、语义 `select`、配置上限内多轮 Planner 重规划和跨轮次证据历史，后续让更多恢复策略直接驱动路径选择。
    - Verifier 使用独立模型做复杂语义断言和失败归因。
    - Reporter 使用独立模型生成结构化报告和修复建议。
    - Executor 继续默认复用 Midscene，也允许切换独立执行模型策略。
 
 3. 表格与图表专项 Verifier。
-   - 表格筛选状态、分页状态和聚合值断言。
-   - 图表 tooltip、数据区域和视觉趋势断言。
+   - 扩展无结构钩子的第三方数据网格读取，以及更多跨框架筛选、分页和聚合值信号。
+   - 扩展 Canvas/SVG 与第三方图表库的 tooltip、数据区域和视觉趋势读取。
    - 将结构化观察转换为可判定的 verification evidence。
 
 4. 录制回放视觉比较。
    - 像素差异与 diff 图片。
-   - 动态区域遮罩和阈值。
-   - 图表动画稳定策略。
+   - 已完成动态区域遮罩和阈值。
+   - 已完成图表动画稳定策略，待真实业务图表页验收。
 
 5. PRD Planner 接入。
    - 文档摘要。

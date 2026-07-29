@@ -22,6 +22,7 @@ export interface RecordingVisualComparison {
   message: string;
   changedPixels: number;
   totalPixels: number;
+  maskedPixels?: number;
   differenceRatio: number;
   baselinePath: string;
   actualPath: string;
@@ -207,7 +208,7 @@ export function createRecordingAgentRun(request: RecordingAgentRunRequest): Agen
     if (step.screenshotPath && result.screenshotPath && result.status === 'passed') {
       const comparison = visualComparisonByStepId.get(step.id);
       const evidence = comparison
-        ? `基线与实际截图：${comparison.baselinePath} -> ${comparison.actualPath}；${comparison.message}；变化像素 ${comparison.changedPixels}/${comparison.totalPixels}（${(comparison.differenceRatio * 100).toFixed(2)}%）。`
+        ? `基线与实际截图：${comparison.baselinePath} -> ${comparison.actualPath}；${comparison.message}；变化像素 ${comparison.changedPixels}/${comparison.totalPixels}（${(comparison.differenceRatio * 100).toFixed(2)}%）${comparison.maskedPixels ? `；已遮罩 ${comparison.maskedPixels} 个像素` : ''}。`
         : `基线与实际截图证据已配对：${step.screenshotPath} -> ${result.screenshotPath}`;
       if (comparison?.diffPath) {
         const diffArtifact: AgentArtifact = {

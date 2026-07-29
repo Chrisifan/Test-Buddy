@@ -145,6 +145,7 @@ export class RecordingRunner {
           actualPath,
           diffPath: diffPathFor(actualPath),
           differenceThreshold: request.recording.visualDiffThreshold ?? 0,
+          ignoredRegions: request.recording.visualDiffMasks ?? [],
         });
         return {
           ...comparison,
@@ -154,7 +155,7 @@ export class RecordingRunner {
         };
       }),
     );
-    return comparisons.filter((comparison): comparison is RecordingVisualComparison => Boolean(comparison));
+    return comparisons.filter((comparison): comparison is NonNullable<typeof comparison> => Boolean(comparison));
   }
 }
 import path from 'node:path';

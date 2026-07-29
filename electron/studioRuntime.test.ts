@@ -673,6 +673,191 @@ describe('StudioRuntime agent observation', () => {
     expect(response.agentRun.status).toBe('passed');
   });
 
+  it('executes a direct aiQuery target without requiring a Planner plan', async () => {
+    const currentState: BrowserSessionState = {
+      id: 'session-ready',
+      status: 'ready',
+      currentUrl: 'https://example.test/orders',
+      pageTitle: 'Orders',
+      message: 'ready',
+      updatedAt: '2026-07-03T08:00:00.000Z',
+    };
+    const semanticExtract = vi.fn().mockResolvedValue({
+      status: 'passed',
+      message: 'Midscene 已提取「当前订单总额」。',
+      evidence: 'aiQuery 提取结果：{"orderTotal":128,"currency":"CNY"}',
+    });
+    const runtime = new StudioRuntime(
+      vi.fn(),
+      {
+        start: vi.fn(),
+        navigate: vi.fn(),
+        click: vi.fn(),
+        input: vi.fn(),
+        capture: vi.fn(async () => currentState),
+        getState: () => currentState,
+      },
+      { click: vi.fn(), input: vi.fn(), select: vi.fn(), extract: semanticExtract, assert: vi.fn() },
+    );
+
+    const response = await runtime.sendChatCommand({
+      mode: 'aiQuery',
+      prompt: '提取当前订单总额',
+      targetEnvironment: 'staging',
+      deepThink: true,
+      deepLocate: true,
+      midsceneConfig,
+      runtimeProfile: {
+        browser: 'chromium',
+        baseUrl: 'https://example.test',
+        viewport: 'desktop',
+        locale: 'zh-CN',
+        headless: false,
+      },
+    });
+
+    expect(semanticExtract).toHaveBeenCalledWith({
+      target: '当前订单总额',
+      prompt: '提取当前订单总额',
+      config: midsceneConfig,
+    });
+    expect(response.agentRun.status).toBe('passed');
+    expect(response.agentRun.plan.steps[1]?.action).toBe('extract');
+    expect(response.assistantEntry.text).toContain('提取结果：aiQuery 提取结果：{"orderTotal":128,"currency":"CNY"}');
+  });
+
+  it('keeps a direct targeted aiQuery neutral until semantic extraction is configured', async () => {
+    const currentState: BrowserSessionState = {
+      id: 'session-ready',
+      status: 'ready',
+      currentUrl: 'https://example.test/orders',
+      pageTitle: 'Orders',
+      message: 'ready',
+      updatedAt: '2026-07-03T08:00:00.000Z',
+    };
+    const semanticExtract = vi.fn();
+    const runtime = new StudioRuntime(
+      vi.fn(),
+      {
+        start: vi.fn(),
+        navigate: vi.fn(),
+        click: vi.fn(),
+        input: vi.fn(),
+        capture: vi.fn(async () => currentState),
+        getState: () => currentState,
+      },
+      { click: vi.fn(), input: vi.fn(), select: vi.fn(), extract: semanticExtract, assert: vi.fn() },
+    );
+
+    const response = await runtime.sendChatCommand({
+      mode: 'aiQuery',
+      prompt: '提取当前订单总额',
+      targetEnvironment: 'staging',
+      deepThink: true,
+      deepLocate: true,
+      runtimeProfile: {
+        browser: 'chromium',
+        baseUrl: 'https://example.test',
+        viewport: 'desktop',
+        locale: 'zh-CN',
+        headless: false,
+      },
+    });
+
+    expect(semanticExtract).not.toHaveBeenCalled();
+    expect(response.agentRun.status).toBe('neutral');
+    expect(response.agentRun.events.find((event) => event.type === 'agent:assertion-result')?.verification?.summary).toContain(
+      '等待 Midscene 语义提取执行',
+    );
+  });
+
+  it('executes a direct selector select command without requiring a Planner plan', async () => {
+    const currentState: BrowserSessionState = {
+      id: 'session-ready',
+      status: 'ready',
+      currentUrl: 'https://example.test/orders',
+      pageTitle: 'Orders',
+      message: 'ready',
+      updatedAt: '2026-07-03T08:00:00.000Z',
+    };
+    const select = vi.fn().mockResolvedValue(currentState);
+    const runtime = new StudioRuntime(vi.fn(), {
+      start: vi.fn(),
+      navigate: vi.fn(),
+      click: vi.fn(),
+      input: vi.fn(),
+      select,
+      capture: vi.fn(async () => currentState),
+      getState: () => currentState,
+    });
+
+    const response = await runtime.sendChatCommand({
+      mode: 'ai',
+      prompt: '在 #status 中选择 success',
+      targetEnvironment: 'staging',
+      deepThink: true,
+      deepLocate: true,
+      runtimeProfile: {
+        browser: 'chromium',
+        baseUrl: 'https://example.test',
+        viewport: 'desktop',
+        locale: 'zh-CN',
+        headless: false,
+      },
+    });
+
+    expect(select).toHaveBeenCalledWith({ selector: '#status', value: 'success' });
+    expect(response.agentRun.status).toBe('passed');
+    expect(response.agentRun.plan.steps[1]?.action).toBe('select');
+  });
+
+  it('executes direct conditional wait and selector scroll commands without a Planner plan', async () => {
+    const currentState: BrowserSessionState = {
+      id: 'session-ready',
+      status: 'ready',
+      currentUrl: 'https://example.test/orders',
+      pageTitle: 'Orders',
+      message: 'ready',
+      updatedAt: '2026-07-03T08:00:00.000Z',
+    };
+    const waitForDataReady = vi.fn().mockResolvedValue(currentState);
+    const scroll = vi.fn().mockResolvedValue(currentState);
+    const runtime = new StudioRuntime(vi.fn(), {
+      start: vi.fn(),
+      navigate: vi.fn(),
+      click: vi.fn(),
+      input: vi.fn(),
+      waitForDataReady,
+      scroll,
+      capture: vi.fn(async () => currentState),
+      getState: () => currentState,
+    });
+    const request = (prompt: string) => runtime.sendChatCommand({
+      mode: 'ai',
+      prompt,
+      targetEnvironment: 'staging',
+      deepThink: true,
+      deepLocate: true,
+      runtimeProfile: {
+        browser: 'chromium',
+        baseUrl: 'https://example.test',
+        viewport: 'desktop',
+        locale: 'zh-CN',
+        headless: false,
+      },
+    });
+
+    const waitResponse = await request('等待 #orders-table 数据加载完成 2 秒');
+    const scrollResponse = await request('滚动到 #filters');
+
+    expect(waitForDataReady).toHaveBeenCalledWith({ selector: '#orders-table', timeoutMs: 2000 });
+    expect(waitResponse.agentRun.status).toBe('passed');
+    expect(waitResponse.agentRun.plan.steps[1]?.action).toBe('wait');
+    expect(scroll).toHaveBeenCalledWith({ selector: '#filters' });
+    expect(scrollResponse.agentRun.status).toBe('passed');
+    expect(scrollResponse.agentRun.plan.steps[1]?.action).toBe('scroll');
+  });
+
   it('stops a Planner plan after a failed semantic assertion', async () => {
     const currentState: BrowserSessionState = {
       id: 'session-ready',
@@ -1156,6 +1341,7 @@ describe('StudioRuntime agent observation', () => {
       status: 'ready',
       currentUrl: 'https://example.test/start',
       pageTitle: 'Start',
+      screenshotPath: '/tmp/navigation-failed.png',
       message: 'ready',
       updatedAt: '2026-07-03T08:00:00.000Z',
     };
@@ -1165,7 +1351,12 @@ describe('StudioRuntime agent observation', () => {
       if (url === 'https://broken.example.test/dashboard') {
         throw new Error('Navigation failed: net::ERR_NAME_NOT_RESOLVED');
       }
-      currentState = { ...currentState, currentUrl: url, pageTitle: 'Dashboard' };
+      currentState = {
+        ...currentState,
+        currentUrl: url,
+        pageTitle: 'Dashboard',
+        screenshotPath: '/tmp/navigation-recovered.png',
+      };
       return currentState;
     });
     const createPlan = vi
@@ -1282,6 +1473,25 @@ describe('StudioRuntime agent observation', () => {
     );
     expect(navigateOrder).toEqual(['https://broken.example.test/dashboard', 'https://example.test/dashboard']);
     expect(response.agentRun.status).toBe('passed');
+    const revision = response.agentRun.events.find((event) => event.type === 'agent:plan-revised');
+    const historicalFailure = response.agentRun.events.find(
+      (event) => event.type === 'agent:step-failed' && event.stepId === revision?.stepId,
+    );
+    const historicalObservation = response.agentRun.events.find(
+      (event) => event.type === 'agent:observation-created' && event.stepId === revision?.stepId,
+    );
+    expect(revision?.planRevision).toEqual(
+      expect.objectContaining({
+        cycle: 1,
+        failureCategory: 'navigation',
+        recoveryStrategy: 'replanNavigation',
+      }),
+    );
+    expect(historicalFailure?.message).toContain('ERR_NAME_NOT_RESOLVED');
+    expect(historicalObservation?.observation?.screenshotPath).toBe('/tmp/navigation-failed.png');
+    expect(response.agentRun.artifacts).toEqual(
+      expect.arrayContaining([expect.objectContaining({ path: '/tmp/navigation-failed.png' })]),
+    );
     expect(response.agentRun.metrics).toEqual(
       expect.objectContaining({ calls: 2, totalTokens: 40, replanningCycles: 1 }),
     );
@@ -1583,6 +1793,10 @@ describe('StudioRuntime agent observation', () => {
     ]);
     expect(response.agentRun.status).toBe('passed');
     expect(response.agentRun.plan.title).toBe('登录工作台修正版 B');
+    const revisions = response.agentRun.events.filter((event) => event.type === 'agent:plan-revised');
+    expect(revisions.map((event) => event.planRevision?.cycle)).toEqual([1, 2]);
+    expect(new Set(revisions.map((event) => event.stepId)).size).toBe(2);
+    expect(response.agentRun.events.filter((event) => event.type === 'agent:step-failed')).toHaveLength(2);
     expect(response.agentRun.metrics).toEqual(
       expect.objectContaining({
         calls: 3,
@@ -3731,6 +3945,79 @@ describe('StudioRuntime agent observation', () => {
     expect(verification?.evidence).toContain('订单列表：2 行');
   });
 
+  it('limits named table assertions to the requested table on multi-table pages', async () => {
+    const currentState: BrowserSessionState = {
+      id: 'session-ready',
+      status: 'ready',
+      currentUrl: 'https://example.test/reports',
+      pageTitle: 'Reports',
+      screenshotPath: '/tmp/reports.png',
+      message: 'ready',
+      updatedAt: '2026-07-03T08:00:00.000Z',
+    };
+    const runtime = new StudioRuntime(vi.fn(), {
+      start: vi.fn(),
+      navigate: vi.fn(),
+      click: vi.fn(),
+      input: vi.fn(),
+      capture: vi.fn<() => Promise<BrowserSessionState>>().mockResolvedValue(currentState),
+      captureObservation: vi.fn().mockResolvedValue({
+        textSummary: '订单与退款统计',
+        domSummary: '页面文本约 7 字符；发现 0 个关键可交互元素、2 个表格、0 个图表。',
+        interactiveElements: [],
+        consoleMessages: [],
+        networkHints: [],
+        tables: [
+          {
+            index: 1,
+            caption: '订单列表',
+            rowCount: 2,
+            columnCount: 2,
+            headers: ['订单号', '状态'],
+            sampleRows: [['A-100', '成功']],
+          },
+          {
+            index: 2,
+            caption: '退款列表',
+            rowCount: 1,
+            columnCount: 2,
+            headers: ['退款单号', '状态'],
+            sampleRows: [['R-100', '处理中']],
+          },
+        ],
+        charts: [],
+      }),
+      getState: () => currentState,
+    });
+    const request = (prompt: string) =>
+      runtime.sendChatCommand({
+        mode: 'aiAssert',
+        prompt,
+        targetEnvironment: 'staging',
+        deepThink: true,
+        deepLocate: false,
+        runtimeProfile: {
+          browser: 'chromium',
+          baseUrl: 'https://example.test',
+          viewport: 'desktop',
+          locale: 'zh-CN',
+          headless: false,
+        },
+      });
+
+    const passedResponse = await request('断言表格「退款列表」行数为 1');
+    const failedResponse = await request('断言表格「退款列表」行数为 2');
+
+    expect(passedResponse.agentRun?.status).toBe('passed');
+    expect(passedResponse.agentRun?.events.find((event) => event.type === 'agent:assertion-result')?.verification?.evidence).toBe(
+      '退款列表：1 行',
+    );
+    const failedVerification = failedResponse.agentRun?.events.find((event) => event.type === 'agent:assertion-result')?.verification;
+    expect(failedResponse.agentRun?.status).toBe('failed');
+    expect(failedVerification?.failureReason).toContain('表格行数不等于「2」');
+    expect(failedVerification?.evidence).toBe('退款列表：1 行');
+  });
+
   it('passes and fails explicit table cell assertions using structured observation', async () => {
     const currentState: BrowserSessionState = {
       id: 'session-ready',
@@ -3974,6 +4261,91 @@ describe('StudioRuntime agent observation', () => {
     expect(failedVerification?.evidence).toContain('订单列表：成交量 合计 200 (120 / 80)');
   });
 
+  it('evaluates structured table filter, pagination, and footer aggregate assertions', async () => {
+    const currentState: BrowserSessionState = {
+      id: 'session-ready',
+      status: 'ready',
+      currentUrl: 'https://example.test/orders?page=2',
+      pageTitle: 'Orders',
+      screenshotPath: '/tmp/orders.png',
+      message: 'ready',
+      updatedAt: '2026-07-03T08:00:00.000Z',
+    };
+    const runtime = new StudioRuntime(vi.fn(), {
+      start: vi.fn(),
+      navigate: vi.fn(),
+      click: vi.fn(),
+      input: vi.fn(),
+      capture: vi.fn<() => Promise<BrowserSessionState>>().mockResolvedValue(currentState),
+      captureObservation: vi.fn().mockResolvedValue({
+        textSummary: '成功订单',
+        domSummary: '页面文本约 4 字符；发现 0 个关键可交互元素、1 个表格、0 个图表。',
+        interactiveElements: [],
+        consoleMessages: [],
+        networkHints: [],
+        tables: [
+          {
+            index: 1,
+            caption: '订单列表',
+            rowCount: 10,
+            columnCount: 3,
+            headers: ['订单号', '成交量', '状态'],
+            filters: [{ label: '状态', value: '成功' }],
+            pagination: { currentPage: 2, totalPages: 4, totalItems: 36, pageSize: 10 },
+            aggregates: [{ label: '成交量', value: '200' }],
+            sampleRows: [
+              ['A-100', '120', '成功'],
+              ['A-101', '80', '成功'],
+            ],
+          },
+        ],
+        charts: [],
+      }),
+      getState: () => currentState,
+    });
+    const request = (prompt: string) =>
+      runtime.sendChatCommand({
+        mode: 'aiAssert',
+        prompt,
+        targetEnvironment: 'staging',
+        deepThink: true,
+        deepLocate: false,
+        runtimeProfile: {
+          browser: 'chromium',
+          baseUrl: 'https://example.test',
+          viewport: 'desktop',
+          locale: 'zh-CN',
+          headless: false,
+        },
+      });
+
+    const filterResponse = await request('断言表格筛选 状态 为 成功');
+    const pageResponse = await request('断言表格当前页为 2');
+    const totalPagesResponse = await request('断言表格总页数为 4');
+    const totalItemsResponse = await request('断言表格总条数为 36');
+    const pageSizeResponse = await request('断言表格每页 10 条');
+    const aggregateResponse = await request('断言表格聚合 成交量 为 200');
+    const failedResponse = await request('断言表格当前页为 3');
+
+    expect(filterResponse.agentRun?.status).toBe('passed');
+    expect(filterResponse.agentRun?.events.find((event) => event.type === 'agent:assertion-result')?.verification?.evidence).toContain(
+      '订单列表：状态 = 成功',
+    );
+    expect(pageResponse.agentRun?.status).toBe('passed');
+    expect(totalPagesResponse.agentRun?.status).toBe('passed');
+    expect(totalItemsResponse.agentRun?.status).toBe('passed');
+    expect(pageSizeResponse.agentRun?.status).toBe('passed');
+    expect(aggregateResponse.agentRun?.status).toBe('passed');
+    expect(aggregateResponse.agentRun?.events.find((event) => event.type === 'agent:assertion-result')?.verification?.evidence).toContain(
+      '订单列表：成交量 = 200',
+    );
+    const failedVerification = failedResponse.agentRun?.events.find((event) => event.type === 'agent:assertion-result')
+      ?.verification;
+    expect(failedResponse.agentRun?.status).toBe('failed');
+    expect(failedVerification?.failureReason).toContain('表格当前页不等于「3」');
+    expect(failedVerification?.evidence).toContain('订单列表：2');
+  });
+
   it('passes and fails explicit table sort assertions using structured observation', async () => {
     const currentState: BrowserSessionState = {
       id: 'session-ready',
@@ -4137,6 +4509,78 @@ describe('StudioRuntime agent observation', () => {
     expect(failedVerification?.evidence).toContain('订单列表：成交量 inferred descending (120 / 80 / 35)');
   });
 
+  it('evaluates explicit DOM selector existence, visibility, and text assertions', async () => {
+    const currentState: BrowserSessionState = {
+      id: 'session-ready',
+      status: 'ready',
+      currentUrl: 'https://example.test/dashboard',
+      pageTitle: 'Dashboard',
+      screenshotPath: '/tmp/dashboard.png',
+      message: 'ready',
+      updatedAt: '2026-07-03T08:00:00.000Z',
+    };
+    const inspectDom = vi
+      .fn()
+      .mockResolvedValueOnce({ selector: '#summary', found: true, visible: true, text: '登录成功' })
+      .mockResolvedValueOnce({ selector: '#summary', found: true, visible: true, text: '登录成功' })
+      .mockResolvedValueOnce({ selector: '#save', found: true, visible: false, text: '保存' })
+      .mockResolvedValueOnce({
+        selector: '#active-tab',
+        found: true,
+        visible: true,
+        text: '订单',
+        attribute: { name: 'aria-selected', value: 'true' },
+      });
+    const runtime = new StudioRuntime(vi.fn(), {
+      start: vi.fn(),
+      navigate: vi.fn(),
+      click: vi.fn(),
+      input: vi.fn(),
+      capture: vi.fn<() => Promise<BrowserSessionState>>().mockResolvedValue(currentState),
+      inspectDom,
+      getState: () => currentState,
+    });
+    const request = (prompt: string) =>
+      runtime.sendChatCommand({
+        mode: 'aiAssert',
+        prompt,
+        targetEnvironment: 'staging',
+        deepThink: true,
+        deepLocate: false,
+        runtimeProfile: {
+          browser: 'chromium',
+          baseUrl: 'https://example.test',
+          viewport: 'desktop',
+          locale: 'zh-CN',
+          headless: false,
+        },
+      });
+
+    const existsResponse = await request('断言 DOM #summary 存在');
+    const textResponse = await request('断言 DOM #summary 文本包含 登录成功');
+    const hiddenResponse = await request('断言 DOM #save 可见');
+    const attributeResponse = await request('断言 DOM #active-tab 属性 aria-selected 为 true');
+
+    expect(inspectDom).toHaveBeenNthCalledWith(1, '#summary');
+    expect(inspectDom).toHaveBeenNthCalledWith(2, '#summary');
+    expect(inspectDom).toHaveBeenNthCalledWith(3, '#save');
+    expect(inspectDom).toHaveBeenNthCalledWith(4, '#active-tab', 'aria-selected');
+    expect(existsResponse.agentRun?.status).toBe('passed');
+    expect(existsResponse.agentRun?.events.find((event) => event.type === 'agent:assertion-result')?.verification?.evidence).toContain(
+      '#summary：已找到且可见',
+    );
+    expect(textResponse.agentRun?.status).toBe('passed');
+    expect(attributeResponse.agentRun?.status).toBe('passed');
+    expect(attributeResponse.agentRun?.events.find((event) => event.type === 'agent:assertion-result')?.verification?.evidence).toContain(
+      '#active-tab：已找到且可见；文本：订单；属性 aria-selected：true',
+    );
+    const hiddenVerification = hiddenResponse.agentRun?.events.find((event) => event.type === 'agent:assertion-result')
+      ?.verification;
+    expect(hiddenResponse.agentRun?.status).toBe('failed');
+    expect(hiddenVerification?.failureReason).toContain('DOM selector 不可见「#save」');
+    expect(hiddenVerification?.evidence).toContain('#save：已找到但不可见；文本：保存');
+  });
+
   it('passes an explicit chart contains assertion using structured observation', async () => {
     const currentState: BrowserSessionState = {
       id: 'session-ready',
@@ -4281,6 +4725,65 @@ describe('StudioRuntime agent observation', () => {
     expect(failedResponse.agentRun?.status).toBe('failed');
     expect(failedVerification?.failureReason).toContain('图表数量不等于「3」');
     expect(failedVerification?.evidence).toContain('实际观察到 2 个图表');
+  });
+
+  it('limits named chart assertions to the requested chart on multi-chart pages', async () => {
+    const currentState: BrowserSessionState = {
+      id: 'session-ready',
+      status: 'ready',
+      currentUrl: 'https://example.test/reports',
+      pageTitle: 'Reports',
+      screenshotPath: '/tmp/reports.png',
+      message: 'ready',
+      updatedAt: '2026-07-03T08:00:00.000Z',
+    };
+    const runtime = new StudioRuntime(vi.fn(), {
+      start: vi.fn(),
+      navigate: vi.fn(),
+      click: vi.fn(),
+      input: vi.fn(),
+      capture: vi.fn<() => Promise<BrowserSessionState>>().mockResolvedValue(currentState),
+      captureObservation: vi.fn().mockResolvedValue({
+        textSummary: '成交趋势 资产分布',
+        domSummary: '页面文本约 8 字符；发现 0 个关键可交互元素、0 个表格、2 个图表。',
+        interactiveElements: [],
+        consoleMessages: [],
+        networkHints: [],
+        tables: [],
+        charts: [
+          { index: 1, title: '成交趋势', kind: 'canvas', width: 640, height: 240, legends: ['买入', '卖出'] },
+          { index: 2, title: '资产分布', kind: 'svg', width: 320, height: 180, legends: ['现货', '合约'] },
+        ],
+      }),
+      getState: () => currentState,
+    });
+    const request = (prompt: string) =>
+      runtime.sendChatCommand({
+        mode: 'aiAssert',
+        prompt,
+        targetEnvironment: 'staging',
+        deepThink: true,
+        deepLocate: false,
+        runtimeProfile: {
+          browser: 'chromium',
+          baseUrl: 'https://example.test',
+          viewport: 'desktop',
+          locale: 'zh-CN',
+          headless: false,
+        },
+      });
+
+    const passedResponse = await request('断言图表「资产分布」图例包含 合约');
+    const failedResponse = await request('断言图表「资产分布」图例包含 买入');
+
+    expect(passedResponse.agentRun?.status).toBe('passed');
+    expect(passedResponse.agentRun?.events.find((event) => event.type === 'agent:assertion-result')?.verification?.evidence).toBe(
+      '图表图例：现货 / 合约',
+    );
+    const failedVerification = failedResponse.agentRun?.events.find((event) => event.type === 'agent:assertion-result')?.verification;
+    expect(failedResponse.agentRun?.status).toBe('failed');
+    expect(failedVerification?.failureReason).toContain('图表图例不包含「买入」');
+    expect(failedVerification?.evidence).toBe('图表图例：现货 / 合约');
   });
 
   it('passes and fails explicit chart rendered assertions using structured observation', async () => {
@@ -4458,6 +4961,181 @@ describe('StudioRuntime agent observation', () => {
     expect(legendResponse.agentRun?.status).toBe('passed');
     expect(legendVerification?.summary).toContain('图表图例「买入」已通过');
     expect(legendVerification?.evidence).toContain('买入 / 卖出');
+  });
+
+  it('evaluates structured chart tooltip, data region, and trend assertions', async () => {
+    const currentState: BrowserSessionState = {
+      id: 'session-ready',
+      status: 'ready',
+      currentUrl: 'https://example.test/reports',
+      pageTitle: 'Reports',
+      screenshotPath: '/tmp/reports.png',
+      message: 'ready',
+      updatedAt: '2026-07-03T08:00:00.000Z',
+    };
+    const runtime = new StudioRuntime(vi.fn(), {
+      start: vi.fn(),
+      navigate: vi.fn(),
+      click: vi.fn(),
+      input: vi.fn(),
+      capture: vi.fn<() => Promise<BrowserSessionState>>().mockResolvedValue(currentState),
+      captureObservation: vi.fn().mockResolvedValue({
+        textSummary: '成交趋势',
+        domSummary: '页面文本约 4 字符；发现 0 个关键可交互元素、0 个表格、1 个图表。',
+        interactiveElements: [],
+        consoleMessages: [],
+        networkHints: [],
+        tables: [],
+        charts: [
+          {
+            index: 1,
+            title: '成交趋势',
+            kind: 'canvas',
+            width: 640,
+            height: 240,
+            rendered: true,
+            legends: ['买入', '卖出'],
+            tooltip: '二月成交量：180',
+            dataPoints: [
+              { label: '一月', value: 120 },
+              { label: '二月', value: 180 },
+            ],
+            trend: 'rising',
+          },
+        ],
+      }),
+      getState: () => currentState,
+    });
+    const request = (prompt: string) =>
+      runtime.sendChatCommand({
+        mode: 'aiAssert',
+        prompt,
+        targetEnvironment: 'staging',
+        deepThink: true,
+        deepLocate: false,
+        runtimeProfile: {
+          browser: 'chromium',
+          baseUrl: 'https://example.test',
+          viewport: 'desktop',
+          locale: 'zh-CN',
+          headless: false,
+        },
+      });
+
+    const tooltipResponse = await request('断言图表提示包含 二月');
+    const dataResponse = await request('断言图表数据区域包含 180');
+    const pointResponse = await request('断言图表数据点 二月 为 180');
+    const trendResponse = await request('断言图表趋势上升');
+    const failedResponse = await request('断言图表趋势下降');
+    const failedPointResponse = await request('断言图表数据点 二月 为 120');
+
+    expect(tooltipResponse.agentRun?.status).toBe('passed');
+    expect(tooltipResponse.agentRun?.events.find((event) => event.type === 'agent:assertion-result')?.verification?.evidence).toContain(
+      '成交趋势：二月成交量：180',
+    );
+    expect(dataResponse.agentRun?.status).toBe('passed');
+    expect(dataResponse.agentRun?.events.find((event) => event.type === 'agent:assertion-result')?.verification?.evidence).toContain(
+      '一月 = 120 / 二月 = 180',
+    );
+    expect(pointResponse.agentRun?.status).toBe('passed');
+    expect(pointResponse.agentRun?.events.find((event) => event.type === 'agent:assertion-result')?.verification?.summary).toContain(
+      '图表数据点「二月 = 180」已通过',
+    );
+    expect(trendResponse.agentRun?.status).toBe('passed');
+    const failedVerification = failedResponse.agentRun?.events.find((event) => event.type === 'agent:assertion-result')
+      ?.verification;
+    expect(failedResponse.agentRun?.status).toBe('failed');
+    expect(failedVerification?.failureReason).toContain('图表趋势不匹配「下降」');
+    expect(failedVerification?.evidence).toContain('成交趋势：上升');
+    const failedPointVerification = failedPointResponse.agentRun?.events.find((event) => event.type === 'agent:assertion-result')
+      ?.verification;
+    expect(failedPointResponse.agentRun?.status).toBe('failed');
+    expect(failedPointVerification?.failureReason).toContain('图表数据点「二月」不等于「120」');
+    expect(failedPointVerification?.evidence).toContain('二月 = 180');
+  });
+
+  it('evaluates chart data points by series, label, and value together', async () => {
+    const currentState: BrowserSessionState = {
+      id: 'session-ready',
+      status: 'ready',
+      currentUrl: 'https://example.test/reports',
+      pageTitle: 'Reports',
+      screenshotPath: '/tmp/reports.png',
+      message: 'ready',
+      updatedAt: '2026-07-03T08:00:00.000Z',
+    };
+    const runtime = new StudioRuntime(vi.fn(), {
+      start: vi.fn(),
+      navigate: vi.fn(),
+      click: vi.fn(),
+      input: vi.fn(),
+      capture: vi.fn<() => Promise<BrowserSessionState>>().mockResolvedValue(currentState),
+      captureObservation: vi.fn().mockResolvedValue({
+        textSummary: '成交趋势',
+        domSummary: '页面文本约 4 字符；发现 0 个关键可交互元素、0 个表格、1 个图表。',
+        interactiveElements: [],
+        consoleMessages: [],
+        networkHints: [],
+        tables: [],
+        charts: [{
+          index: 1,
+          title: '成交趋势',
+          kind: 'canvas',
+          width: 640,
+          height: 240,
+          dataPoints: [
+            { series: '买入', label: '二月', value: 180 },
+            { series: '卖出', label: '二月', value: 120 },
+          ],
+          seriesTrends: [
+            { series: '买入', trend: 'rising' },
+            { series: '卖出', trend: 'falling' },
+          ],
+        }],
+      }),
+      getState: () => currentState,
+    });
+    const request = (prompt: string) => runtime.sendChatCommand({
+      mode: 'aiAssert',
+      prompt,
+      targetEnvironment: 'staging',
+      deepThink: true,
+      deepLocate: false,
+      runtimeProfile: { browser: 'chromium', baseUrl: 'https://example.test', viewport: 'desktop', locale: 'zh-CN', headless: false },
+    });
+
+    const passedResponse = await request('断言图表「成交趋势」系列 买入 数据点 二月 为 180');
+    const failedResponse = await request('断言图表系列 卖出 数据点 二月 为 180');
+    const seriesResponse = await request('断言图表「成交趋势」系列包含 买入');
+    const missingSeriesResponse = await request('断言图表系列包含 持仓');
+    const dataSeriesResponse = await request('断言图表数据区域包含 买入');
+    const trendResponse = await request('断言图表「成交趋势」系列 买入 趋势上升');
+    const failedTrendResponse = await request('断言图表系列 买入 趋势下降');
+    const passedVerification = passedResponse.agentRun?.events.find((event) => event.type === 'agent:assertion-result')?.verification;
+    const failedVerification = failedResponse.agentRun?.events.find((event) => event.type === 'agent:assertion-result')?.verification;
+
+    expect(passedResponse.agentRun?.status).toBe('passed');
+    expect(passedVerification?.summary).toContain('图表系列数据点「买入 / 二月 = 180」已通过');
+    expect(passedVerification?.evidence).toContain('买入 / 二月 = 180 / 卖出 / 二月 = 120');
+    expect(failedResponse.agentRun?.status).toBe('failed');
+    expect(failedVerification?.failureReason).toContain('图表系列「卖出」数据点「二月」不等于「180」');
+    expect(seriesResponse.agentRun?.status).toBe('passed');
+    expect(seriesResponse.agentRun?.events.find((event) => event.type === 'agent:assertion-result')?.verification?.evidence).toContain(
+      '成交趋势：买入 / 卖出',
+    );
+    expect(missingSeriesResponse.agentRun?.status).toBe('failed');
+    expect(missingSeriesResponse.agentRun?.events.find((event) => event.type === 'agent:assertion-result')?.verification?.failureReason).toContain(
+      '图表系列不包含「持仓」',
+    );
+    expect(dataSeriesResponse.agentRun?.status).toBe('passed');
+    expect(trendResponse.agentRun?.status).toBe('passed');
+    expect(trendResponse.agentRun?.events.find((event) => event.type === 'agent:assertion-result')?.verification?.evidence).toContain(
+      '买入 上升 / 卖出 下降',
+    );
+    expect(failedTrendResponse.agentRun?.status).toBe('failed');
+    expect(failedTrendResponse.agentRun?.events.find((event) => event.type === 'agent:assertion-result')?.verification?.failureReason).toContain(
+      '图表系列「买入」趋势不匹配「下降」',
+    );
   });
 
   it('attaches enriched browser observation data to agent run events', async () => {

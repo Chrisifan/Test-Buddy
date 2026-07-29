@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { ArtifactManager } from './artifact-manager.js';
 import { BrowserRuntime } from './browser-runtime.js';
@@ -14,7 +14,9 @@ describe('BrowserRuntime page access', () => {
     document.body.innerHTML = `
       <main>
         <h1>成交统计</h1>
-        <table aria-label="订单列表">
+        <section data-table-container>
+          <select data-filter="状态"><option>全部</option><option selected>成功</option></select>
+          <table aria-label="订单列表" aria-rowcount="36" data-current-page="2" data-total-pages="4" data-page-size="10">
           <thead>
             <tr><th>交易对</th><th aria-sort="descending">成交量</th><th>状态</th></tr>
           </thead>
@@ -22,12 +24,18 @@ describe('BrowserRuntime page access', () => {
             <tr><td>BTC/USDT</td><td>120</td><td>成功</td></tr>
             <tr><td>ETH/USDT</td><td>80</td><td>处理中</td></tr>
           </tbody>
-        </table>
+          <tfoot><tr><td>合计</td><td data-aggregate="成交量" data-aggregate-value="200">200</td><td></td></tr></tfoot>
+          </table>
+          <nav data-pagination><button aria-current="page">2</button> / 4</nav>
+        </section>
         <section aria-label="成交趋势" data-chart="trend">
           <h2>成交趋势</h2>
           <canvas width="640" height="240"></canvas>
           <span class="legend">买入</span>
           <span class="legend">卖出</span>
+          <span data-point="一月" data-value="120"></span>
+          <span data-point="二月" data-value="180"></span>
+          <div role="tooltip" data-chart-for="trend">二月成交量：180</div>
         </section>
         <svg aria-label="资产分布" width="320" height="180"></svg>
       </main>
@@ -47,6 +55,12 @@ describe('BrowserRuntime page access', () => {
         rowCount: 2,
         columnCount: 3,
         headers: ['交易对', '成交量', '状态'],
+        filters: [{ label: '状态', value: '成功' }],
+        pagination: { currentPage: 2, totalPages: 4, totalItems: 36, pageSize: 10 },
+        aggregates: [
+          { label: '交易对', value: '合计' },
+          { label: '成交量', value: '200' },
+        ],
         sortStates: [{ column: '成交量', direction: 'descending' }],
         sampleRows: [
           ['BTC/USDT', '120', '成功'],
@@ -63,6 +77,12 @@ describe('BrowserRuntime page access', () => {
         height: 240,
         rendered: true,
         legends: ['买入', '卖出'],
+        tooltip: '二月成交量：180',
+        dataPoints: [
+          { label: '一月', value: 120 },
+          { label: '二月', value: 180 },
+        ],
+        trend: 'rising',
       }),
       expect.objectContaining({
         index: 2,
@@ -75,6 +95,164 @@ describe('BrowserRuntime page access', () => {
     ]);
     expect(observation.domSummary).toContain('1 个表格');
     expect(observation.domSummary).toContain('2 个图表');
+  });
+
+  it('captures named chart series and avoids inferring a cross-series trend', async () => {
+    document.body.innerHTML = `
+      <main>
+        <section aria-label="成交趋势" data-chart="trend"><canvas width="640" height="240"></canvas>
+          <span data-series="买入" data-point="一月" data-value="120"></span>
+          <span data-series="卖出" data-point="一月" data-value="260"></span>
+          <span data-series-name="买入" data-point="二月" data-value="180"></span>
+          <span data-series-name="卖出" data-point="二月" data-value="140"></span>
+          <span data-series="卖出" data-series-trend="flat"></span>
+        </section>
+        <section aria-label="明确趋势" data-chart="explicit-trend" data-trend="falling"><canvas width="320" height="180"></canvas>
+          <span data-series="买入" data-point="一月" data-value="120"></span>
+          <span data-series="卖出" data-point="一月" data-value="260"></span>
+        </section>
+      </main>
+    `;
+    const runtime = new BrowserRuntime('/tmp/playtest-browser-runtime-test', new ArtifactManager('/tmp'));
+    const page = { evaluate: async (script: () => unknown) => script() };
+    (runtime as unknown as { page: typeof page }).page = page;
+
+    const observation = await runtime.captureObservation();
+
+    expect(observation.charts?.[0]).toMatchObject({
+      title: '成交趋势',
+      dataPoints: [
+        { series: '买入', label: '一月', value: 120 },
+        { series: '卖出', label: '一月', value: 260 },
+        { series: '买入', label: '二月', value: 180 },
+        { series: '卖出', label: '二月', value: 140 },
+      ],
+    });
+    expect(observation.charts?.[0]?.trend).toBeUndefined();
+    expect(observation.charts?.[0]?.seriesTrends).toEqual([
+      { series: '买入', trend: 'rising' },
+      { series: '卖出', trend: 'flat' },
+    ]);
+    expect(observation.charts?.[1]?.trend).toBe('falling');
+  });
+
+  it('inspects explicit DOM selectors without treating hidden elements as visible', async () => {
+    document.body.innerHTML = `
+      <main>
+        <p id="summary" data-state="ready">登录成功</p>
+        <button id="save" hidden>保存</button>
+      </main>
+    `;
+    const runtime = new BrowserRuntime('/tmp/playtest-browser-runtime-test', new ArtifactManager('/tmp'));
+    const page = {
+      evaluate: async <T>(
+        script: (payload: { selector: string; attributeName?: string }) => T,
+        payload: { selector: string; attributeName?: string },
+      ) => script(payload),
+    };
+    (runtime as unknown as { page: typeof page }).page = page;
+
+    await expect(runtime.inspectDom('#summary')).resolves.toEqual({
+      selector: '#summary',
+      found: true,
+      visible: true,
+      text: '登录成功',
+    });
+    await expect(runtime.inspectDom('#save')).resolves.toEqual({ selector: '#save', found: true, visible: false, text: '保存' });
+    await expect(runtime.inspectDom('#summary', 'data-state')).resolves.toEqual({
+      selector: '#summary',
+      found: true,
+      visible: true,
+      text: '登录成功',
+      attribute: { name: 'data-state', value: 'ready' },
+    });
+    await expect(runtime.inspectDom('#missing')).resolves.toEqual({ selector: '#missing', found: false, visible: false });
+  });
+
+  it('captures ARIA data grids through the same structured table contract', async () => {
+    document.body.innerHTML = `
+      <section data-table-container>
+        <select data-filter="状态"><option>全部</option><option selected>活跃</option></select>
+        <div role="grid" aria-label="会员列表" aria-rowcount="36" data-current-page="2" data-total-pages="4" data-page-size="10">
+          <div role="row">
+            <span role="columnheader">会员</span>
+            <span role="columnheader" aria-sort="ascending">积分</span>
+            <span role="columnheader">状态</span>
+          </div>
+          <div role="row">
+            <span role="gridcell">Ada</span><span role="gridcell">120</span><span role="gridcell">活跃</span>
+          </div>
+          <div role="row">
+            <span role="gridcell">Lin</span><span role="gridcell">80</span><span role="gridcell">活跃</span>
+          </div>
+        </div>
+        <nav data-pagination><button aria-current="page">2</button> / 4</nav>
+      </section>
+    `;
+    const runtime = new BrowserRuntime('/tmp/playtest-browser-runtime-test', new ArtifactManager('/tmp'));
+    const page = { evaluate: async (script: () => unknown) => script() };
+    (runtime as unknown as { page: typeof page }).page = page;
+
+    const observation = await runtime.captureObservation();
+
+    expect(observation.tables).toEqual([
+      {
+        index: 1,
+        caption: '会员列表',
+        rowCount: 2,
+        columnCount: 3,
+        headers: ['会员', '积分', '状态'],
+        filters: [{ label: '状态', value: '活跃' }],
+        pagination: { currentPage: 2, totalPages: 4, totalItems: 36, pageSize: 10 },
+        sortStates: [{ column: '积分', direction: 'ascending' }],
+        sampleRows: [
+          ['Ada', '120', '活跃'],
+          ['Lin', '80', '活跃'],
+        ],
+      },
+    ]);
+  });
+
+  it('captures explicitly marked custom div data grids without relying on class names', async () => {
+    document.body.innerHTML = `
+      <section>
+        <div
+          data-grid
+          data-label="结算列表"
+          data-current-page="1"
+          data-total-pages="3"
+          data-total-items="24"
+          data-page-size="8"
+        >
+          <div data-row><span data-column-header>客户</span><span data-column-header data-sort="descending">金额</span></div>
+          <div data-row><span data-cell>Northwind</span><span data-cell>320</span></div>
+          <div data-row><span data-cell>Contoso</span><span data-cell>180</span></div>
+          <div data-aggregate="金额" data-aggregate-value="500">500</div>
+        </div>
+      </section>
+    `;
+    const runtime = new BrowserRuntime('/tmp/playtest-browser-runtime-test', new ArtifactManager('/tmp'));
+    const page = { evaluate: async (script: () => unknown) => script() };
+    (runtime as unknown as { page: typeof page }).page = page;
+
+    const observation = await runtime.captureObservation();
+
+    expect(observation.tables).toEqual([
+      {
+        index: 1,
+        caption: '结算列表',
+        rowCount: 2,
+        columnCount: 2,
+        headers: ['客户', '金额'],
+        pagination: { currentPage: 1, totalPages: 3, totalItems: 24, pageSize: 8 },
+        aggregates: [{ label: '金额', value: '500' }],
+        sortStates: [{ column: '金额', direction: 'descending' }],
+        sampleRows: [
+          ['Northwind', '320'],
+          ['Contoso', '180'],
+        ],
+      },
+    ]);
   });
 
   it('executes wait, waitForSelector, waitForNetworkIdle, waitForResponse, select, and scroll helpers against the current page', async () => {
@@ -145,6 +323,11 @@ describe('BrowserRuntime page access', () => {
   it('waits until chart evidence remains stable on the current page', async () => {
     const runtime = new BrowserRuntime('/tmp/playtest-browser-runtime-test', new ArtifactManager('/tmp'));
     const calls: string[] = [];
+    const drawImage = vi.fn();
+    const getContext = vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({
+      drawImage,
+      getImageData: () => ({ data: new Uint8ClampedArray([10, 20, 30, 255]) }),
+    } as unknown as CanvasRenderingContext2D);
     document.body.innerHTML = `
       <section id="sales-chart" aria-label="销售趋势">
         <canvas width="640" height="240"></canvas>
@@ -171,9 +354,16 @@ describe('BrowserRuntime page access', () => {
       currentUrl: 'https://example.test/dashboard',
     };
 
-    await runtime.waitForChartStable({ selector: '#sales-chart', timeoutMs: 500, stableMs: 0 });
+    try {
+      await runtime.waitForChartStable({ selector: '#sales-chart', timeoutMs: 500, stableMs: 0 });
+    } finally {
+      getContext.mockRestore();
+    }
 
-    expect(calls).toEqual(['evaluate:#sales-chart']);
+    expect(calls).toEqual(['evaluate:#sales-chart', 'evaluate:#sales-chart', 'evaluate:#sales-chart']);
+    expect(drawImage).toHaveBeenCalledTimes(1);
+    expect(document.querySelector('#sales-chart')?.hasAttribute('data-testbuddy-chart-stability-lock')).toBe(false);
+    expect(document.querySelector('[id^="testbuddy-chart-stability-"]')).toBeNull();
   });
 
   it('waits until table data is ready on the current page', async () => {

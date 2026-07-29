@@ -13,27 +13,44 @@
 - 录制事件和录制回放 runner 雏形。
 - PRD 到路径/用例/录制草稿的基础链路。
 - 自然语言 Agent 已进入 `Intent -> Plan -> Execute -> Observe -> Verify -> RunRecord` 的最小链路。
-- 当前最小 Executor 已支持明确 URL 的 `navigate`、明确 selector 的 `click/input/select`、可等待 selector / 特定接口响应 / 图表稳定 / 数据就绪 / network idle / 固定 timeout 的条件化 `wait`、基础 `scroll`，以及基于 Observer 的宽泛 `extract` 与基于 Midscene `aiQuery` 的目标化 `extract`。
+- 当前最小 Executor 已支持明确 URL 的 `navigate`、明确 selector 的 `click/input/select`、可等待 selector / 特定接口响应 / 图表稳定 / 数据就绪 / network idle / 固定 timeout 的条件化 `wait`、基础 `scroll`，以及基于 Observer 的宽泛 `extract` 与基于 Midscene `aiQuery` 的目标化 `extract`；直接提交的自然语言 `select`、条件 `wait`、`scroll` 与 `aiQuery` 也会分别解析执行意图并回显运行证据，不再依赖 Planner 先生成对应步骤。
 - semantic click / input / assert 已具备可替换执行 contract，并能区分成功、失败和等待状态。
 - Midscene `PlaywrightAgent` adapter 已绑定当前 BrowserRuntime Page，并在 Main Process 完成装配。
 - Midscene 单动作耗时、模型调用量和 token usage 已进入 Agent Run 与运行记录，异常动作也会保留指标。
 - Workflow 已转换为统一父级 Agent plan，顺序执行自然语言步骤并聚合事件、产物、指标和失败状态。
 - 浏览器 fallback 的 Workflow 只生成等待态，不再模拟通过。
-- Recording 已支持从录制页直接进入统一 Agent Run，真实回放节点并配对基线/实际截图证据；可比 PNG 截图会进行逐像素对比并生成差异图，差异会使回放失败，不可比截图保持 `neutral`。每条录制可配置 `0–100%` 的视觉差异阈值，默认 `0%` 保持严格比较。
+- Recording 已支持从录制页直接进入统一 Agent Run，真实回放节点并配对基线/实际截图证据；可比 PNG 截图会进行逐像素对比并生成差异图，差异会使回放失败，不可比截图保持 `neutral`。每条录制可配置 `0–100%` 的视觉差异阈值，默认 `0%` 保持严格比较；也可用截图相对坐标设置动态区域遮罩，遮罩像素不参与差异比例计算。
 - Planner 已接入 OpenAI-compatible 模型调用，可生成经过白名单校验的结构化计划并顺序驱动现有执行链。
 - 每个模型计划步骤都会生成独立 action、observation、verification 和 artifact 证据；`failed` 或 `neutral` 会停止后续步骤。
 - Planner 配置缺失、请求失败或响应非法时会降级为规则规划并记录原因；执行器缺失或语义选择尚未接入时保持 `neutral`。
 - 浏览器执行类步骤失败或进入等待态时已支持配置上限内的多轮 Planner 重规划，并记录实际重规划次数。
+- 每次成功重规划都会保留旧计划截至失败步骤的完整执行证据，并以 `agent:plan-revised` 串联前后计划；恢复成功仍只按最终计划结果保持 `passed`。
+- 重规划历史会保留动态等待、重试、selector fallback、观察、验证、浏览器状态、截图和报告产物；产物按路径跨轮次去重，Reporter 在失败或等待态运行中接收结构化重规划上下文。
 - 带明确 selector/URL 的确定性浏览器步骤会在重规划前进行一次同计划重试，并记录重试事件与实际重试次数；明确 selector 的动作重试前会按 `selector visible -> network idle -> timeout` 的顺序做一次动态等待；断言失败不会自动重试。
 - 明确 selector 的 `click/input/select` 在同计划重试失败后，会基于 Observer 的可交互元素做最多 3 个受控 selector fallback，并记录 fallback 事件与次数。
 - 确定性浏览器步骤失败时已生成结构化 `failureCategory`，可区分 selector、timeout、navigation、network、assertion、runtime 和 unknown，并映射为 `recoveryStrategy`：selector 建议替换 selector，timeout/network 建议等待就绪，navigation 建议重规划导航，assertion 建议停止并报告，runtime 建议等待后重试，unknown 建议从当前状态重规划。分类和策略会写入重试事件、验证结果与 Planner 重规划上下文。
 - `waitForReadiness` 策略已开始驱动恢复路径：timeout/network 类失败在同计划重试前，如果失败上下文明确涉及 table/list/grid/data/chart 等数据加载语义，会优先等待页面数据就绪；其余情况等待页面网络空闲，而不是只使用固定 500ms 等待。
+- 图表稳定等待会在目标区域临时冻结 CSS/SVG 动画与过渡，并将 Canvas 的低分辨率像素签名纳入稳定判断；等待结束后自动移除冻结样式，避免影响后续交互。
 - `replanNavigation` 策略已开始驱动恢复路径：导航失败不会盲目重试同一个坏 URL，而是直接把失败分类、策略和当前页面观察交给 Planner 重规划。
 - `replaceSelector` 策略已开始驱动恢复路径：明确 selector 找不到时不会重复点击同一个坏 selector，而是直接进入受控 selector fallback；没有可靠候选时再交给 Planner 重规划。
 - `replanFromCurrentState` 策略已开始驱动恢复路径：浏览器明确报告未知或不确定状态时，不会重复执行可能已产生副作用的动作，而是携带当前页面观察直接交给 Planner 生成后续计划；仍在加载、渲染等可识别的瞬时执行异常保持动态等待重试。
+- Verifier 已支持从结构化表格观察中判断原生/明确标注的筛选状态、当前页、总页数、总条数、每页条数和 `tfoot` 聚合值；缺少对应 DOM 信号时断言保持失败，不会猜测通过。
+- Observer 已将原生 `<table>` 与标准 ARIA `role="grid"` / `role="table"` 归一为同一表格观察 contract，因此现有行列、单元格、排序、筛选和分页断言可直接用于语义数据网格。
+- 显式标注 `data-grid` / `data-table`、`data-column-header`、`data-row`、`data-cell` 与可选 `data-aggregate` 的自定义 `div` 网格也会归一到同一 contract；不依赖 class 名或整页布局猜测数据网格。
+- 多表页面可在自然语言断言中用带引号的表格标题限定目标（例如 `断言表格「订单列表」行数为 2`）；标题严格匹配观察到的 caption，避免其他表格意外满足条件。
+- 多图表页面可用带引号的标题限定目标（例如 `断言图表「成交趋势」图例包含 买入`）；标题严格匹配观察到的图表标题，避免其他图表意外满足条件。
+- Verifier 已支持图表系列存在性断言（例如 `断言图表「成交趋势」系列包含 买入`）；系列名来自显式数据点或系列趋势，且与图表标题限定共同生效。
+- Verifier 已支持指定图表数据点的标签和值关联断言（例如 `断言图表数据点 二月 为 180`），避免“标签存在、数值也存在但并非同一点”时误判通过。
+- Verifier 已支持按系列、标签和值关联图表数据点（例如 `断言图表「成交趋势」系列 买入 数据点 二月 为 180`）；显式 `data-series` / `data-series-name` 与数据点必须同时匹配，避免同标签的不同系列互相误判。
+- Verifier 已支持按指定系列验证趋势（例如 `断言图表「成交趋势」系列 买入 趋势上升`）；优先采用组件显式 `data-series-trend`，否则才从该系列至少两个显式数值点推导，系列间不会相互影响。
+- Verifier 已支持从关联的可见 tooltip、显式 `data-point` / `data-chart-value` 数据点，以及显式或单系列单调数列趋势中生成图表证据；多个不同系列交错时仅接受显式 `data-trend`，不从混合数值猜测图表趋势。
+- Verifier 已支持明确 CSS selector 的 DOM 存在、可见性、文本包含与单属性等值断言；无效 selector、未连接浏览器或隐藏元素都会留下失败证据，不会被当作语义断言默认通过。
 - Verifier 已接入独立 OpenAI-compatible 模型路由，处理规则断言覆盖不了的复杂语义断言，并保留确定性断言优先级。
 - Reporter 已接入独立 OpenAI-compatible 模型路由，可为失败/等待态运行生成证据摘要、失败归因和修复建议。
-- Reporter Markdown 和 HTML 已持久化为运行 artifact；运行记录可通过受控 IPC 打开或导出应用管理目录内的本地报告，渲染进程不能借此访问任意本地路径。跨证据链导航仍待补齐。
+- Reporter Markdown 和 HTML 已持久化为运行 artifact；运行记录可通过受控 IPC 打开或导出应用管理目录内的本地报告，渲染进程不能借此访问任意本地路径。
+- 运行记录已提供运行内证据链：可从 Agent 事件流定位同一节点的页面观察、验证依据、浏览器状态、截图预览和同步骤产物，并对受控本地产物执行打开或导出。
+- 运行智能分析已按可见运行样本对结构化失败原因做保守聚类，并展示高频失败模式及样本数；仅归并空白和末尾标点差异，不猜测语义等价原因。
+- 运行智能分析会在至少 4 条带时间戳样本时比较近期与早期窗口的失败率，展示上升、下降或稳定趋势；样本不足时明确显示而不推断风险走向。
 
 更详细的当前状态见：
 
@@ -224,8 +241,8 @@ Intent -> Plan -> Execute -> Observe -> Verify -> Report -> Asset
 1. 用真实模型和业务页面验收 Planner 多步骤执行与 semantic click、semantic input、semantic assert，核验耗时、usage、报告与失败证据。
 2. 在已完成的动态等待、特定接口响应等待、图表稳定判断、数据就绪判断、失败分类、恢复策略建议、`waitForReadiness`、`replanNavigation` 和 `replaceSelector` 策略驱动、条件化 wait、单次确定性动作重试、受控 selector fallback 和配置上限内多轮重规划基础上，继续让更多恢复策略直接驱动路径选择。
 3. 以真实业务页面验收语义 `select` 与目标化 `extract`：核验原生/自定义下拉框表现，以及 `aiQuery` 返回值、报告、usage 和失败证据。
-4. 在已完成受控本地报告打开与导出的基础上，补齐跨证据链导航入口。
-5. 在已完成严格像素视觉 diff 和每录制差异阈值的基础上，补充动态区域遮罩和图表动画稳定策略。
+4. 在已完成运行内证据链导航、重规划历史关联、受控本地报告打开与导出的基础上，以真实业务页面验收报告、截图、trace 与步骤事件的关联完整性。
+5. 在已完成图表动画稳定策略的基础上，以真实图表页面验收 CSS、SVG 与 Canvas 动画的稳定判定、耗时和失败证据。
 
 ## 11. 风险与应对
 
@@ -254,7 +271,7 @@ Intent -> Plan -> Execute -> Observe -> Verify -> Report -> Asset
 
 应对：
 
-- 优先实现表格文本/行列断言。
+- 表格专项断言优先采用表格范围内的结构化 DOM 信号，避免从整页文本推断筛选、分页或聚合状态。
 - 图表先做存在性、标题、图例、tooltip 和数据区域断言。
 - 后续再做更复杂视觉对比。
 

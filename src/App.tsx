@@ -12,6 +12,9 @@ import {
   Workflow,
 } from 'lucide-react';
 
+import testbuddyHammerBot from './assets/testbuddy-hammer-bot.png';
+import testbuddyHammerBotDark from './assets/testbuddy-hammer-bot-dark.png';
+
 import {
   createEmptyGroup,
   createEmptyProject,
@@ -173,6 +176,7 @@ export function App() {
         ? 'dark'
         : 'light'
       : appearance.themeMode;
+  const brandLogo = effectiveTheme === 'dark' ? testbuddyHammerBotDark : testbuddyHammerBot;
   const effectiveLocale = resolveLocale(appearance.localeMode, systemLanguage);
   const t = createTranslator(effectiveLocale);
   useEffect(() => {
@@ -240,6 +244,10 @@ export function App() {
     document.documentElement.classList.toggle('dark', effectiveTheme === 'dark');
     document.documentElement.dataset.theme = effectiveTheme;
     document.documentElement.lang = effectiveLocale;
+    const favicon = document.querySelector<HTMLLinkElement>('link[rel="icon"]');
+    if (favicon) {
+      favicon.href = `./testbuddy-icon-${effectiveTheme}.png`;
+    }
   }, [effectiveLocale, effectiveTheme]);
 
   useEffect(() => {
@@ -1551,18 +1559,16 @@ export function App() {
 
   return (
     <I18nProvider locale={effectiveLocale}>
-    <div className="grid h-screen grid-cols-[256px_minmax(0,1fr)] overflow-hidden bg-background text-foreground max-md:grid-cols-1 max-md:grid-rows-[auto_minmax(0,1fr)]">
-      <nav aria-label={t('app.nav.main')} className="app-rail flex min-h-0 shrink-0 flex-col px-3 pb-4 pt-7 max-md:hidden">
+    <div className="grid h-screen grid-cols-[224px_minmax(0,1fr)] overflow-hidden bg-background text-foreground max-md:grid-cols-1 max-md:grid-rows-[auto_minmax(0,1fr)]">
+      <nav aria-label={t('app.nav.main')} className="app-rail flex min-h-0 shrink-0 flex-col px-3 pb-4 pt-11 max-md:hidden">
         <button
-          className="nav-brand flex cursor-pointer items-center gap-3 px-3 text-left transition hover:opacity-92"
+          className="nav-brand flex cursor-pointer items-center gap-2.5 px-2 text-left transition hover:opacity-92"
           onClick={() => goToPage('home')}
           type="button"
         >
-          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[6px] bg-primary font-mono text-xs font-black tracking-[-0.06em] text-primary-foreground">
-            TB
-          </span>
+          <img alt="" className="h-10 w-10 shrink-0 rounded-[8px] object-cover shadow-sm" src={brandLogo} />
           <span className="min-w-0">
-            <span className="block truncate text-[20px] font-black leading-6 tracking-[-0.04em] text-primary">TestBuddy</span>
+            <span className="block truncate text-[18px] font-black leading-6 tracking-[-0.04em] text-primary">TestBuddy</span>
             <span className="block truncate font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">{t('app.brand.subtitle')}</span>
           </span>
         </button>
@@ -1595,11 +1601,12 @@ export function App() {
 
       <nav aria-label={t('app.nav.mobileMain')} className="app-rail hidden items-center justify-between px-3 py-2 max-md:flex">
         <button
-          className="flex h-10 w-10 items-center justify-center rounded-[4px] bg-primary font-mono text-sm font-black text-primary-foreground"
+          aria-label="TestBuddy"
+          className="flex h-10 w-10 items-center justify-center overflow-hidden rounded-[8px] shadow-sm"
           onClick={() => goToPage('home')}
           type="button"
         >
-          TB
+          <img alt="" className="h-full w-full object-cover" src={brandLogo} />
         </button>
         <div className="flex items-center gap-1">
           <NavButton active={activePage === 'home'} icon={<House className="h-4 w-4" />} label={t('app.nav.overview')} onClick={() => goToPage('home')} />

@@ -89,6 +89,20 @@ export interface AgentTableObservation {
   rowCount: number;
   columnCount: number;
   headers: string[];
+  filters?: Array<{
+    label: string;
+    value: string;
+  }>;
+  pagination?: {
+    currentPage?: number;
+    totalPages?: number;
+    totalItems?: number;
+    pageSize?: number;
+  };
+  aggregates?: Array<{
+    label: string;
+    value: string;
+  }>;
   sortStates?: Array<{
     column: string;
     direction: 'ascending' | 'descending' | 'none' | 'other';
@@ -104,7 +118,29 @@ export interface AgentChartObservation {
   height?: number;
   rendered?: boolean;
   legends: string[];
+  tooltip?: string;
+  dataPoints?: Array<{
+    series?: string;
+    label?: string;
+    value: number;
+  }>;
+  seriesTrends?: Array<{
+    series: string;
+    trend: 'rising' | 'falling' | 'flat' | 'mixed';
+  }>;
+  trend?: 'rising' | 'falling' | 'flat' | 'mixed';
   selectorHint?: string;
+}
+
+export interface AgentDomInspection {
+  selector: string;
+  found: boolean;
+  visible: boolean;
+  text?: string;
+  attribute?: {
+    name: string;
+    value?: string;
+  };
 }
 
 export interface AgentObservation {
@@ -214,8 +250,21 @@ export interface AgentBrowserSessionSnapshot {
   screenshotPath?: string;
 }
 
+export interface AgentPlanRevision {
+  cycle: number;
+  previousPlanTitle: string;
+  revisedPlanTitle: string;
+  triggerStepId: string;
+  triggerStepTitle: string;
+  triggerStatus: AgentRunStatus;
+  failureReason?: string;
+  failureCategory?: AgentFailureCategory;
+  recoveryStrategy?: AgentRecoveryStrategy;
+}
+
 export type AgentRunEventType =
   | 'agent:plan-created'
+  | 'agent:plan-revised'
   | 'agent:step-started'
   | 'agent:dynamic-wait'
   | 'agent:step-retried'
@@ -235,6 +284,7 @@ export interface AgentRunEvent {
   status: AgentRunStatus;
   stepId?: string;
   plan?: AgentPlan;
+  planRevision?: AgentPlanRevision;
   observation?: AgentObservation;
   verification?: AgentVerification;
   artifact?: AgentArtifact;

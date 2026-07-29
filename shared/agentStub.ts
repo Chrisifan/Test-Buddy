@@ -3,6 +3,7 @@ import {
   type AgentPlan,
   type AgentPlanDraft,
   type AgentPlanProvenance,
+  type AgentPlanRevision,
   type AgentArtifact,
   type AgentDynamicWaitAttempt,
   type AgentExecutionMetrics,
@@ -114,6 +115,14 @@ export interface PlannedAgentStepExecution {
   selectorFallbackAttempts?: AgentSelectorFallbackAttempt[];
 }
 
+export interface PlannedAgentReplanningRecord {
+  cycle: number;
+  previousPlan: AgentPlanDraft;
+  revisedPlan: AgentPlanDraft;
+  executions: PlannedAgentStepExecution[];
+  failedStepIndex: number;
+}
+
 export interface PlannedAgentRunRequest {
   mode: AgentStubRequest['mode'];
   prompt: string;
@@ -125,6 +134,7 @@ export interface PlannedAgentRunRequest {
   plannedPlan: AgentPlanDraft;
   planner: AgentPlanProvenance;
   executions: PlannedAgentStepExecution[];
+  replanningHistory?: PlannedAgentReplanningRecord[];
   executionMetrics?: AgentExecutionMetrics;
   modelAssignments?: AgentModelAssignment[];
 }
@@ -457,6 +467,27 @@ export function createPlannedAgentRun(request: PlannedAgentRunRequest): AgentRun
     planner: request.planner,
     createdAt: now,
   };
+  const replanningHistory = request.replanningHistory ?? [];
+  const historicalStepsByCycle = new Map<number, AgentStep[]>(
+    replanningHistory.map((record) => [
+      record.cycle,
+      record.previousPlan.steps.map((step, index) => ({
+        ...step,
+        id: `${runId}-replan-${record.cycle}-step-${index + 1}`,
+        sourceStepType: modeToSourceStepType(request.mode),
+      })),
+    ]),
+  );
+  const initialHistory = replanningHistory[0];
+  const initialPlan: AgentPlan = initialHistory
+    ? {
+        ...plan,
+        title: initialHistory.previousPlan.title,
+        summary: initialHistory.previousPlan.summary,
+        steps: [prepareStep, ...(historicalStepsByCycle.get(initialHistory.cycle) ?? []), verificationStep],
+        risks: initialHistory.previousPlan.risks,
+      }
+    : plan;
   const failedExecution = request.executions.find((execution) => execution.status === 'failed');
   const executedStepIndexes = new Set(request.executions.map((execution) => execution.stepIndex));
   const hasPending =
@@ -470,14 +501,14 @@ export function createPlannedAgentRun(request: PlannedAgentRunRequest): AgentRun
       runId,
       type: 'agent:plan-created',
       message: [
-        plan.summary,
+        initialPlan.summary,
         formatPlannerProvenance(request.planner),
         formatModelAssignments(request.modelAssignments),
       ]
         .filter(Boolean)
         .join('；'),
       status: 'running',
-      plan,
+      plan: initialPlan,
       createdAt: now,
     },
   ];
@@ -491,166 +522,211 @@ export function createPlannedAgentRun(request: PlannedAgentRunRequest): AgentRun
   ];
   const artifactPaths = new Set<string>();
 
-  request.executions.forEach((execution) => {
-    const step = plannedSteps[execution.stepIndex];
-    if (!step) {
-      return;
-    }
-    events.push({
-      id: `${runId}-event-step-${execution.stepIndex}-started`,
-      runId,
-      type: 'agent:step-started',
-      stepId: step.id,
-      message: `执行计划步骤：${step.title}`,
-      status: 'running',
-      createdAt: now,
-    });
-    execution.dynamicWaitAttempts?.forEach((attempt, attemptIndex) => {
+  const appendExecutionEvents = (
+    steps: AgentStep[],
+    executions: PlannedAgentStepExecution[],
+    idNamespace?: string,
+  ) => {
+    executions.forEach((execution) => {
+      const step = steps[execution.stepIndex];
+      if (!step) {
+        return;
+      }
+      const stepIdentifier = idNamespace
+        ? `${idNamespace}-step-${execution.stepIndex + 1}`
+        : `step-${execution.stepIndex}`;
+      const entityIdentifier = idNamespace ? stepIdentifier : `${execution.stepIndex}`;
+      const eventId = (suffix: string) => `${runId}-event-${stepIdentifier}-${suffix}`;
+      const observationId = `${runId}-observation-${entityIdentifier}`;
+      const verificationId = `${runId}-verification-${entityIdentifier}`;
       events.push({
-        id: `${runId}-event-step-${execution.stepIndex}-dynamic-wait-${attemptIndex + 1}`,
+        id: eventId('started'),
         runId,
-        type: 'agent:dynamic-wait',
+        type: 'agent:step-started',
         stepId: step.id,
-        message: `计划步骤「${step.title}」等待页面稳定 ${attempt.timeoutMs}ms；${attempt.summary}`,
-        status: attempt.status === 'failed' ? 'failed' : 'running',
-        dynamicWait: attempt,
-        createdAt: now,
-      });
-    });
-    execution.retryAttempts?.forEach((attempt, attemptIndex) => {
-      events.push({
-        id: `${runId}-event-step-${execution.stepIndex}-retry-${attemptIndex + 1}`,
-        runId,
-        type: 'agent:step-retried',
-        stepId: step.id,
-        message: `计划步骤「${step.title}」开始第 ${attemptIndex + 1} 次重试；上次结果：${attempt.summary}`,
+        message: `执行计划步骤：${step.title}`,
         status: 'running',
-        retryAttempt: attempt,
         createdAt: now,
       });
-    });
-    execution.selectorFallbackAttempts?.forEach((attempt, attemptIndex) => {
-      events.push({
-        id: `${runId}-event-step-${execution.stepIndex}-selector-fallback-${attemptIndex + 1}`,
-        runId,
-        type: 'agent:selector-fallback',
-        stepId: step.id,
-        message: `计划步骤「${step.title}」尝试 selector fallback：${attempt.originalSelector} -> ${attempt.candidateSelector}；${attempt.summary}`,
-        status: attempt.status === 'failed' ? 'failed' : 'running',
-        selectorFallback: attempt,
-        createdAt: now,
+      execution.dynamicWaitAttempts?.forEach((attempt, attemptIndex) => {
+        events.push({
+          id: eventId(`dynamic-wait-${attemptIndex + 1}`),
+          runId,
+          type: 'agent:dynamic-wait',
+          stepId: step.id,
+          message: `计划步骤「${step.title}」等待页面稳定 ${attempt.timeoutMs}ms；${attempt.summary}`,
+          status: attempt.status === 'failed' ? 'failed' : 'running',
+          dynamicWait: attempt,
+          createdAt: now,
+        });
       });
-    });
-    events.push({
-      id: `${runId}-event-step-${execution.stepIndex}-browser-action`,
-      runId,
-      type: 'agent:browser-action',
-      stepId: step.id,
-      message: execution.browserActionMessage ?? execution.summary,
-      status: execution.status === 'failed' ? 'failed' : 'running',
-      ...(execution.browserSession ? { browserSession: execution.browserSession } : {}),
-      createdAt: now,
-    });
-
-    if (execution.browserSession || execution.observation) {
-      const observation: AgentObservation = {
-        id: `${runId}-observation-${execution.stepIndex}`,
-        stepId: step.id,
-        url: execution.browserSession?.currentUrl ?? request.targetUrl ?? '',
-        title: execution.browserSession?.pageTitle ?? step.title,
-        ...(execution.browserSession?.screenshotPath
-          ? { screenshotPath: execution.browserSession.screenshotPath }
-          : {}),
-        ...execution.observation,
-        createdAt: now,
-      };
+      execution.retryAttempts?.forEach((attempt, attemptIndex) => {
+        events.push({
+          id: eventId(`retry-${attemptIndex + 1}`),
+          runId,
+          type: 'agent:step-retried',
+          stepId: step.id,
+          message: `计划步骤「${step.title}」开始第 ${attemptIndex + 1} 次重试；上次结果：${attempt.summary}`,
+          status: 'running',
+          retryAttempt: attempt,
+          createdAt: now,
+        });
+      });
+      execution.selectorFallbackAttempts?.forEach((attempt, attemptIndex) => {
+        events.push({
+          id: eventId(`selector-fallback-${attemptIndex + 1}`),
+          runId,
+          type: 'agent:selector-fallback',
+          stepId: step.id,
+          message: `计划步骤「${step.title}」尝试 selector fallback：${attempt.originalSelector} -> ${attempt.candidateSelector}；${attempt.summary}`,
+          status: attempt.status === 'failed' ? 'failed' : 'running',
+          selectorFallback: attempt,
+          createdAt: now,
+        });
+      });
       events.push({
-        id: `${runId}-event-step-${execution.stepIndex}-observation`,
+        id: eventId('browser-action'),
         runId,
-        type: 'agent:observation-created',
+        type: 'agent:browser-action',
         stepId: step.id,
-        message: observation.domSummary ?? execution.summary,
+        message: execution.browserActionMessage ?? execution.summary,
         status: execution.status === 'failed' ? 'failed' : 'running',
-        observation,
         ...(execution.browserSession ? { browserSession: execution.browserSession } : {}),
         createdAt: now,
       });
-    }
 
-    const stepArtifactCandidates: Array<Omit<AgentArtifact, 'id'>> = [
-      ...(execution.browserSession?.screenshotPath
-        ? [
-            {
-              type: 'screenshot' as const,
-              label: `${step.title} · 页面截图`,
-              path: execution.browserSession.screenshotPath,
-            },
-          ]
-        : []),
-      ...(execution.reportArtifactPath
-        ? [
-            {
-              type: 'report' as const,
-              label: `${step.title} · Midscene 报告`,
-              path: execution.reportArtifactPath,
-            },
-          ]
-        : []),
-    ];
-    stepArtifactCandidates.forEach((candidate, artifactIndex) => {
-      if (artifactPaths.has(candidate.path)) {
-        return;
+      if (execution.browserSession || execution.observation) {
+        const observation: AgentObservation = {
+          id: observationId,
+          stepId: step.id,
+          url: execution.browserSession?.currentUrl ?? request.targetUrl ?? '',
+          title: execution.browserSession?.pageTitle ?? step.title,
+          ...(execution.browserSession?.screenshotPath
+            ? { screenshotPath: execution.browserSession.screenshotPath }
+            : {}),
+          ...execution.observation,
+          createdAt: now,
+        };
+        events.push({
+          id: eventId('observation'),
+          runId,
+          type: 'agent:observation-created',
+          stepId: step.id,
+          message: observation.domSummary ?? execution.summary,
+          status: execution.status === 'failed' ? 'failed' : 'running',
+          observation,
+          ...(execution.browserSession ? { browserSession: execution.browserSession } : {}),
+          createdAt: now,
+        });
       }
-      artifactPaths.add(candidate.path);
-      const artifact: AgentArtifact = {
-        ...candidate,
-        id: `${runId}-artifact-${execution.stepIndex}-${artifactIndex}`,
-      };
-      artifacts.push(artifact);
+
+      const stepArtifactCandidates: Array<Omit<AgentArtifact, 'id'>> = [
+        ...(execution.browserSession?.screenshotPath
+          ? [
+              {
+                type: 'screenshot' as const,
+                label: `${step.title} · 页面截图`,
+                path: execution.browserSession.screenshotPath,
+              },
+            ]
+          : []),
+        ...(execution.reportArtifactPath
+          ? [
+              {
+                type: 'report' as const,
+                label: `${step.title} · Midscene 报告`,
+                path: execution.reportArtifactPath,
+              },
+            ]
+          : []),
+      ];
+      stepArtifactCandidates.forEach((candidate, artifactIndex) => {
+        if (artifactPaths.has(candidate.path)) {
+          return;
+        }
+        artifactPaths.add(candidate.path);
+        const artifact: AgentArtifact = {
+          ...candidate,
+          id: `${runId}-artifact-${entityIdentifier}-${artifactIndex}`,
+        };
+        artifacts.push(artifact);
+        events.push({
+          id: eventId(`artifact-${artifactIndex}`),
+          runId,
+          type: 'agent:artifact-created',
+          stepId: step.id,
+          message: `${artifact.label}已归档。`,
+          status: execution.status === 'failed' ? 'failed' : 'running',
+          artifact,
+          createdAt: now,
+        });
+      });
+
       events.push({
-        id: `${runId}-event-step-${execution.stepIndex}-artifact-${artifactIndex}`,
+        id: eventId('verification'),
         runId,
-        type: 'agent:artifact-created',
+        type: 'agent:assertion-result',
         stepId: step.id,
-        message: `${artifact.label}已归档。`,
-        status: execution.status === 'failed' ? 'failed' : 'running',
-        artifact,
+        message: execution.summary,
+        status: execution.status,
+        verification: {
+          id: verificationId,
+          stepId: step.id,
+          status: execution.status,
+          summary: execution.summary,
+          evidence: execution.evidence,
+          ...(execution.failureReason ? { failureReason: execution.failureReason } : {}),
+          ...(execution.failureCategory ? { failureCategory: execution.failureCategory } : {}),
+          ...(execution.recoveryStrategy ? { recoveryStrategy: execution.recoveryStrategy } : {}),
+          createdAt: now,
+        },
         createdAt: now,
       });
+      if (execution.status === 'failed') {
+        events.push({
+          id: eventId('failed'),
+          runId,
+          type: 'agent:step-failed',
+          stepId: step.id,
+          message: execution.failureReason ?? execution.summary,
+          status: 'failed',
+          createdAt: now,
+        });
+      }
     });
+  };
 
+  replanningHistory.forEach((record) => {
+    const historicalSteps = historicalStepsByCycle.get(record.cycle) ?? [];
+    appendExecutionEvents(historicalSteps, record.executions, `replan-${record.cycle}`);
+    const triggerExecution = record.executions.find((execution) => execution.stepIndex === record.failedStepIndex);
+    const triggerStep = historicalSteps[record.failedStepIndex];
+    if (!triggerExecution || !triggerStep) {
+      return;
+    }
+    const planRevision: AgentPlanRevision = {
+      cycle: record.cycle,
+      previousPlanTitle: record.previousPlan.title,
+      revisedPlanTitle: record.revisedPlan.title,
+      triggerStepId: triggerStep.id,
+      triggerStepTitle: triggerStep.title,
+      triggerStatus: triggerExecution.status,
+      ...(triggerExecution.failureReason ? { failureReason: triggerExecution.failureReason } : {}),
+      ...(triggerExecution.failureCategory ? { failureCategory: triggerExecution.failureCategory } : {}),
+      ...(triggerExecution.recoveryStrategy ? { recoveryStrategy: triggerExecution.recoveryStrategy } : {}),
+    };
     events.push({
-      id: `${runId}-event-step-${execution.stepIndex}-verification`,
+      id: `${runId}-event-plan-revised-${record.cycle}`,
       runId,
-      type: 'agent:assertion-result',
-      stepId: step.id,
-      message: execution.summary,
-      status: execution.status,
-      verification: {
-        id: `${runId}-verification-${execution.stepIndex}`,
-        stepId: step.id,
-        status: execution.status,
-        summary: execution.summary,
-        evidence: execution.evidence,
-        ...(execution.failureReason ? { failureReason: execution.failureReason } : {}),
-        ...(execution.failureCategory ? { failureCategory: execution.failureCategory } : {}),
-        ...(execution.recoveryStrategy ? { recoveryStrategy: execution.recoveryStrategy } : {}),
-        createdAt: now,
-      },
+      type: 'agent:plan-revised',
+      message: `第 ${record.cycle} 次重规划：${record.previousPlan.title} -> ${record.revisedPlan.title}`,
+      status: 'neutral',
+      stepId: triggerStep.id,
+      planRevision,
       createdAt: now,
     });
-    if (execution.status === 'failed') {
-      events.push({
-        id: `${runId}-event-step-${execution.stepIndex}-failed`,
-        runId,
-        type: 'agent:step-failed',
-        stepId: step.id,
-        message: execution.failureReason ?? execution.summary,
-        status: 'failed',
-        createdAt: now,
-      });
-    }
   });
+  appendExecutionEvents(plannedSteps, request.executions);
 
   const verificationSummary =
     status === 'passed'

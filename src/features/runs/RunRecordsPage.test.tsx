@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { RunRecordsPage } from './RunRecordsPage.js';
@@ -55,6 +55,110 @@ describe('RunRecordsPage', () => {
     expect(screen.queryByText('Quality Signal')).not.toBeInTheDocument();
   });
 
+  it('clusters equivalent failure reasons across visible runs', () => {
+    const state = createInitialStudioState();
+    const project = state.projects[0];
+    const failureReason = '验证码遮罩导致登录按钮定位失败。';
+    const firstRun: RunDetail = {
+      id: 'run-cluster-1',
+      projectId: project.id,
+      testCaseId: project.testCases[0]!.id,
+      environmentId: project.environments[0]!.id,
+      title: '登录流程 A',
+      status: 'failed',
+      startedAt: new Date(0).toISOString(),
+      endedAt: new Date(0).toISOString(),
+      duration: '00:00:12',
+      summary: failureReason,
+      failureReason,
+      logs: [],
+      steps: [],
+      artifacts: [],
+    };
+    const secondRun: RunDetail = {
+      ...firstRun,
+      id: 'run-cluster-2',
+      title: '登录流程 B',
+      failureReason: '验证码遮罩导致登录按钮定位失败',
+    };
+    const firstSummary = {
+      ...state.recentRuns[0]!,
+      id: firstRun.id,
+      projectId: project.id,
+      testCaseId: firstRun.testCaseId,
+      environmentId: firstRun.environmentId,
+      name: firstRun.title,
+      status: 'failed' as const,
+      summary: failureReason,
+    };
+    const secondSummary = {
+      ...firstSummary,
+      id: secondRun.id,
+      name: secondRun.title,
+      summary: secondRun.failureReason!,
+    };
+
+    render(
+      <RunRecordsPage
+        onSelectRun={vi.fn()}
+        project={project}
+        recentRuns={[firstSummary, secondSummary]}
+        runDetails={[firstRun, secondRun]}
+        selectedRunId={firstRun.id}
+      />,
+    );
+
+    expect(screen.getByText('失败模式')).toBeInTheDocument();
+    expect(screen.getAllByText(failureReason)).toHaveLength(2);
+    expect(screen.getByText('2 次')).toBeInTheDocument();
+    expect(screen.queryByText('2 个模式')).not.toBeInTheDocument();
+  });
+
+  it('derives a failure trend from chronological run samples', () => {
+    const state = createInitialStudioState();
+    const project = state.projects[0];
+    const statuses: Array<'passed' | 'failed'> = ['passed', 'passed', 'failed', 'failed'];
+    const summaries = statuses.map((status, index) => ({
+      ...state.recentRuns[0]!,
+      id: `run-trend-${index}`,
+      projectId: project.id,
+      testCaseId: project.testCases[0]!.id,
+      environmentId: project.environments[0]!.id,
+      name: `趋势样本 ${index + 1}`,
+      status,
+      startedAt: new Date(index * 60_000).toISOString(),
+      summary: status === 'failed' ? '登录失败' : '登录成功',
+    }));
+    const selectedDetail: RunDetail = {
+      id: summaries[0]!.id,
+      projectId: project.id,
+      testCaseId: project.testCases[0]!.id,
+      environmentId: project.environments[0]!.id,
+      title: summaries[0]!.name,
+      status: summaries[0]!.status,
+      startedAt: summaries[0]!.startedAt!,
+      endedAt: summaries[0]!.startedAt,
+      duration: '00:00:01',
+      summary: summaries[0]!.summary,
+      logs: [],
+      steps: [],
+      artifacts: [],
+    };
+
+    render(
+      <RunRecordsPage
+        onSelectRun={vi.fn()}
+        project={project}
+        recentRuns={summaries}
+        runDetails={[selectedDetail]}
+        selectedRunId={selectedDetail.id}
+      />,
+    );
+
+    expect(screen.getByText('失败趋势')).toBeInTheDocument();
+    expect(screen.getByText('失败率上升 · +100%')).toBeInTheDocument();
+  });
+
   it('shows structured agent evidence for natural language runs', () => {
     const state = createInitialStudioState();
     const project = state.projects[0];
@@ -82,6 +186,9 @@ describe('RunRecordsPage', () => {
             rowCount: 2,
             columnCount: 3,
             headers: ['交易对', '成交量', '状态'],
+            filters: [{ label: '状态', value: '成功' }],
+            pagination: { currentPage: 2, totalPages: 4, totalItems: 36, pageSize: 10 },
+            aggregates: [{ label: '成交量', value: '200' }],
             sortStates: [{ column: '成交量', direction: 'descending' }],
             sampleRows: [['BTC/USDT', '120', '成功']],
           },
@@ -95,6 +202,13 @@ describe('RunRecordsPage', () => {
             height: 240,
             rendered: true,
             legends: ['买入', '卖出'],
+            tooltip: '二月成交量：180',
+            dataPoints: [
+              { series: '买入', label: '一月', value: 120 },
+              { series: '买入', label: '二月', value: 180 },
+            ],
+            seriesTrends: [{ series: '买入', trend: 'rising' }],
+            trend: 'rising',
           },
         ],
       },
@@ -146,6 +260,86 @@ describe('RunRecordsPage', () => {
         },
       },
     });
+    const historicalStepId = 'historical-step';
+    const historicalScreenshot = {
+      id: `${agentRun.runId}-artifact-historical-screenshot`,
+      type: 'screenshot' as const,
+      label: '旧计划失败截图',
+      path: '/tmp/navigation-failed.png',
+    };
+    agentRun.artifacts.push(historicalScreenshot);
+    agentRun.events.push(
+      {
+        id: `${agentRun.runId}-event-historical-observation`,
+        runId: agentRun.runId,
+        type: 'agent:observation-created',
+        message: '仍停留在起始页',
+        status: 'failed',
+        stepId: historicalStepId,
+        observation: {
+          id: `${agentRun.runId}-observation-historical`,
+          stepId: historicalStepId,
+          url: 'https://example.test/start',
+          title: 'Start',
+          screenshotPath: historicalScreenshot.path,
+          domSummary: '仍停留在起始页',
+          createdAt: agentRun.startedAt,
+        },
+        browserSession: {
+          status: 'ready',
+          currentUrl: 'https://example.test/start',
+          pageTitle: 'Start',
+          screenshotPath: historicalScreenshot.path,
+        },
+        createdAt: agentRun.startedAt,
+      },
+      {
+        id: `${agentRun.runId}-event-historical-verification`,
+        runId: agentRun.runId,
+        type: 'agent:assertion-result',
+        message: 'Navigation failed: net::ERR_NAME_NOT_RESOLVED',
+        status: 'failed',
+        stepId: historicalStepId,
+        verification: {
+          id: `${agentRun.runId}-verification-historical`,
+          stepId: historicalStepId,
+          status: 'failed',
+          summary: '导航失败',
+          evidence: 'Navigation failed: net::ERR_NAME_NOT_RESOLVED',
+          createdAt: agentRun.startedAt,
+        },
+        createdAt: agentRun.startedAt,
+      },
+      {
+        id: `${agentRun.runId}-event-historical-artifact`,
+        runId: agentRun.runId,
+        type: 'agent:artifact-created',
+        message: '旧计划失败截图已归档。',
+        status: 'failed',
+        stepId: historicalStepId,
+        artifact: historicalScreenshot,
+        createdAt: agentRun.startedAt,
+      },
+      {
+        id: `${agentRun.runId}-event-plan-revised-1`,
+        runId: agentRun.runId,
+        type: 'agent:plan-revised',
+        message: '第 1 次重规划：旧计划 -> 新计划',
+        status: 'neutral',
+        stepId: historicalStepId,
+        planRevision: {
+          cycle: 1,
+          previousPlanTitle: '旧计划',
+          revisedPlanTitle: '新计划',
+          triggerStepId: historicalStepId,
+          triggerStepTitle: '进入工作台',
+          triggerStatus: 'failed',
+          failureCategory: 'navigation',
+          recoveryStrategy: 'replanNavigation',
+        },
+        createdAt: agentRun.startedAt,
+      },
+    );
     const runDetail: RunDetail = {
       id: agentRun.runId,
       projectId: project.id,
@@ -187,15 +381,19 @@ describe('RunRecordsPage', () => {
     );
 
     expect(screen.getByText('Execution Evidence')).toBeInTheDocument();
-    expect(screen.getByText('登录成功 工作台 报表总览')).toBeInTheDocument();
+    expect(screen.getAllByText('登录成功 工作台 报表总览').length).toBeGreaterThan(0);
     expect(screen.getByText('button "导出" #export')).toBeInTheDocument();
     expect(screen.getByText('Table: 订单列表')).toBeInTheDocument();
     expect(screen.getByText('2 rows / 3 columns')).toBeInTheDocument();
     expect(screen.getByText('交易对 · 成交量 · 状态')).toBeInTheDocument();
     expect(screen.getByText('Sort: 成交量 descending')).toBeInTheDocument();
+    expect(screen.getByText('Filters: 状态 = 成功')).toBeInTheDocument();
+    expect(screen.getByText('Pagination: page 2 / 4 · 36 items · 10 per page')).toBeInTheDocument();
+    expect(screen.getByText('Aggregates: 成交量 = 200')).toBeInTheDocument();
     expect(screen.getByText('BTC/USDT · 120 · 成功')).toBeInTheDocument();
     expect(screen.getByText('Chart: 成交趋势')).toBeInTheDocument();
     expect(screen.getByText('canvas · 640x240 · Rendered · Legends: 买入 / 卖出')).toBeInTheDocument();
+    expect(screen.getByText('Tooltip: 二月成交量：180 · Data: 买入 / 一月 = 120 / 买入 / 二月 = 180 · Series trends: 买入 Rising · Trend: Rising')).toBeInTheDocument();
     expect(screen.getAllByText('页面包含「登录成功」已通过。').length).toBeGreaterThan(0);
     expect(screen.getByText('error: chart render failed once')).toBeInTheDocument();
     expect(screen.getByText('GET https://example.test/api/chart -> net::ERR_FAILED')).toBeInTheDocument();
@@ -211,6 +409,19 @@ describe('RunRecordsPage', () => {
     expect(screen.getByText('Retried 1 time')).toBeInTheDocument();
     expect(screen.getByText('Dynamic wait 1 time')).toBeInTheDocument();
     expect(screen.getByText('Selector fallback 1 time')).toBeInTheDocument();
+    expect(screen.getByText('Evidence Trail')).toBeInTheDocument();
+    expect(screen.getByText('Selected Evidence')).toBeInTheDocument();
+    fireEvent.click(screen.getAllByRole('button', { name: 'Inspect agent:assertion-result evidence' })[0]!);
+    expect(screen.getByText('Verification Evidence')).toBeInTheDocument();
+    expect(screen.getByText('页面文本长度 12，期望片段：登录成功')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Inspect agent:plan-revised evidence' }));
+    expect(screen.getAllByText('仍停留在起始页').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Navigation failed: net::ERR_NAME_NOT_RESOLVED').length).toBeGreaterThan(0);
+    expect(screen.getByText('https://example.test/start')).toBeInTheDocument();
+    expect(screen.getByRole('img', { name: 'Evidence screenshot preview' })).toHaveAttribute(
+      'src',
+      'file:///tmp/navigation-failed.png',
+    );
     expect(screen.getByRole('button', { name: 'Open Midscene 执行报告' })).not.toHaveAttribute('href');
     expect(screen.getByRole('button', { name: 'Export Midscene 执行报告' })).toBeInTheDocument();
   });

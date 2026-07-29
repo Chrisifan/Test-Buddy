@@ -108,4 +108,39 @@ describe('RecordingPage', () => {
     const updater = onUpdateRecording.mock.calls[0]?.[0] as (current: typeof recording) => typeof recording;
     expect(updater(recording)).toEqual(expect.objectContaining({ visualDiffThreshold: 0.15 }));
   });
+
+  it('adds a screenshot-relative dynamic region mask to the recording asset', () => {
+    const state = createInitialStudioState();
+    const project = state.projects[0];
+    const recording = project.recordings[0];
+    const onUpdateRecording = vi.fn();
+
+    render(
+      <RecordingPage
+        browserSession={state.browserSession}
+        browserSessionMessage={state.browserSession.message}
+        environment={project.environments[0]}
+        isReplaying={false}
+        onAppendStep={vi.fn()}
+        onCaptureSnapshot={vi.fn()}
+        onCreateRecording={vi.fn()}
+        onCreateTestCaseFromRecording={vi.fn()}
+        onDeleteRecording={vi.fn()}
+        onImportPlayback={vi.fn()}
+        onRunRecording={vi.fn()}
+        onSelectRecording={vi.fn()}
+        onStartRecording={vi.fn()}
+        onUpdateRecording={onUpdateRecording}
+        project={project}
+        recording={recording}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: '添加动态区域遮罩' }));
+
+    const updater = onUpdateRecording.mock.calls[0]?.[0] as (current: typeof recording) => typeof recording;
+    expect(updater(recording)).toEqual(expect.objectContaining({
+      visualDiffMasks: [expect.objectContaining({ label: '动态区域 1', x: 0, y: 0, width: 10, height: 10 })],
+    }));
+  });
 });
