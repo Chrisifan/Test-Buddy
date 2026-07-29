@@ -47,7 +47,7 @@ describe('TestCaseManagementPage', () => {
   it('uses Chinese case workbench controls by default', () => {
     renderPage();
 
-    expect(screen.getByText('用例编排工作台')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 1, name: '用例工作台' })).toBeInTheDocument();
     expect(screen.getByText('搜索用例...')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '运行用例' })).toBeInTheDocument();
     expect(screen.getByText('设置')).toBeInTheDocument();

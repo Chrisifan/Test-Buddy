@@ -107,8 +107,6 @@ export function NaturalLanguagePage({
             {sessionActive ? t('nl.session.stop') : t('nl.session.start')}
           </Button>
         }
-        description={t('nl.header.description')}
-        eyebrow={t('nl.header.eyebrow')}
         meta={[
           t('nl.meta.mode', { mode: getModeLabel(commandMode, t) }),
           t('nl.meta.environment', { environment: getEnvironmentLabel(targetEnvironment, t) }),

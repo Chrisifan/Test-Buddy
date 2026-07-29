@@ -50,7 +50,7 @@ describe('RunRecordsPage', () => {
     expect(screen.getByText('核心链路 · 1/3 失败')).toBeInTheDocument();
     expect(screen.getByText('Staging · 1/3 失败')).toBeInTheDocument();
     expect(screen.getByText('最近失败原因：验证码遮罩导致登录按钮定位失败。')).toBeInTheDocument();
-    expect(screen.getByText('运行智能分析')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 1, name: '运行记录' })).toBeInTheDocument();
     expect(screen.getByText('运行列表')).toBeInTheDocument();
     expect(screen.queryByText('Quality Signal')).not.toBeInTheDocument();
   });
@@ -442,7 +442,6 @@ describe('RunRecordsPage', () => {
       </I18nProvider>,
     );
 
-    expect(screen.getByText('Run Intelligence')).toBeInTheDocument();
     expect(screen.getByRole('heading', { level: 1, name: 'Run Records' })).toBeInTheDocument();
     expect(screen.getByText('Runs')).toBeInTheDocument();
   });

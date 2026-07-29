@@ -29,7 +29,7 @@ describe('DocumentAnalysisPage', () => {
   it('uses Chinese document analysis controls by default', () => {
     renderPage();
 
-    expect(screen.getByText('PRD 分析实验室')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 1, name: '需求文档分析' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '筛选' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '最新优先' })).toBeInTheDocument();
     expect(screen.getByText('上传新文档')).toBeInTheDocument();

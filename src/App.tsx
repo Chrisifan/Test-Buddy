@@ -1619,7 +1619,7 @@ export function App() {
         </Button>
       </nav>
 
-      <div className="grid min-h-0 min-w-0 grid-rows-[56px_minmax(0,1fr)_42px] max-md:grid-rows-[minmax(0,1fr)]">
+      <div className="grid min-h-0 min-w-0 grid-rows-[56px_minmax(0,1fr)] max-md:grid-rows-[minmax(0,1fr)]">
         <header className="app-topbar flex items-center justify-between gap-4 px-6 max-md:hidden">
           <div className="app-search flex h-9 w-[min(320px,30vw)] items-center gap-2 rounded-full px-3">
             <Search className="h-4 w-4 text-muted-foreground" />
@@ -1661,12 +1661,9 @@ export function App() {
               browserSession={browserSession}
               onCreateProject={handleCreateProject}
               onGoToPage={goToPage}
-              onSelectProject={handleSelectProject}
               projects={projects}
               recentRuns={recentRuns}
               runtimeInfo={runtimeInfo}
-              selectedEnvironmentName={selectedEnvironment?.name ?? t('app.runtime.environmentMissing')}
-              selectedProject={selectedProject}
             />
           ) : null}
 

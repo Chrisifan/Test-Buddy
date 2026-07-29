@@ -32,7 +32,7 @@ describe('NaturalLanguagePage', () => {
       />,
     );
 
-    expect(screen.getByText('自然语言控制台')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 1, name: '自然语言测试' })).toBeInTheDocument();
     expect(screen.getByText('测试会话')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '保存为步骤' })).toBeInTheDocument();
     expect(screen.queryByText('Testing Session')).not.toBeInTheDocument();

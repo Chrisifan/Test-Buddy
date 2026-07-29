@@ -18,7 +18,7 @@ import {
   Trash2,
 } from 'lucide-react';
 
-import { EvidenceCard, PageBody, PageShell, Surface } from '../../components/workbench.js';
+import { EvidenceCard, PageBody, PageHeader, PageShell, Surface } from '../../components/workbench.js';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -91,21 +91,15 @@ export function ProjectManagementPage({
 
   return (
     <PageShell>
-      <header className="page-header motion-page-header project-overview-header">
-        <div>
-          <nav aria-label={t('project.overview.breadcrumbAria')} className="project-breadcrumb">
-            <span>{t('project.overview.breadcrumbRoot')}</span>
-            <span aria-hidden="true">/</span>
-            <span className="text-foreground">{t('project.overview.breadcrumbCurrent')}</span>
-          </nav>
-          <h1>{t('project.header.title')}</h1>
-          <p>{t('project.header.description')}</p>
-        </div>
+      <PageHeader
+        action={
         <Button className="project-create-button" onClick={onCreateProject} type="button">
           <Plus className="h-4 w-4" />
           {t('project.create')}
         </Button>
-      </header>
+        }
+        title={t('project.header.title')}
+      />
       <PageBody className="project-overview-scroll">
         <main className="project-overview" aria-label={t('project.overview.aria')}>
           <section aria-label={t('project.overview.summaryAria')} className="project-overview-metrics">

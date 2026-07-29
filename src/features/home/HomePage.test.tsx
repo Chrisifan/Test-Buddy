@@ -34,34 +34,35 @@ describe('HomePage', () => {
     expect(screen.getByText('工作区：默认')).toBeInTheDocument();
   });
 
-  it('shows project dashboard framing cues after a project is selected', () => {
+  it('shows workspace-wide dashboard framing cues when projects exist', () => {
     const project = createEmptyProject(1);
+    const secondProject = createEmptyProject(2);
 
     render(
       <HomePage
         browserSession={state.browserSession}
         onCreateProject={vi.fn()}
         onGoToPage={vi.fn()}
-        projects={[project]}
+        projects={[project, secondProject]}
         recentRuns={state.recentRuns}
-        selectedProject={project}
       />,
     );
 
-    expect(screen.getByRole('heading', { level: 1, name: '质量总览' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 1, name: '全局质量总览' })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { level: 1, name: project.name })).not.toBeInTheDocument();
-    expect(screen.getByLabelText('工作台主体')).toBeInTheDocument();
-    expect(screen.getByLabelText('路径回放时间线')).toBeInTheDocument();
-    expect(screen.getAllByText(project.name).length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText('项目总览')).toBeInTheDocument();
-    expect(screen.getByText('项目健康')).toBeInTheDocument();
+    expect(screen.getByLabelText('全局工作台主体')).toBeInTheDocument();
+    expect(screen.getByLabelText('全局质量洞察')).toBeInTheDocument();
+    expect(screen.queryByText('工作区内 2 个项目')).not.toBeInTheDocument();
+    expect(screen.getByText('工作区资产')).toBeInTheDocument();
+    expect(screen.getByText('整体健康')).toBeInTheDocument();
     expect(screen.getByText('覆盖指数')).toBeInTheDocument();
     expect(screen.getAllByTestId('home-summary-icon')).toHaveLength(6);
     expect(screen.getByText('录制')).toBeInTheDocument();
-    expect(screen.getByText('当前项目')).toBeInTheDocument();
+    expect(screen.getByText('汇总 2 个项目的运行结果')).toBeInTheDocument();
     expect(screen.getByText('测试入口')).toBeInTheDocument();
     expect(screen.getByText('自然语言测试')).toBeInTheDocument();
     expect(screen.getByText('图表与表格巡检')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '管理项目' })).not.toBeInTheDocument();
     expect(screen.queryByRole('heading', { level: 2, name: '测试路径流水线' })).not.toBeInTheDocument();
     expect(screen.queryByText('快捷入口')).not.toBeInTheDocument();
   });
@@ -77,15 +78,14 @@ describe('HomePage', () => {
           onGoToPage={vi.fn()}
           projects={[project]}
           recentRuns={[]}
-          selectedProject={project}
         />
       </I18nProvider>,
     );
 
-    expect(screen.getByRole('heading', { level: 1, name: 'Quality Overview' })).toBeInTheDocument();
-    expect(screen.getByText('Project Overview')).toBeInTheDocument();
-    expect(screen.getByText('Project Health')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 1, name: 'Global Quality Overview' })).toBeInTheDocument();
+    expect(screen.getByText('Workspace Assets')).toBeInTheDocument();
+    expect(screen.getByText('Overall Health')).toBeInTheDocument();
     expect(screen.getByText('Coverage Index')).toBeInTheDocument();
-    expect(screen.queryByText('质量总览')).not.toBeInTheDocument();
+    expect(screen.queryByText('全局质量总览')).not.toBeInTheDocument();
   });
 });

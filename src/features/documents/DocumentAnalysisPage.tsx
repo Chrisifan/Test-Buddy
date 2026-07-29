@@ -106,8 +106,6 @@ export function DocumentAnalysisPage({
   return (
     <PageShell>
       <PageHeader
-        description={t('documents.header.description')}
-        eyebrow={t('documents.header.eyebrow')}
         meta={[
           t('documents.meta.documents', { count: documents.length }),
           t('documents.meta.paths', { count: generatedCount }),

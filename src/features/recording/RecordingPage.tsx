@@ -115,8 +115,6 @@ export function RecordingPage({
     return (
       <PageShell>
         <PageHeader
-          description={t('recording.header.emptyDescription')}
-          eyebrow={t('recording.header.eyebrow')}
           title={t('app.nav.recording')}
         />
         <PageBody>
@@ -155,8 +153,6 @@ export function RecordingPage({
             </Button>
           </div>
         }
-        description={t('recording.header.description')}
-        eyebrow={t('recording.header.eyebrow')}
         meta={[
           t('recording.meta.assets', { count: project.recordings.length }),
           t('recording.meta.steps', { count: recording?.steps.length ?? 0 }),

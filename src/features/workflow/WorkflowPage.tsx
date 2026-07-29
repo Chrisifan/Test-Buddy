@@ -106,8 +106,6 @@ export function WorkflowPage({
             </Button>
           </div>
         }
-        description={t('workflow.header.description')}
-        eyebrow={t('workflow.header.eyebrow')}
         title={t('workflow.header.title')}
       />
 

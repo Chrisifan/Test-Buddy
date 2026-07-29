@@ -8,7 +8,6 @@ import type {
 import type { AppPage } from '../../app/pageMeta.js';
 
 import {
-  AlertTriangle,
   Bot,
   CheckCircle2,
   Clock3,
@@ -17,7 +16,6 @@ import {
   MousePointerClick,
   Plus,
   RadioTower,
-  Route,
   ScanSearch,
   ShieldCheck,
   Rocket,
@@ -28,14 +26,6 @@ import {
 
 import { StatusPill } from '../../components/StatusPill.js';
 import { PageBody, PageHeader, PageShell, Surface } from '../../components/workbench.js';
-import { Button } from '@/components/ui/button';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
 import { useI18n } from '../../i18n/index.js';
 
 function getSignalSummary(recentRuns: RunSummary[], t: (key: string) => string) {
@@ -72,12 +62,16 @@ function getSignalSummary(recentRuns: RunSummary[], t: (key: string) => string) 
   };
 }
 
-function getCoverageIndex(project: ProjectDraft, runs: RunSummary[]): number {
-  const assetScore =
-    project.groups.length * 6 +
-    project.testCases.length * 8 +
-    project.recordings.length * 10 +
-    project.documents.length * 8;
+function getCoverageIndex(projects: ProjectDraft[], runs: RunSummary[]): number {
+  const assetScore = projects.reduce(
+    (total, project) =>
+      total +
+      project.groups.length * 6 +
+      project.testCases.length * 8 +
+      project.recordings.length * 10 +
+      project.documents.length * 8,
+    0,
+  );
   const passScore = runs.length
     ? Math.round((runs.filter((run) => run.status === 'passed').length / runs.length) * 30)
     : 0;
@@ -139,29 +133,23 @@ function CompactStat({ label, value }: { label: string; value: string }) {
 
 export function HomePage({
   projects,
-  selectedProject,
   browserSession,
   recentRuns,
   runtimeInfo,
-  selectedEnvironmentName,
   onCreateProject,
   onGoToPage,
-  onSelectProject,
 }: {
   projects: ProjectDraft[];
-  selectedProject?: ProjectDraft;
   browserSession: BrowserSessionState;
   recentRuns: RunSummary[];
   runtimeInfo?: RuntimeInfo;
-  selectedEnvironmentName?: string;
   onCreateProject: () => void;
   onGoToPage: (page: AppPage) => void;
-  onSelectProject?: (projectId: string) => void;
 }) {
   const { t } = useI18n();
   const signal = getSignalSummary(recentRuns, t);
 
-  if (!projects.length || !selectedProject) {
+  if (!projects.length) {
     return (
       <section aria-label={t('home.empty.aria')} className="home-empty-shell">
         <main className="home-empty-main">
@@ -258,23 +246,32 @@ export function HomePage({
     );
   }
 
-  const projectRuns = recentRuns.filter((run) => !run.projectId || run.projectId === selectedProject.id);
-  const coverageIndex = getCoverageIndex(selectedProject, projectRuns);
-  const activeRuns = projectRuns.filter((run) => run.status === 'running').length;
-  const failedRuns = projectRuns.filter((run) => run.status === 'failed').length;
-  const passRate = projectRuns.length
-    ? Math.round((projectRuns.filter((run) => run.status === 'passed').length / projectRuns.length) * 100)
-    : 0;
-  const generatedPathCount = selectedProject.documents.reduce(
-    (total, document) => total + document.generatedPaths.length,
-    0,
+  const workspaceAssets = projects.reduce(
+    (total, project) => ({
+      groups: total.groups + project.groups.length,
+      environments: total.environments + project.environments.length,
+      testCases: total.testCases + project.testCases.length,
+      recordings: total.recordings + project.recordings.length,
+      documents: total.documents + project.documents.length,
+      generatedPaths: total.generatedPaths + project.documents.reduce(
+        (pathTotal, document) => pathTotal + document.generatedPaths.length,
+        0,
+      ),
+    }),
+    { groups: 0, environments: 0, testCases: 0, recordings: 0, documents: 0, generatedPaths: 0 },
   );
-  const latestRun = projectRuns[0];
+  const coverageIndex = getCoverageIndex(projects, recentRuns);
+  const activeRuns = recentRuns.filter((run) => run.status === 'running').length;
+  const failedRuns = recentRuns.filter((run) => run.status === 'failed').length;
+  const passRate = recentRuns.length
+    ? Math.round((recentRuns.filter((run) => run.status === 'passed').length / recentRuns.length) * 100)
+    : 0;
+  const latestRun = recentRuns[0];
   const pipeline = [
     {
       icon: <FileText className="h-4 w-4" />,
       title: t('home.pipeline.prd'),
-      description: t('home.pipeline.prdDescription', { count: selectedProject.documents.length }),
+      description: t('home.pipeline.prdDescription', { count: workspaceAssets.documents }),
       page: 'documents' as AppPage,
     },
     {
@@ -286,7 +283,7 @@ export function HomePage({
     {
       icon: <MousePointerClick className="h-4 w-4" />,
       title: t('home.pipeline.recording'),
-      description: t('home.pipeline.recordingDescription', { count: selectedProject.recordings.length }),
+      description: t('home.pipeline.recordingDescription', { count: workspaceAssets.recordings }),
       page: 'recording' as AppPage,
     },
   ];
@@ -307,45 +304,26 @@ export function HomePage({
       icon: <CheckCircle2 className="h-6 w-6" />,
       title: t('home.optimization.assets.title'),
       description: t('home.optimization.assets.description', {
-        cases: selectedProject.testCases.length,
-        recordings: selectedProject.recordings.length,
+        cases: workspaceAssets.testCases,
+        recordings: workspaceAssets.recordings,
       }),
       tone: 'cyan' as const,
     },
   ];
   const signalBars = [
-    selectedProject.testCases.length,
-    selectedProject.recordings.length,
-    selectedProject.groups.length,
-    selectedProject.documents.length,
-    generatedPathCount,
-    projectRuns.length,
+    workspaceAssets.testCases,
+    workspaceAssets.recordings,
+    workspaceAssets.groups,
+    workspaceAssets.documents,
+    workspaceAssets.generatedPaths,
+    recentRuns.length,
   ];
   const highestSignal = Math.max(...signalBars, 1);
 
   return (
     <PageShell className="home-dashboard">
       <PageHeader
-        action={
-          <div className="home-control-card w-[min(320px,calc(100vw-120px))] rounded-[4px] p-2 max-sm:w-full">
-          <p className="home-faint px-1 font-mono text-[10px] uppercase tracking-[0.12em]">{t('home.header.currentProject')}</p>
-          <Select onValueChange={onSelectProject} value={selectedProject.id}>
-            <SelectTrigger className="home-select mt-2 h-9 w-full rounded-[4px] border-0 px-3 shadow-none">
-              <SelectValue placeholder={t('home.header.switchProject')} />
-            </SelectTrigger>
-            <SelectContent>
-              {projects.map((project) => (
-                <SelectItem key={project.id} value={project.id}>
-                  {project.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          </div>
-        }
-        eyebrow={t('home.header.eyebrow')}
         title={t('home.header.title')}
-        description={t('home.header.description')}
       />
 
       <PageBody>
@@ -355,15 +333,15 @@ export function HomePage({
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <p className="home-faint font-mono text-[11px] uppercase tracking-[0.1em]">{t('home.overview.title')}</p>
-                  <p className="home-text mt-2 truncate text-sm font-semibold">{selectedProject.name}</p>
+                  <p className="home-text mt-2 truncate text-sm font-semibold">{t('home.overview.projectCount', { count: projects.length })}</p>
                 </div>
                 <StatGlyph testId="home-summary-icon" tone="cyan"><DatabaseZap className="h-5 w-5" /></StatGlyph>
               </div>
               <p className="home-muted mt-2 text-xs leading-5">
                 {t('home.overview.assetCount', {
-                  groups: selectedProject.groups.length,
-                  environments: selectedProject.environments.length,
-                  documents: selectedProject.documents.length,
+                  groups: workspaceAssets.groups,
+                  environments: workspaceAssets.environments,
+                  documents: workspaceAssets.documents,
                 })}
               </p>
             </DashboardCard>
@@ -374,12 +352,12 @@ export function HomePage({
               </div>
               <p className="home-faint mt-2 font-mono text-[11px] uppercase tracking-[0.1em]">{t('home.health.title')}</p>
               <p className="home-text mt-1 text-[24px] font-bold leading-none tracking-[-0.04em]">{signal.badge}</p>
-              <p className="home-muted mt-1.5 truncate text-xs">{selectedProject.name}</p>
+              <p className="home-muted mt-1.5 truncate text-xs">{t('home.health.projectCount', { count: projects.length })}</p>
             </DashboardCard>
             {[
               {
                 label: t('home.asset.cases'),
-                value: `${selectedProject.testCases.length}`,
+                value: `${workspaceAssets.testCases}`,
                 description: t('home.asset.casesDescription'),
                 Icon: FileText,
                 tone: 'blue' as const,
@@ -387,13 +365,13 @@ export function HomePage({
               {
                 label: t('home.health.passRate'),
                 value: `${passRate}%`,
-                description: t('home.health.assetCount', { groups: selectedProject.groups.length, cases: selectedProject.testCases.length }),
+                description: t('home.health.assetCount', { groups: workspaceAssets.groups, cases: workspaceAssets.testCases }),
                 Icon: CheckCircle2,
                 tone: 'cyan' as const,
               },
               {
                 label: t('home.asset.recordings'),
-                value: `${selectedProject.recordings.length}`,
+                value: `${workspaceAssets.recordings}`,
                 description: t('home.asset.recordingsDescription'),
                 Icon: MousePointerClick,
                 tone: 'amber' as const,
@@ -470,7 +448,7 @@ export function HomePage({
                   <div className="min-w-0"><p className="home-text text-sm font-semibold">{t('home.baseline.title')}</p><p className="home-muted mt-1 truncate text-xs">{signal.description}</p></div>
                 </div>
                 <div className="mt-4 grid grid-cols-3 gap-px overflow-hidden rounded-[6px] bg-border">
-                  <CompactStat label={t('home.baseline.environment')} value={selectedEnvironmentName ?? '-'} />
+                  <CompactStat label={t('home.baseline.environment')} value={`${workspaceAssets.environments}`} />
                   <CompactStat label={t('home.baseline.browser')} value={browserSession.status} />
                   <CompactStat label={t('home.baseline.runtime')} value={runtimeInfo?.platform ?? 'browser'} />
                 </div>

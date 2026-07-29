@@ -37,7 +37,7 @@ describe('RecordingPage', () => {
     fireEvent.click(screen.getByRole('button', { name: '运行回放' }));
 
     expect(onRunRecording).toHaveBeenCalledTimes(1);
-    expect(screen.getByText('录制回放工作台')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 1, name: '操作录制回放' })).toBeInTheDocument();
     expect(screen.getByText('受控浏览器')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '捕获快照' })).toBeInTheDocument();
     expect(screen.queryByText('Start Recording')).not.toBeInTheDocument();

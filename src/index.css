@@ -7,7 +7,9 @@
   --font-sans:
     "Geist", "Avenir Next", "PingFang SC", "Hiragino Sans GB", "Helvetica Neue",
     sans-serif;
-  --font-mono: "JetBrains Mono", "IBM Plex Mono", "SFMono-Regular", monospace;
+  /* Use one typeface across product UI, including labels and metadata. */
+  --font-mono: var(--font-sans);
+  --font-serif: var(--font-sans);
 
   --color-background: var(--background);
   --color-foreground: var(--foreground);
@@ -34,7 +36,7 @@
 }
 
 :root {
-  --background: #f8fafc;
+  --background: #ffffff;
   --foreground: #191b24;
   --card: #ffffff;
   --card-foreground: #191b24;
@@ -62,7 +64,7 @@
   --density-panel-padding: 0.875rem;
   --density-gap: 0.625rem;
   --workbench-shell: #ffffff;
-  --workbench-shell-2: #f8fafc;
+  --workbench-shell-2: #ffffff;
   --workbench-sidebar: #f7f9fc;
   --workbench-panel: #ffffff;
   --workbench-panel-2: #f1f4f9;
@@ -74,7 +76,7 @@
   --workbench-card-border: #d8d9e6;
   --workbench-card-shadow: rgba(28, 39, 68, 0.06);
   --workbench-dashboard-a: #ffffff;
-  --workbench-dashboard-b: #f8fafc;
+  --workbench-dashboard-b: #ffffff;
   --workbench-dashboard-c: #eef4ff;
   --workbench-accent-soft: rgba(0, 80, 203, 0.08);
   --workbench-accent-line: rgba(0, 80, 203, 0.32);
@@ -364,7 +366,7 @@
   }
 
   .app-main {
-    background: var(--background);
+    background: var(--workbench-shell);
     box-shadow: none;
   }
 
@@ -438,8 +440,10 @@
 
   .motion-page-body {
     animation: page-body-in var(--motion-duration-page) var(--motion-ease-emphasized) 70ms both;
+    padding-right: 0.75rem;
     scroll-behavior: smooth;
     scroll-padding-block: 18px;
+    scrollbar-gutter: stable;
   }
 
   .page-transition-frame {
@@ -462,8 +466,17 @@
     box-shadow: 0 1px 0 var(--border);
   }
 
-  .page-header > div:first-child {
-    padding-top: 0.125rem;
+  .page-header-statuses > * {
+    min-height: 1.375rem;
+    border-color: color-mix(in oklch, var(--border) 72%, transparent) !important;
+    border-radius: 3px !important;
+    background: color-mix(in oklch, var(--muted) 58%, var(--background)) !important;
+    padding: 0 0.5rem !important;
+    color: var(--muted-foreground) !important;
+    font-size: 0.6875rem !important;
+    font-weight: 600 !important;
+    line-height: 1.25rem !important;
+    box-shadow: none !important;
   }
 
   .form-cluster {
@@ -808,44 +821,6 @@
     width: min(100%, 1440px);
     margin: 0 auto;
     padding-bottom: 2rem;
-  }
-
-  .project-overview-header {
-    display: flex;
-    min-height: 84px;
-    align-items: end;
-    justify-content: space-between;
-    gap: 1.5rem;
-    padding-bottom: 0.75rem;
-  }
-
-  .project-breadcrumb {
-    display: flex;
-    gap: 0.5rem;
-    align-items: center;
-    color: var(--muted-foreground);
-    font-family: var(--font-mono);
-    font-size: 0.6875rem;
-    font-weight: 700;
-    letter-spacing: 0.055em;
-    line-height: 1rem;
-    text-transform: uppercase;
-  }
-
-  .project-overview-header h1 {
-    margin-top: 0.25rem;
-    color: var(--foreground);
-    font-size: 1.625rem;
-    font-weight: 700;
-    letter-spacing: -0.02em;
-    line-height: 2rem;
-  }
-
-  .project-overview-header p {
-    margin-top: 0.25rem;
-    color: var(--muted-foreground);
-    font-size: 0.875rem;
-    line-height: 1.25rem;
   }
 
   .project-create-button {
@@ -3054,13 +3029,6 @@
 
     .project-overview {
       padding-bottom: 1.25rem;
-    }
-
-    .project-overview-header {
-      min-height: 0;
-      align-items: start;
-      flex-direction: column;
-      gap: 1rem;
     }
 
     .project-overview-metrics,

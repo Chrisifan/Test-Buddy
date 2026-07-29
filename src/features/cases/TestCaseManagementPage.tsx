@@ -93,8 +93,6 @@ export function TestCaseManagementPage({
     return (
       <PageShell>
         <PageHeader
-          description={t('cases.header.emptyDescription')}
-          eyebrow={t('cases.header.eyebrow')}
           title={t('cases.header.title')}
         />
         <PageBody>
@@ -116,8 +114,6 @@ export function TestCaseManagementPage({
             {t('cases.action.create')}
           </Button>
         }
-        description={t('cases.header.description')}
-        eyebrow={t('cases.header.eyebrow')}
         meta={[
           t('cases.meta.project', { name: project.name }),
           t('cases.meta.group', { name: selectedGroup?.name ?? t('cases.meta.notSelected') }),

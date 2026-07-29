@@ -851,8 +851,6 @@ export function SettingsModal({
       <PageShell>
         <PageHeader
           action={pageAction}
-          description={t('settings.description')}
-          eyebrow={t('app.nav.settings')}
           title={t('settings.title')}
         />
         <PageBody className="settings-page-body">

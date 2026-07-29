@@ -349,8 +349,6 @@ export function RunRecordsPage({
   return (
     <PageShell>
       <PageHeader
-        description={t('runs.header.description')}
-        eyebrow={t('runs.header.eyebrow')}
         meta={[
           t('runs.meta.total', { count: runStats.total }),
           t('runs.meta.passed', { count: runStats.passed }),

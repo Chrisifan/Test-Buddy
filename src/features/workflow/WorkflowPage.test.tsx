@@ -38,7 +38,7 @@ describe('WorkflowPage', () => {
   it('uses Chinese workflow labels by default', () => {
     renderPage();
 
-    expect(screen.getByText('工作流编排')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 1, name: '流程编排测试' })).toBeInTheDocument();
     expect(screen.getByText('流程库')).toBeInTheDocument();
     expect(screen.getAllByRole('button', { name: '添加步骤' }).length).toBeGreaterThan(0);
     expect(screen.getByText('运行配置')).toBeInTheDocument();

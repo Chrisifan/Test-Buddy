@@ -25,29 +25,23 @@ function toneClass(tone: Tone): string {
 }
 
 export function PageHeader({
-  eyebrow,
   title,
-  description,
   action,
   meta,
 }: {
-  eyebrow: string;
   title: string;
-  description?: string;
   action?: ReactNode;
   meta?: ReactNode;
 }) {
   return (
-    <header className="page-header motion-page-header flex min-h-[72px] flex-wrap items-start justify-between gap-2 pb-2">
-      <div className="min-w-0 max-w-4xl">
-        <p className="font-mono text-[11px] font-semibold uppercase leading-4 tracking-[0.08em] text-primary">{eyebrow}</p>
-        <h1 className="mt-0.5 text-[24px] font-bold leading-7 tracking-[-0.02em] text-foreground">
-          {title}
-        </h1>
-        {description ? <p className="mt-0.5 max-w-3xl text-sm leading-5 text-muted-foreground">{description}</p> : null}
-        {meta ? <div className="mt-1.5 flex flex-wrap gap-1.5">{meta}</div> : null}
-      </div>
-      {action ? <div className="flex shrink-0 items-center gap-2">{action}</div> : null}
+    <header className="page-header motion-page-header flex min-h-12 flex-wrap items-center justify-between gap-3 pb-2">
+      <h1 className="min-w-0 truncate text-[20px] font-bold leading-6 tracking-[-0.02em] text-foreground">{title}</h1>
+      {(meta || action) ? (
+        <div className="page-header-actions flex shrink-0 flex-wrap items-center justify-end gap-2">
+          {meta ? <div className="page-header-statuses flex flex-wrap items-center justify-end gap-1.5">{meta}</div> : null}
+          {action ? <div className="flex flex-wrap items-center gap-2">{action}</div> : null}
+        </div>
+      ) : null}
     </header>
   );
 }
