@@ -5,6 +5,7 @@ export type ChatRole = 'system' | 'user' | 'assistant';
 export type CommandMode = 'ai' | 'aiAssert' | 'aiQuery';
 export type StepType = 'ai' | 'aiAssert' | 'aiQuery';
 export type TestStepType = StepType | 'recordingReplay' | 'manual';
+export type TestCaseRunBlocker = 'emptySteps' | 'emptyTitle' | 'emptyInstruction' | 'missingRecording';
 export type WorkflowKind = 'scenario' | 'assertion' | 'extraction';
 export type TestCaseKind = WorkflowKind | 'recording';
 export type BrowserEngine = 'chromium' | 'firefox' | 'webkit';
@@ -1520,6 +1521,86 @@ export function createStep(type: StepType, seed: number): WorkflowStepDraft {
           ? '描述你希望成立的页面状态。'
           : '描述你希望从页面提取的信息。',
   };
+}
+
+export function createTestStep(
+  type: TestStepType,
+  seed: number,
+  recording?: Pick<RecordingAsset, 'id' | 'name' | 'steps'>,
+): TestStepDraft {
+  if (type === 'ai' || type === 'aiAssert' || type === 'aiQuery') {
+    return createStep(type, seed);
+  }
+
+  return {
+    id: `step-${Date.now()}-${seed}`,
+    type,
+    title: type === 'recordingReplay' ? '录制回放步骤' : '人工检查步骤',
+    body:
+      type === 'recordingReplay'
+        ? recording
+          ? `回放录制资产「${recording.name}」，共 ${recording.steps.length} 个节点。`
+          : '选择一段录制资产并按顺序回放。'
+        : '记录需要人工确认的状态。',
+    ...(type === 'recordingReplay' && recording ? { recordingId: recording.id } : {}),
+  };
+}
+
+export function insertTestStep(steps: TestStepDraft[], step: TestStepDraft, index: number): TestStepDraft[] {
+  const insertionIndex = Math.max(0, Math.min(index, steps.length));
+  return [...steps.slice(0, insertionIndex), step, ...steps.slice(insertionIndex)];
+}
+
+export function moveTestStep(steps: TestStepDraft[], stepId: string, index: number): TestStepDraft[] {
+  const sourceIndex = steps.findIndex((step) => step.id === stepId);
+  if (sourceIndex < 0) {
+    return steps;
+  }
+
+  const nextSteps = [...steps];
+  const [step] = nextSteps.splice(sourceIndex, 1);
+  const requestedIndex = Math.max(0, Math.min(index, steps.length));
+  const insertionIndex = sourceIndex < requestedIndex ? requestedIndex - 1 : requestedIndex;
+  nextSteps.splice(insertionIndex, 0, step);
+  return nextSteps;
+}
+
+export function copyTestStep(steps: TestStepDraft[], stepId: string, copyId: string): TestStepDraft[] {
+  const sourceIndex = steps.findIndex((step) => step.id === stepId);
+  if (sourceIndex < 0) {
+    return steps;
+  }
+
+  return insertTestStep(steps, { ...steps[sourceIndex], id: copyId }, sourceIndex + 1);
+}
+
+export function removeTestStep(steps: TestStepDraft[], stepId: string): TestStepDraft[] {
+  return steps.filter((step) => step.id !== stepId);
+}
+
+export function getTestCaseRunBlocker(
+  testCase: TestCaseDraft,
+  recordings: RecordingAsset[],
+): TestCaseRunBlocker | undefined {
+  if (!testCase.steps.length) {
+    return 'emptySteps';
+  }
+
+  for (const step of testCase.steps) {
+    if (!step.title.trim()) {
+      return 'emptyTitle';
+    }
+
+    if (step.type === 'recordingReplay') {
+      if (!step.recordingId || !recordings.some((recording) => recording.id === step.recordingId)) {
+        return 'missingRecording';
+      }
+    } else if (!step.body.trim()) {
+      return 'emptyInstruction';
+    }
+  }
+
+  return undefined;
 }
 
 function normalizePrdDocument(rawDocument: PrdDocumentAsset): PrdDocumentAsset {
