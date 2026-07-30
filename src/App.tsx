@@ -24,13 +24,18 @@ import {
   createPrdDocumentAsset,
   createRecordingStep,
   createRecordingFromGeneratedPath,
-  createStep,
+  copyTestStep,
+  createTestStep,
   createTestCaseFromRecording,
   createTestCaseFromGeneratedPath,
   detachRecordingFromTestCases,
   findDefaultRecordingForCaseStep,
+  getTestCaseRunBlocker,
   initialRunLog,
+  insertTestStep,
   isMidsceneConfigured,
+  moveTestStep,
+  removeTestStep,
   testCaseToWorkflow,
   type AgentModelConfig,
   type AgentModelRole,
@@ -53,6 +58,7 @@ import {
   type StartupGuideState,
   type StudioState,
   type TestCaseDraft,
+  type TestCaseRunBlocker,
   type TestStepDraft,
   type WorkflowDraft,
   updatePrdDocumentAnalysis,
@@ -92,7 +98,11 @@ import {
 
 const initialState = createInitialStudioState();
 const PAGE_EXIT_DURATION_MS = 120;
+const SAVE_DEBOUNCE_MS = 350;
 const initialTranslator = createTranslator(resolveLocale(initialState.appearance.localeMode));
+
+type SaveMode = 'debounced' | 'immediate';
+type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
 
 function createTimestampLabel(): string {
   const now = new Date();
@@ -150,9 +160,15 @@ export function App() {
   const [runTitle, setRunTitle] = useState(initialTranslator('app.runtime.notRun'));
   const [runId, setRunId] = useState('run-draft');
   const [runLogs, setRunLogs] = useState(initialRunLog);
+  const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
   const pageTransitionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const selectedRecordingIdRef = useRef(selectedRecordingId);
   const previousLocaleRef = useRef(resolveLocale(initialState.appearance.localeMode));
+  const latestStudioStateRef = useRef<StudioState | undefined>(undefined);
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const clearSavedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const saveVersionRef = useRef(0);
+  const nextSaveModeRef = useRef<SaveMode>('debounced');
 
   const selectedProject = projects.find((project) => project.id === selectedProjectId) ?? projects[0];
   const selectedEnvironment =
@@ -163,6 +179,13 @@ export function App() {
   const selectedTestCase =
     selectedProject?.testCases.find((testCase) => testCase.id === selectedTestCaseId) ??
     selectedProject?.testCases[0];
+  const selectedCaseEnvironment =
+    selectedProject?.environments.find((environment) => environment.id === selectedTestCase?.environmentId) ??
+    selectedEnvironment;
+  const selectedTestCaseRunBlocker: TestCaseRunBlocker | undefined =
+    selectedProject && selectedTestCase
+      ? getTestCaseRunBlocker(selectedTestCase, selectedProject.recordings)
+      : undefined;
   const selectedRecording =
     selectedProject?.recordings.find((recording) => recording.id === selectedRecordingId) ??
     selectedProject?.recordings[0];
@@ -179,6 +202,45 @@ export function App() {
   const brandLogo = effectiveTheme === 'dark' ? testbuddyHammerBotDark : testbuddyHammerBot;
   const effectiveLocale = resolveLocale(appearance.localeMode, systemLanguage);
   const t = createTranslator(effectiveLocale);
+
+  function persistLatestStudioState(mode: SaveMode) {
+    if (!latestStudioStateRef.current) {
+      return;
+    }
+
+    if (saveTimerRef.current) {
+      clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+    }
+
+    const version = ++saveVersionRef.current;
+    const save = async () => {
+      setSaveStatus('saving');
+      try {
+        await saveStudioState(latestStudioStateRef.current!);
+        if (version !== saveVersionRef.current) {
+          return;
+        }
+
+        setSaveStatus('saved');
+        if (clearSavedTimerRef.current) {
+          clearTimeout(clearSavedTimerRef.current);
+        }
+        clearSavedTimerRef.current = setTimeout(() => setSaveStatus('idle'), 1600);
+      } catch {
+        if (version === saveVersionRef.current) {
+          setSaveStatus('error');
+        }
+      }
+    };
+
+    if (mode === 'immediate') {
+      void save();
+    } else {
+      saveTimerRef.current = setTimeout(() => void save(), SAVE_DEBOUNCE_MS);
+    }
+  }
+
   useEffect(() => {
     const previousLocale = previousLocaleRef.current;
     if (previousLocale === effectiveLocale) {
@@ -275,7 +337,10 @@ export function App() {
       workflows: selectedProject?.testCases.map(testCaseToWorkflow) ?? [],
     };
 
-    void saveStudioState(payload);
+    latestStudioStateRef.current = payload;
+    const saveMode = nextSaveModeRef.current;
+    nextSaveModeRef.current = 'debounced';
+    persistLatestStudioState(saveMode);
   }, [
     browserSession,
     chatEntries,
@@ -293,6 +358,18 @@ export function App() {
     selectedRecordingId,
     startupGuide,
   ]);
+
+  useEffect(
+    () => () => {
+      if (saveTimerRef.current) {
+        clearTimeout(saveTimerRef.current);
+      }
+      if (clearSavedTimerRef.current) {
+        clearTimeout(clearSavedTimerRef.current);
+      }
+    },
+    [],
+  );
 
   useEffect(() => {
     selectedRecordingIdRef.current = selectedRecordingId;
@@ -437,10 +514,15 @@ export function App() {
     });
   }
 
-  function updateSelectedProject(updater: (project: ProjectDraft) => ProjectDraft) {
+  function updateSelectedProject(
+    updater: (project: ProjectDraft) => ProjectDraft,
+    saveMode: SaveMode = 'debounced',
+  ) {
     if (!selectedProject) {
       return;
     }
+
+    nextSaveModeRef.current = saveMode;
 
     setProjects((current) =>
       current.map((project) =>
@@ -454,22 +536,38 @@ export function App() {
     );
   }
 
-  function updateSelectedTestCase(updater: (testCase: TestCaseDraft) => TestCaseDraft) {
+  function updateSelectedTestCase(
+    updater: (testCase: TestCaseDraft) => TestCaseDraft,
+    saveMode: SaveMode = 'debounced',
+  ) {
     if (!selectedTestCase) {
       return;
     }
 
-    updateSelectedProject((project) => ({
-      ...project,
-      testCases: project.testCases.map((testCase) =>
-        testCase.id === selectedTestCase.id
+    const preview = updater(selectedTestCase);
+    if (preview.groupId !== selectedTestCase.groupId) {
+      setSelectedGroupId(preview.groupId);
+    }
+
+    nextSaveModeRef.current = saveMode;
+    setProjects((current) =>
+      current.map((project) =>
+        project.id === selectedProject.id
           ? {
-              ...updater(testCase),
-              lastEdited: t('app.runtime.justNow'),
+              ...project,
+              updatedAt: new Date().toISOString(),
+              testCases: project.testCases.map((testCase) =>
+                testCase.id === selectedTestCase.id
+                  ? {
+                      ...updater(testCase),
+                      lastEdited: t('app.runtime.justNow'),
+                    }
+                  : testCase,
+              ),
             }
-          : testCase,
+          : project,
       ),
-    }));
+    );
   }
 
   function updateSelectedWorkflow(updater: (workflow: WorkflowDraft) => WorkflowDraft) {
@@ -1297,37 +1395,67 @@ export function App() {
     setSelectedRecordingId(nextRecordings[0]?.id ?? '');
   }
 
-  function handleAppendStep(type: TestStepDraft['type'] = 'ai') {
-    const step: TestStepDraft =
-      type === 'ai' || type === 'aiAssert' || type === 'aiQuery'
-        ? createStep(type, selectedTestCase?.steps.length ?? 1)
-        : (() => {
-            const recording =
-              type === 'recordingReplay' && selectedProject && selectedTestCase
-                ? findDefaultRecordingForCaseStep(
-                    selectedProject.recordings,
-                    selectedTestCase.groupId,
-                    selectedTestCase.environmentId,
-                  )
-                : undefined;
+  function handleCreateStep(type: TestStepDraft['type'], index: number): string | undefined {
+    if (!selectedProject || !selectedTestCase) {
+      return undefined;
+    }
 
-            return {
-              id: `step-${Date.now()}`,
-              type,
-              title: type === 'recordingReplay' ? t('app.generated.replayStep') : t('app.generated.manualStep'),
-              body:
-                type === 'recordingReplay'
-                  ? recording
-                    ? t('app.generated.replayDescription', { name: recording.name, count: recording.steps.length })
-                    : t('app.generated.selectRecording')
-                  : t('app.generated.manualDescription'),
-              recordingId: recording?.id,
-            };
-          })();
+    const recording =
+      type === 'recordingReplay'
+        ? findDefaultRecordingForCaseStep(
+            selectedProject.recordings,
+            selectedTestCase.groupId,
+            selectedTestCase.environmentId,
+          )
+        : undefined;
+    const step = createTestStep(type, selectedTestCase.steps.length + 1, recording);
+
     updateSelectedTestCase((testCase) => ({
       ...testCase,
-      steps: [...testCase.steps, step],
-    }));
+      steps: insertTestStep(testCase.steps, step, index),
+    }), 'immediate');
+    return step.id;
+  }
+
+  function handleAppendStep(type: TestStepDraft['type'] = 'ai') {
+    return handleCreateStep(type, selectedTestCase?.steps.length ?? 0);
+  }
+
+  function handleMoveStep(stepId: string, index: number) {
+    updateSelectedTestCase((testCase) => ({
+      ...testCase,
+      steps: moveTestStep(testCase.steps, stepId, index),
+    }), 'immediate');
+  }
+
+  function handleCopyStep(stepId: string): string | undefined {
+    if (!selectedTestCase?.steps.some((step) => step.id === stepId)) {
+      return undefined;
+    }
+
+    const copyId = `step-${Date.now()}-${selectedTestCase.steps.length + 1}`;
+    updateSelectedTestCase((testCase) => ({
+      ...testCase,
+      steps: copyTestStep(testCase.steps, stepId, copyId),
+    }), 'immediate');
+    return copyId;
+  }
+
+  function handleDeleteStep(stepId: string) {
+    updateSelectedTestCase((testCase) => ({
+      ...testCase,
+      steps: removeTestStep(testCase.steps, stepId),
+    }), 'immediate');
+  }
+
+  function handleSelectTestCase(testCaseId: string) {
+    const testCase = selectedProject?.testCases.find((item) => item.id === testCaseId);
+    if (!testCase) {
+      return;
+    }
+
+    setSelectedGroupId(testCase.groupId);
+    setSelectedTestCaseId(testCase.id);
   }
 
   async function handleSaveCredential(payload: {
@@ -1598,7 +1726,13 @@ export function App() {
   }
 
   async function handleRunTestCase() {
-    if (!selectedProject || !selectedTestCase || !selectedEnvironment || isRunning) {
+    if (
+      !selectedProject ||
+      !selectedTestCase ||
+      !selectedCaseEnvironment ||
+      selectedTestCaseRunBlocker ||
+      isRunning
+    ) {
       return;
     }
 
@@ -1607,14 +1741,14 @@ export function App() {
     setRunLogs([
       `[${createTimestampLabel()}] Dispatching test case: ${selectedTestCase.name}`,
       `[${createTimestampLabel()}] Project: ${selectedProject.name}`,
-      `[${createTimestampLabel()}] Environment: ${selectedEnvironment.name}`,
+      `[${createTimestampLabel()}] Environment: ${selectedCaseEnvironment.name}`,
     ]);
 
     try {
       const result = await runTestCase({
         project: selectedProject,
         testCase: selectedTestCase,
-        environment: selectedEnvironment,
+        environment: selectedCaseEnvironment,
         runtimeProfile,
         midsceneConfig,
         agentModelConfig,
@@ -1627,7 +1761,7 @@ export function App() {
       setBrowserSession((current) => ({
         ...current,
         projectId: selectedProject.id,
-        environmentId: selectedEnvironment.id,
+        environmentId: selectedCaseEnvironment.id,
       }));
       switchPage('runs');
     } catch {
