@@ -5,8 +5,10 @@ contextBridge.exposeInMainWorld('desktopApi', {
   saveStudioState: (state: unknown) => ipcRenderer.invoke('studio:save-state', state),
   createProject: (project: unknown) => ipcRenderer.invoke('studio:create-project', project),
   updateProject: (project: unknown) => ipcRenderer.invoke('studio:update-project', project),
+  analyzePrdDocument: (request: unknown) => ipcRenderer.invoke('studio:analyze-prd-document', request),
   saveCredential: (request: unknown) => ipcRenderer.invoke('studio:save-credential', request),
   getRuntimeInfo: () => ipcRenderer.invoke('runtime:get-info'),
+  testMidsceneConnection: (config: unknown) => ipcRenderer.invoke('runtime:test-midscene-connection', config),
   startBrowserSession: (request: unknown) => ipcRenderer.invoke('runtime:start-browser-session', request),
   navigateBrowserSession: (request: unknown) =>
     ipcRenderer.invoke('runtime:navigate-browser-session', request),
@@ -16,6 +18,7 @@ contextBridge.exposeInMainWorld('desktopApi', {
   loadRunDetail: (runId: string) => ipcRenderer.invoke('runtime:load-run-detail', runId),
   openArtifact: (artifactPath: string) => ipcRenderer.invoke('runtime:open-artifact', artifactPath),
   exportArtifact: (artifactPath: string) => ipcRenderer.invoke('runtime:export-artifact', artifactPath),
+  attachManualEvidence: () => ipcRenderer.invoke('runtime:attach-manual-evidence'),
   startSession: (request: unknown) => ipcRenderer.invoke('runtime:start-session', request),
   endSession: () => ipcRenderer.invoke('runtime:end-session'),
   sendChatCommand: (request: unknown) => ipcRenderer.invoke('runtime:send-chat-command', request),

@@ -76,7 +76,8 @@ async function inflateStream(data: Uint8Array): Promise<string> {
   }
 
   try {
-    const stream = new Blob([data]).stream().pipeThrough(new DecompressionStream('deflate'));
+    const bytes = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer;
+    const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate'));
     return await new Response(stream).text();
   } catch {
     return '';

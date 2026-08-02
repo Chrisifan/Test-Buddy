@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import type {
   AgentModelConfig,
   AgentModelRole,
@@ -6,11 +6,12 @@ import type {
   AppearanceConfig,
   LocaleMode,
   MidsceneConfig,
+  MidsceneConnectionTestResult,
   RuntimeProfile,
   ThemeMode,
 } from '../../../shared/studio.js';
 
-import { Bot, BrainCircuit, CircleHelp, Moon, MonitorCog, MousePointerClick, Palette, PlayCircle, Settings2, Sun, Waypoints, Workflow } from 'lucide-react';
+import { Bot, BrainCircuit, ChevronDown, CircleCheck, CircleHelp, CircleX, LoaderCircle, Moon, MonitorCog, MousePointerClick, Palette, PlayCircle, Settings2, Sun, Waypoints, Wifi, Workflow } from 'lucide-react';
 import { createTranslator, type SupportedLocale } from '@/i18n';
 
 import { Badge } from '@/components/ui/badge';
@@ -35,7 +36,6 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
-import { PageBody, PageHeader, PageShell } from '../../components/workbench.js';
 
 const themeOptions: Array<{
   mode: ThemeMode;
@@ -85,43 +85,32 @@ const localeOptions: Array<{
   },
 ];
 
-export type SettingsSectionId = 'appearance' | 'midscene' | 'agentModels' | 'runtime' | 'network';
+export type SettingsSectionId = 'appearance' | 'midscene' | 'agentModels' | 'runtime';
 
 const settingsSections: Array<{
   id: SettingsSectionId;
   labelKey: string;
-  href: string;
   icon: typeof Palette;
 }> = [
   {
     id: 'appearance',
-    labelKey: 'settings.nav.appearance',
-    href: '#appearance',
+    labelKey: 'settings.nav.general',
     icon: Palette,
   },
   {
     id: 'midscene',
     labelKey: 'settings.nav.midscene',
-    href: '#midscene',
     icon: Waypoints,
   },
   {
     id: 'agentModels',
     labelKey: 'settings.nav.agentModels',
-    href: '#agentModels',
     icon: BrainCircuit,
   },
   {
     id: 'runtime',
-    labelKey: 'settings.nav.runtime',
-    href: '#runtime',
+    labelKey: 'settings.nav.execution',
     icon: PlayCircle,
-  },
-  {
-    id: 'network',
-    labelKey: 'settings.nav.endpoint',
-    href: '#network',
-    icon: Settings2,
   },
 ];
 
@@ -179,7 +168,6 @@ function FieldLabel({ label, hint }: { label: string; hint?: string }) {
 
 export function SettingsModal({
   open,
-  pageMode = false,
   initialSection = 'appearance',
   midsceneConfig,
   agentModelConfig,
@@ -191,13 +179,13 @@ export function SettingsModal({
   locale,
   onClose,
   onSave,
+  onTestMidsceneConnection,
   onUpdateAppearance,
   onUpdateAgentModelConfig,
   onUpdateMidsceneConfig,
   onUpdateRuntimeProfile,
 }: {
   open: boolean;
-  pageMode?: boolean;
   initialSection?: SettingsSectionId;
   midsceneConfig: MidsceneConfig;
   agentModelConfig: AgentModelConfig;
@@ -209,110 +197,31 @@ export function SettingsModal({
   locale: SupportedLocale;
   onClose: () => void;
   onSave: () => void;
+  onTestMidsceneConnection: (config: MidsceneConfig) => Promise<MidsceneConnectionTestResult>;
   onUpdateAppearance: (patch: Partial<AppearanceConfig>) => void;
   onUpdateAgentModelConfig: (role: AgentModelRole, patch: Partial<AgentRoleModelConfig>) => void;
   onUpdateMidsceneConfig: (patch: Partial<MidsceneConfig>) => void;
   onUpdateRuntimeProfile: (patch: Partial<RuntimeProfile>) => void;
 }) {
-  const scrollContainerRef = useRef<HTMLElement | null>(null);
-  const scrollSpyLockedRef = useRef(false);
-  const scrollSpyTargetTopRef = useRef<number | null>(null);
-  const scrollSpyUnlockTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const sectionRefs = useRef<Record<SettingsSectionId, HTMLElement | null>>({
-    appearance: null,
-    midscene: null,
-    agentModels: null,
-    runtime: null,
-    network: null,
-  });
   const [activeSection, setActiveSection] = useState<SettingsSectionId>(initialSection);
+  const [expandedAgentRole, setExpandedAgentRole] = useState<AgentModelRole>();
+  const [isTestingMidsceneConnection, setIsTestingMidsceneConnection] = useState(false);
+  const [midsceneConnectionResult, setMidsceneConnectionResult] = useState<MidsceneConnectionTestResult>();
 
-  function scrollToSection(section: SettingsSectionId, behavior: ScrollBehavior = 'smooth') {
-    const container = scrollContainerRef.current;
-    const element = sectionRefs.current[section];
-    setActiveSection(section);
+  useEffect(() => {
+    setMidsceneConnectionResult(undefined);
+  }, [midsceneConfig.modelApiKey, midsceneConfig.modelBaseUrl, midsceneConfig.modelFamily, midsceneConfig.modelName]);
 
-    if (scrollSpyUnlockTimerRef.current) {
-      clearTimeout(scrollSpyUnlockTimerRef.current);
-      scrollSpyUnlockTimerRef.current = null;
-    }
-
-    if (!container || !element) {
-      return;
-    }
-
-    const targetTop = section === 'appearance' ? 0 : Math.max(0, element.offsetTop - 16);
-    scrollSpyLockedRef.current = behavior === 'smooth';
-    scrollSpyTargetTopRef.current = behavior === 'smooth' ? targetTop : null;
-    if (typeof container.scrollTo === 'function') {
-      container.scrollTo({
-        top: targetTop,
-        behavior,
-      });
-    } else {
-      container.scrollTop = targetTop;
-    }
-
-    if (behavior === 'smooth') {
-      scrollSpyUnlockTimerRef.current = setTimeout(() => {
-        scrollSpyLockedRef.current = false;
-        scrollSpyTargetTopRef.current = null;
-        setActiveSection(section);
-        scrollSpyUnlockTimerRef.current = null;
-      }, 700);
-    } else {
-      scrollSpyLockedRef.current = false;
-      scrollSpyTargetTopRef.current = null;
-    }
-  }
-
-  function handleScroll() {
-    const container = scrollContainerRef.current;
-    if (!container) {
-      return;
-    }
-
-    if (scrollSpyLockedRef.current) {
-      const targetTop = scrollSpyTargetTopRef.current;
-      if (targetTop !== null && Math.abs(container.scrollTop - targetTop) <= 2) {
-        scrollSpyLockedRef.current = false;
-        scrollSpyTargetTopRef.current = null;
-      } else {
-        return;
-      }
-    }
-
-    const nextActive =
-      settingsSections
-        .map((section) => ({
-          id: section.id,
-          top: sectionRefs.current[section.id]?.offsetTop ?? Number.POSITIVE_INFINITY,
-        }))
-        .filter((section) => section.top <= container.scrollTop + 72)
-        .at(-1)?.id ?? 'appearance';
-
-    setActiveSection(nextActive);
-  }
-
-  useLayoutEffect(() => {
+  useEffect(() => {
     if (!open) {
       return;
     }
 
     setActiveSection(initialSection);
-    const frame = requestAnimationFrame(() => scrollToSection(initialSection, 'auto'));
-    return () => {
-      cancelAnimationFrame(frame);
-      if (scrollSpyUnlockTimerRef.current) {
-        clearTimeout(scrollSpyUnlockTimerRef.current);
-        scrollSpyUnlockTimerRef.current = null;
-      }
-      scrollSpyLockedRef.current = false;
-      scrollSpyTargetTopRef.current = null;
-    };
-  }, [initialSection, open, pageMode]);
+    setExpandedAgentRole(undefined);
+  }, [initialSection, open]);
 
-  if (!open && !pageMode) {
+  if (!open) {
     return null;
   }
 
@@ -328,7 +237,7 @@ export function SettingsModal({
 
   const statusBadge = (
     <Badge
-      className={`rounded-[4px] px-3 py-1.5 ${
+      className={`rounded-[3px] ${
         showMissingRequiredState
           ? 'bg-destructive/12 text-destructive'
           : midsceneReady
@@ -341,95 +250,126 @@ export function SettingsModal({
     </Badge>
   );
   const saveLabel = requiresMidsceneBeforeSave ? t('common.saveAndContinue') : t('common.saveSettings');
-  const pageAction = (
-    <div className="settings-page-action flex items-center gap-2">
-      {statusBadge}
-      <Button
-        className="min-w-[132px] rounded-[4px]"
-        disabled={showMissingRequiredState}
-        onClick={onSave}
-        type="button"
-      >
-        {saveLabel}
-      </Button>
-    </div>
-  );
+  const midsceneConnectionMessage = midsceneConnectionResult
+    ? midsceneConnectionResult.status === 'passed'
+      ? t('settings.midscene.connectionPassed', { duration: midsceneConnectionResult.durationMs })
+      : midsceneConnectionResult.failure === 'configuration'
+        ? t('settings.midscene.connectionConfiguration')
+        : midsceneConnectionResult.failure === 'http'
+          ? t('settings.midscene.connectionHttp', { status: midsceneConnectionResult.httpStatus ?? '—' })
+          : midsceneConnectionResult.failure === 'response'
+            ? t('settings.midscene.connectionResponse')
+            : t('settings.midscene.connectionNetwork')
+    : undefined;
 
+  async function handleTestMidsceneConnection() {
+    if (isTestingMidsceneConnection || !midsceneReady) {
+      return;
+    }
+
+    setIsTestingMidsceneConnection(true);
+    try {
+      setMidsceneConnectionResult(await onTestMidsceneConnection(midsceneConfig));
+    } catch {
+      setMidsceneConnectionResult({
+        status: 'failed',
+        modelName: midsceneConfig.modelName.trim(),
+        durationMs: 0,
+        failure: 'network',
+      });
+    } finally {
+      setIsTestingMidsceneConnection(false);
+    }
+  }
   const settingsShell = (
-    <div className={`settings-dialog-shell flex min-h-0 w-full flex-col overflow-hidden rounded-[8px] ${pageMode ? 'settings-page-shell' : ''}`}>
-      {!pageMode ? (
-          <DialogHeader className="settings-dialog-topbar flex h-16 shrink-0 flex-row items-center justify-between border-b border-border px-5 py-0 text-left">
-            <div className="flex items-center gap-3">
-              <span className="flex h-9 w-9 items-center justify-center rounded-[4px] bg-primary/12 text-primary">
-                <Settings2 className="h-5 w-5" />
-              </span>
-              <div>
-                <DialogTitle className="text-xl font-semibold tracking-[-0.035em]">{t('settings.title')}</DialogTitle>
-                <DialogDescription className="mt-0.5 text-xs text-muted-foreground">
-                  {t('settings.description')}
-                </DialogDescription>
-              </div>
-            </div>
-            <div className="flex shrink-0 items-center gap-2">
-              {statusBadge}
-              <DialogClose className="flex h-9 w-9 items-center justify-center rounded-[4px] border border-border bg-card text-muted-foreground shadow-sm transition hover:border-primary/45 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60 dark:bg-black/70">
-                <span aria-hidden="true" className="text-2xl leading-none">
-                  ×
-                </span>
-                <span className="sr-only">{t('common.close')}</span>
-              </DialogClose>
-            </div>
-          </DialogHeader>
-      ) : null}
+    <div className="settings-dialog-shell flex min-h-0 w-full flex-col overflow-hidden rounded-[8px]">
+      <DialogHeader className="settings-dialog-topbar flex h-[52px] shrink-0 flex-row items-center justify-between border-b border-border px-3.5 py-0 text-left">
+        <div className="flex items-center gap-2.5">
+          <span className="flex h-7 w-7 items-center justify-center rounded-[4px] bg-primary/12 text-primary">
+            <Settings2 className="h-3.5 w-3.5" />
+          </span>
+          <div>
+            <DialogTitle className="text-base font-semibold">{t('settings.title')}</DialogTitle>
+            <DialogDescription className="mt-0.5 text-xs text-muted-foreground">
+              {t('settings.description')}
+            </DialogDescription>
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          {statusBadge}
+          <DialogClose className="flex h-7 w-7 items-center justify-center rounded-[4px] border border-border bg-card text-muted-foreground shadow-sm transition hover:border-primary/45 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60 dark:bg-black/70">
+            <span aria-hidden="true" className="text-lg leading-none">×</span>
+            <span className="sr-only">{t('common.close')}</span>
+          </DialogClose>
+        </div>
+      </DialogHeader>
 
-          <div className={`flex min-h-0 flex-1 ${pageMode ? 'settings-page-workspace' : ''}`}>
-            {!pageMode ? (
-              <nav className="settings-dialog-aside hidden w-48 shrink-0 border-r border-border p-4 md:grid md:content-start md:gap-1">
-                {settingsSections.map((section) => {
-                  const NavIcon = section.icon;
-                  return (
-                    <button
-                      className={`flex items-center gap-3 rounded-[4px] border-l-4 px-3 py-2 text-sm transition ${
-                        activeSection === section.id
-                          ? 'border-l-4 border-primary bg-primary/10 font-semibold text-primary'
-                          : 'border-transparent text-muted-foreground hover:bg-muted hover:text-foreground'
-                      }`}
-                      key={section.id}
-                      onClick={() => scrollToSection(section.id)}
-                      type="button"
-                    >
-                      <NavIcon className="h-4 w-4" />
-                      {t(section.labelKey)}
-                    </button>
-                  );
-                })}
-              </nav>
-            ) : null}
-
-            <main
-              className={`settings-dialog-scroll min-h-0 flex-1 space-y-10 overflow-y-auto p-6 ${pageMode ? 'settings-page-scroll' : ''}`}
-              onScroll={handleScroll}
-              ref={scrollContainerRef}
+      <nav className="settings-dialog-mobile-nav flex shrink-0 gap-1 overflow-x-auto border-b border-border px-3 py-2 md:hidden">
+        {settingsSections.map((section) => {
+          const NavIcon = section.icon;
+          return (
+            <button
+              aria-current={activeSection === section.id ? 'page' : undefined}
+              className={`inline-flex shrink-0 items-center gap-1.5 rounded-[4px] px-2.5 py-1.5 text-xs font-medium transition ${
+                activeSection === section.id
+                  ? 'bg-primary/10 text-primary'
+                  : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+              }`}
+              key={section.id}
+              onClick={() => setActiveSection(section.id)}
+              type="button"
             >
-              <section className="scroll-mt-8" id="appearance" ref={(node) => { sectionRefs.current.appearance = node; }}>
-                <div className="mb-5 flex items-center gap-2">
+              <NavIcon className="h-3.5 w-3.5" />
+              {t(section.labelKey)}
+            </button>
+          );
+        })}
+      </nav>
+
+      <div className="flex min-h-0 flex-1">
+        <nav className="settings-dialog-aside hidden w-48 shrink-0 border-r border-border p-4 md:grid md:content-start md:gap-1">
+          {settingsSections.map((section) => {
+            const NavIcon = section.icon;
+            return (
+              <button
+                aria-current={activeSection === section.id ? 'page' : undefined}
+                className={`flex items-center gap-3 rounded-[4px] border-l-4 px-3 py-2 text-sm transition ${
+                  activeSection === section.id
+                    ? 'border-l-4 border-primary bg-primary/10 font-semibold text-primary'
+                    : 'border-transparent text-muted-foreground hover:bg-muted hover:text-foreground'
+                }`}
+                key={section.id}
+                onClick={() => setActiveSection(section.id)}
+                type="button"
+              >
+                <NavIcon className="h-4 w-4" />
+                {t(section.labelKey)}
+              </button>
+            );
+          })}
+        </nav>
+
+        <main className="settings-dialog-scroll min-h-0 flex-1 overflow-y-auto p-4">
+          {activeSection === 'appearance' ? (
+              <section id="appearance">
+                <div className="mb-3 flex items-center gap-2">
                   <span className="font-mono text-[11px] font-semibold uppercase tracking-[0.16em] text-primary">
                     {t('settings.appearance.section')}
                   </span>
                   <div className="h-px flex-1 bg-border" />
                 </div>
-                <h2 className="text-xl font-semibold tracking-[-0.03em]">{t('settings.appearance.title')}</h2>
+                <h2 className="text-lg font-semibold">{t('settings.appearance.title')}</h2>
                 <p className="mt-2 text-sm text-muted-foreground">
                   {t('settings.appearance.currentTheme')}：{currentThemeLabel}。{t('settings.appearance.description')}
                 </p>
-                <div className="mt-5 grid gap-4 sm:grid-cols-3">
+                <div className="mt-4 grid gap-3 sm:grid-cols-3">
                   {themeOptions.map((option) => {
                     const Icon = option.icon;
                     const title = t(option.titleKey);
                     const description = t(option.descriptionKey);
                     return (
                       <button
-                        className={`grid cursor-pointer gap-3 rounded-[8px] border p-4 text-center transition ${
+                        className={`grid cursor-pointer gap-2 rounded-[6px] border p-3 text-center transition ${
                           appearance.themeMode === option.mode
                             ? 'border-primary bg-primary/8 text-primary shadow-sm'
                             : 'border-border bg-card hover:border-primary/40'
@@ -439,7 +379,7 @@ export function SettingsModal({
                         type="button"
                       >
                         <span
-                          className={`flex aspect-video items-center justify-center rounded-[6px] border ${
+                          className={`flex aspect-[16/7] items-center justify-center rounded-[5px] border ${
                             option.mode === 'dark'
                               ? 'border-slate-700 bg-slate-900'
                               : option.mode === 'system'
@@ -447,7 +387,7 @@ export function SettingsModal({
                                 : 'border-border bg-white'
                           }`}
                         >
-                          <Icon className="h-6 w-6 text-primary" />
+                          <Icon className="h-5 w-5 text-primary" />
                         </span>
                         <span className="text-sm font-semibold">{title}</span>
                         <span className="text-xs leading-5 text-muted-foreground">{description}</span>
@@ -455,15 +395,15 @@ export function SettingsModal({
                     );
                   })}
                 </div>
-                <div className="mt-6 rounded-[8px] border border-border bg-muted/60 p-4">
+                <div className="mt-4 rounded-[6px] border border-border bg-muted/60 p-3">
                   <h3 className="text-sm font-semibold">{t('settings.appearance.languageTitle')}</h3>
                   <p className="mt-1 text-xs leading-5 text-muted-foreground">
                     {t('settings.appearance.languageDescription')}
                   </p>
-                  <div className="mt-3 flex flex-wrap gap-2">
+                  <div className="mt-2.5 flex flex-wrap gap-1.5">
                     {localeOptions.map((option) => (
                       <button
-                        className={`rounded-full border px-4 py-2 text-sm transition ${
+                        className={`rounded-[4px] border px-2.5 py-1.5 text-xs transition ${
                           appearance.localeMode === option.mode
                             ? 'border-primary bg-primary/10 font-semibold text-primary'
                             : 'border-border bg-card text-muted-foreground hover:border-primary/40 hover:text-foreground'
@@ -473,22 +413,24 @@ export function SettingsModal({
                         type="button"
                       >
                         <span>{t(option.titleKey)}</span>
-                        <span className="ml-2 text-xs opacity-70">{t(option.descriptionKey)}</span>
+                        <span className="ml-1.5 text-[11px] opacity-70">{t(option.descriptionKey)}</span>
                       </button>
                     ))}
                   </div>
                 </div>
               </section>
+          ) : null}
 
-              <section className="scroll-mt-8" id="midscene" ref={(node) => { sectionRefs.current.midscene = node; }}>
-                <div className="mb-5 flex items-center gap-2">
+          {activeSection === 'midscene' ? (
+              <section id="midscene">
+                <div className="mb-3 flex items-center gap-2">
                   <span className="font-mono text-[11px] font-semibold uppercase tracking-[0.16em] text-primary">
                     {t('settings.midscene.section')}
                   </span>
                   <div className="h-px flex-1 bg-border" />
                 </div>
-                <h2 className="text-xl font-semibold tracking-[-0.03em]">{t('settings.midscene.title')}</h2>
-                <div className="mt-5 grid gap-5">
+                <h2 className="text-lg font-semibold">{t('settings.midscene.title')}</h2>
+                <div className="mt-4 grid gap-4">
                   <div className="form-field is-url">
                     <FieldLabel label="MIDSCENE_MODEL_BASE_URL" hint={t('settings.midscene.baseUrlHint')} />
                     <Input
@@ -558,9 +500,46 @@ export function SettingsModal({
                     </div>
                   </div>
                 </div>
-                <div className="mt-6 rounded-[8px] border border-border bg-muted p-4">
+                <div className="mt-4 flex flex-wrap items-center justify-between gap-2 rounded-[6px] border border-border bg-muted/60 px-3 py-2.5" data-testid="midscene-connection-test">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <Wifi className="h-4 w-4 shrink-0 text-primary" />
+                    <h3 className="text-sm font-semibold">{t('settings.midscene.connectionTitle')}</h3>
+                  </div>
+                  <Button
+                    className="min-w-[116px] rounded-[4px]"
+                    disabled={!midsceneReady || isTestingMidsceneConnection}
+                    onClick={handleTestMidsceneConnection}
+                    type="button"
+                    variant="outline"
+                  >
+                    {isTestingMidsceneConnection ? (
+                      <LoaderCircle aria-hidden="true" className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Wifi aria-hidden="true" className="h-4 w-4" />
+                    )}
+                    {isTestingMidsceneConnection
+                      ? t('settings.midscene.connectionTesting')
+                      : t('settings.midscene.connectionTest')}
+                  </Button>
+                  {midsceneConnectionMessage ? (
+                    <div
+                      className={`flex w-full items-center gap-2 text-xs ${
+                        midsceneConnectionResult?.status === 'passed' ? 'text-primary' : 'text-destructive'
+                      }`}
+                      role="status"
+                    >
+                      {midsceneConnectionResult?.status === 'passed' ? (
+                        <CircleCheck aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
+                      ) : (
+                        <CircleX aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
+                      )}
+                      <span>{midsceneConnectionMessage}</span>
+                    </div>
+                  ) : null}
+                </div>
+                <div className="mt-4 rounded-[6px] border border-border bg-muted p-3">
                   <h3 className="text-sm font-semibold">{t('settings.midscene.unlockedTitle')}</h3>
-                  <div className="mt-3 grid gap-3 md:grid-cols-3">
+                  <div className="mt-2.5 grid gap-2 md:grid-cols-3">
                     {[
                       [Bot, t('settings.midscene.feature.nl'), t('settings.midscene.feature.nlDescription')],
                       [Workflow, t('settings.midscene.feature.workflow'), t('settings.midscene.feature.workflowDescription')],
@@ -568,9 +547,9 @@ export function SettingsModal({
                     ].map(([Icon, title, description]) => {
                       const FeatureIcon = Icon as typeof Bot;
                       return (
-                        <div className="rounded-[6px] border border-border bg-card p-3" key={title as string}>
+                        <div className="rounded-[4px] border border-border bg-card p-2.5" key={title as string}>
                           <FeatureIcon className="h-4 w-4 text-primary" />
-                          <p className="mt-3 text-sm font-semibold">{title as string}</p>
+                          <p className="mt-2 text-sm font-semibold">{title as string}</p>
                           <p className="mt-1 text-xs leading-5 text-muted-foreground">{description as string}</p>
                         </div>
                       );
@@ -583,42 +562,58 @@ export function SettingsModal({
                   ) : null}
                 </div>
               </section>
+          ) : null}
 
-              <section className="scroll-mt-8" id="agentModels" ref={(node) => { sectionRefs.current.agentModels = node; }}>
-                <div className="mb-5 flex items-center gap-2">
+          {activeSection === 'agentModels' ? (
+              <section id="agentModels">
+                <div className="mb-3 flex items-center gap-2">
                   <span className="font-mono text-[11px] font-semibold uppercase tracking-[0.16em] text-primary">
                     {t('settings.agent.section')}
                   </span>
                   <div className="h-px flex-1 bg-border" />
                 </div>
-                <h2 className="text-xl font-semibold tracking-[-0.03em]">{t('settings.agent.title')}</h2>
+                <h2 className="text-lg font-semibold">{t('settings.agent.title')}</h2>
                 <p className="mt-2 text-sm leading-6 text-muted-foreground">
                   {t('settings.agent.description')}
                 </p>
-                <div className="mt-5 grid gap-3">
+                <div className="mt-4 grid gap-2">
                   {agentRoleOptions.map((roleOption) => {
                     const roleConfig = agentModelConfig[roleOption.role];
                     const inheritedModel = midsceneConfig.modelName || t('common.notConfigured');
                     const roleFieldPrefix = `agent-${roleOption.role}`;
                     const isIndependent = roleConfig.provider === 'openaiCompatible';
                     const roleTitle = t(roleOption.titleKey);
+                    const isExpanded = expandedAgentRole === roleOption.role;
 
                     return (
                       <div
-                        className="rounded-[8px] bg-muted/70 p-4"
+                        className="rounded-[6px] bg-muted/70 p-3"
                         data-testid={`agent-model-role-${roleOption.role}`}
                         key={roleOption.role}
                       >
-                        <div className="flex flex-wrap items-start justify-between gap-4">
-                          <div className="min-w-[220px] flex-1">
+                        <div className="flex items-start gap-2.5">
+                          <button
+                            aria-expanded={isExpanded}
+                            className="flex min-w-0 flex-1 items-start justify-between gap-3 text-left"
+                            onClick={() => setExpandedAgentRole((current) => current === roleOption.role ? undefined : roleOption.role)}
+                            type="button"
+                          >
+                          <div className="min-w-0 flex-1">
                             <div className="flex items-center gap-2">
-                              <h3 className="text-base font-semibold tracking-[-0.025em]">{roleTitle}</h3>
+                              <h3 className="text-sm font-semibold">{roleTitle}</h3>
                               <Badge className="rounded-[4px] bg-primary/10 text-primary" variant="outline">
                                 {roleConfig.enabled ? t('common.enabled') : t('common.paused')}
                               </Badge>
                             </div>
                             <p className="mt-1 text-xs leading-5 text-muted-foreground">{t(roleOption.descriptionKey)}</p>
+                            <p className="mt-2 text-xs text-muted-foreground">
+                              {isIndependent
+                                ? t('settings.agent.independentModel')
+                                : t('settings.agent.inheritedModel', { model: inheritedModel || t('common.notConfigured') })}
+                            </p>
                           </div>
+                          <ChevronDown className={`mt-1 h-4 w-4 shrink-0 text-muted-foreground transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
+                          </button>
                           <label className="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">
                             <Checkbox
                               checked={roleConfig.enabled}
@@ -630,33 +625,35 @@ export function SettingsModal({
                           </label>
                         </div>
 
-                        <div className="mt-4 flex flex-wrap gap-2">
-                          <button
-                            className={`rounded-full px-3 py-1.5 text-xs transition ${
-                              roleConfig.provider === 'reuseMidscene'
-                                ? 'bg-primary text-primary-foreground'
-                                : 'bg-background text-muted-foreground hover:text-foreground'
-                            }`}
-                            onClick={() => onUpdateAgentModelConfig(roleOption.role, { provider: 'reuseMidscene' })}
-                            type="button"
-                          >
-                            {t('settings.agent.reuseMidscene')}
-                          </button>
-                          <button
-                            className={`rounded-full px-3 py-1.5 text-xs transition ${
-                              isIndependent
-                                ? 'bg-primary text-primary-foreground'
-                                : 'bg-background text-muted-foreground hover:text-foreground'
-                            }`}
-                            onClick={() => onUpdateAgentModelConfig(roleOption.role, { provider: 'openaiCompatible' })}
-                            type="button"
-                          >
-                            {t('settings.agent.independentModel')}
-                          </button>
-                        </div>
+                        {isExpanded ? (
+                          <div className="mt-3 border-t border-border pt-3">
+                            <div className="flex flex-wrap gap-1.5">
+                              <button
+                                className={`rounded-[4px] px-2.5 py-1 text-xs transition ${
+                                  roleConfig.provider === 'reuseMidscene'
+                                    ? 'bg-primary text-primary-foreground'
+                                    : 'bg-background text-muted-foreground hover:text-foreground'
+                                }`}
+                                onClick={() => onUpdateAgentModelConfig(roleOption.role, { provider: 'reuseMidscene' })}
+                                type="button"
+                              >
+                                {t('settings.agent.reuseMidscene')}
+                              </button>
+                              <button
+                                className={`rounded-[4px] px-2.5 py-1 text-xs transition ${
+                                  isIndependent
+                                    ? 'bg-primary text-primary-foreground'
+                                    : 'bg-background text-muted-foreground hover:text-foreground'
+                                }`}
+                                onClick={() => onUpdateAgentModelConfig(roleOption.role, { provider: 'openaiCompatible' })}
+                                type="button"
+                              >
+                                {t('settings.agent.independentModel')}
+                              </button>
+                            </div>
 
-                        {isIndependent ? (
-                          <div className="form-grid mt-4">
+                          {isIndependent ? (
+                          <div className="form-grid mt-3">
                             <div className="form-field is-url">
                               <Label htmlFor={`${roleFieldPrefix}-base-url`}>{roleTitle} Base URL</Label>
                               <Input
@@ -718,32 +715,37 @@ export function SettingsModal({
                               />
                             </div>
                           </div>
-                        ) : (
-                          <p className="mt-4 rounded-[6px] bg-background px-3 py-2 text-xs leading-5 text-muted-foreground">
+                          ) : (
+                          <p className="mt-3 rounded-[4px] bg-background px-2.5 py-1.5 text-xs leading-5 text-muted-foreground">
                             {t('settings.agent.inheritedModel', { model: inheritedModel || t('common.notConfigured') })}
                           </p>
-                        )}
+                          )}
+                          </div>
+                        ) : null}
                       </div>
                     );
                   })}
                 </div>
               </section>
+          ) : null}
 
-              <section className="scroll-mt-8" id="runtime" ref={(node) => { sectionRefs.current.runtime = node; }}>
-                <div className="mb-5 flex items-center gap-2">
+          {activeSection === 'runtime' ? (
+            <>
+              <section id="runtime">
+                <div className="mb-3 flex items-center gap-2">
                   <span className="font-mono text-[11px] font-semibold uppercase tracking-[0.16em] text-primary">
                     {t('settings.runtime.section')}
                   </span>
                   <div className="h-px flex-1 bg-border" />
                 </div>
-                <h2 className="text-xl font-semibold tracking-[-0.03em]">{t('settings.runtime.title')}</h2>
-                <div className="mt-5 grid gap-6">
-                  <div className="grid gap-3">
+                <h2 className="text-lg font-semibold">{t('settings.runtime.title')}</h2>
+                <div className="mt-4 grid gap-4">
+                  <div className="grid gap-2">
                     <Label>{t('settings.runtime.browserEngine')}</Label>
-                    <div className="flex flex-wrap gap-2">
+                    <div className="flex flex-wrap gap-1.5">
                       {(['chromium', 'firefox', 'webkit'] as const).map((browser) => (
                         <button
-                          className={`rounded-full border px-4 py-2 text-sm transition ${
+                          className={`rounded-[4px] border px-2.5 py-1.5 text-xs transition ${
                             runtimeProfile.browser === browser
                               ? 'border-primary bg-primary/10 font-semibold text-primary'
                               : 'border-border bg-muted text-muted-foreground hover:border-primary/40'
@@ -783,7 +785,7 @@ export function SettingsModal({
                       />
                     </div>
                   </div>
-                  <label className="flex cursor-pointer items-center justify-between gap-4 rounded-[8px] border border-border bg-muted p-4">
+                  <label className="flex cursor-pointer items-center justify-between gap-3 rounded-[6px] border border-border bg-muted p-3">
                     <span>
                       <span className="block text-sm font-semibold">{t('settings.runtime.headless')}</span>
                       <span className="mt-1 block text-xs text-muted-foreground">
@@ -798,15 +800,15 @@ export function SettingsModal({
                 </div>
               </section>
 
-              <section className="scroll-mt-8" id="network" ref={(node) => { sectionRefs.current.network = node; }}>
-                <div className="mb-5 flex items-center gap-2">
+              <section className="mt-6" id="network">
+                <div className="mb-3 flex items-center gap-2">
                   <span className="font-mono text-[11px] font-semibold uppercase tracking-[0.16em] text-primary">
                     {t('settings.network.section')}
                   </span>
                   <div className="h-px flex-1 bg-border" />
                 </div>
-                <h2 className="text-xl font-semibold tracking-[-0.03em]">{t('settings.network.title')}</h2>
-                <div className="mt-5 rounded-[8px] border border-border bg-muted p-5">
+                <h2 className="text-lg font-semibold">{t('settings.network.title')}</h2>
+                <div className="mt-4 rounded-[6px] border border-border bg-muted p-3">
                   <div className="form-field is-url">
                     <Label>{t('settings.network.baseUrl')}</Label>
                     <Input
@@ -817,53 +819,32 @@ export function SettingsModal({
                     <p className="form-hint">{t('settings.network.baseUrlHint')}</p>
                   </div>
                 </div>
-                {!midsceneReady ? (
-                  <div className="mt-5 rounded-[8px] border border-destructive/30 bg-destructive/8 p-4">
-                    <p className="text-sm leading-7 text-muted-foreground">
-                      {t('settings.midscene.requiredHint')}
-                    </p>
-                  </div>
-                ) : null}
               </section>
-            </main>
-          </div>
+            </>
+          ) : null}
+        </main>
+      </div>
 
-      {!pageMode ? (
-        <DialogFooter className="settings-dialog-footer shrink-0 border-t border-border px-5 py-4">
+      <DialogFooter className="settings-dialog-footer shrink-0 border-t border-border px-3.5 py-2.5">
           <Button className="rounded-[4px]" onClick={onClose} type="button" variant="outline">
-            {t('common.skip')}
+            {t('common.close')}
           </Button>
           <Button
-            className="min-w-[132px] rounded-[4px]"
+            className="min-w-[116px] rounded-[4px]"
             disabled={showMissingRequiredState}
             onClick={onSave}
             type="button"
           >
             {saveLabel}
           </Button>
-        </DialogFooter>
-      ) : null}
+      </DialogFooter>
     </div>
   );
-
-  if (pageMode) {
-    return (
-      <PageShell>
-        <PageHeader
-          action={pageAction}
-          title={t('settings.title')}
-        />
-        <PageBody className="settings-page-body">
-          {settingsShell}
-        </PageBody>
-      </PageShell>
-    );
-  }
 
   return (
     <Dialog onOpenChange={(nextOpen) => !nextOpen && onClose()} open={open}>
       <DialogContent
-        className="settings-dialog-content flex max-h-[min(920px,calc(100vh-48px))] w-[min(960px,calc(100vw-48px))] overflow-hidden rounded-[8px] border border-border bg-card p-0 shadow-[0_18px_56px_rgba(0,0,0,0.22)]"
+        className="settings-dialog-content flex h-[min(640px,calc(100vh-32px))] w-[min(760px,calc(100vw-32px))] overflow-hidden rounded-[8px] border border-border bg-card p-0 shadow-[0_18px_56px_rgba(0,0,0,0.22)] sm:max-w-[760px]"
         showCloseButton={false}
       >
         {settingsShell}

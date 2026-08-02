@@ -18,7 +18,7 @@ function Card({ className, ...props }: React.ComponentProps<'div'>) {
 function CardHeader({ className, ...props }: React.ComponentProps<'div'>) {
   return (
     <div
-      className={cn('flex flex-col space-y-1.5 p-6', className)}
+      className={cn('flex flex-col space-y-1 p-[var(--density-panel-padding)]', className)}
       data-slot="card-header"
       {...props}
     />
@@ -38,7 +38,7 @@ function CardTitle({ className, ...props }: React.ComponentProps<'div'>) {
 function CardDescription({ className, ...props }: React.ComponentProps<'div'>) {
   return (
     <div
-      className={cn('text-sm text-muted-foreground', className)}
+      className={cn('text-[length:var(--font-size-control)] text-muted-foreground', className)}
       data-slot="card-description"
       {...props}
     />
@@ -46,13 +46,13 @@ function CardDescription({ className, ...props }: React.ComponentProps<'div'>) {
 }
 
 function CardContent({ className, ...props }: React.ComponentProps<'div'>) {
-  return <div className={cn('p-6 pt-0', className)} data-slot="card-content" {...props} />;
+  return <div className={cn('p-[var(--density-panel-padding)] pt-0', className)} data-slot="card-content" {...props} />;
 }
 
 function CardFooter({ className, ...props }: React.ComponentProps<'div'>) {
   return (
     <div
-      className={cn('flex items-center p-6 pt-0', className)}
+      className={cn('flex items-center p-[var(--density-panel-padding)] pt-0', className)}
       data-slot="card-footer"
       {...props}
     />

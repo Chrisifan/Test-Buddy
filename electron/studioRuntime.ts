@@ -17,6 +17,7 @@ import {
   type ChatCommandResponse,
   type RunEventPayload,
   type RunDetail,
+  type RunArtifact,
   type RunWorkflowRequest,
   type RunWorkflowResponse,
   type RuntimeProfile,
@@ -80,6 +81,8 @@ interface BrowserObserver {
   scroll?: (request: BrowserScrollRequest) => Promise<BrowserSessionState>;
   select?: (request: BrowserSelectRequest) => Promise<BrowserSessionState>;
   capture: () => Promise<BrowserSessionState>;
+  beginTrace?: (runId: string) => Promise<boolean>;
+  finishTrace?: () => Promise<RunArtifact | undefined>;
   getPageText?: () => Promise<string>;
   inspectDom?: (selector: string, attributeName?: string) => Promise<AgentDomInspection>;
   captureObservation?: () => Promise<
@@ -252,6 +255,7 @@ function createWorkflowRunDetail(
     id: agentRun.runId,
     projectId: request.project?.id ?? '',
     testCaseId: request.workflow.id,
+    ...(request.documentId ? { documentId: request.documentId } : {}),
     environmentId: request.environment?.id ?? request.targetEnvironment,
     title: request.workflow.name,
     status: agentRun.status,
@@ -291,6 +295,32 @@ function createWorkflowRunDetail(
     artifacts: agentRun.artifacts,
     agentRun,
     ...(agentRun.failureReason ? { failureReason: agentRun.failureReason } : {}),
+  };
+}
+
+function appendTraceArtifact(agentRun: AgentRunResult, trace: RunArtifact): AgentRunResult {
+  const artifact: AgentArtifact = {
+    id: `${agentRun.runId}-artifact-trace`,
+    type: 'trace',
+    label: trace.label,
+    path: trace.path,
+  };
+  const createdAt = new Date().toISOString();
+  return {
+    ...agentRun,
+    events: [
+      ...agentRun.events,
+      {
+        id: `${agentRun.runId}-event-trace`,
+        runId: agentRun.runId,
+        type: 'agent:artifact-created',
+        message: 'Playwright Trace 已归档。',
+        status: agentRun.status,
+        artifact,
+        createdAt,
+      },
+    ],
+    artifacts: [...agentRun.artifacts, artifact],
   };
 }
 
@@ -1754,6 +1784,13 @@ function canUseSelectorFallback(step: AgentPlanStepDraft): boolean {
   return (step.action === 'click' || step.action === 'input' || step.action === 'select') && Boolean(step.selector);
 }
 
+function shouldTrySelectorFallback(
+  step: AgentPlanStepDraft,
+  execution: PlannedAgentStepExecution,
+): boolean {
+  return execution.recoveryStrategy === 'replaceSelector' && canUseSelectorFallback(step);
+}
+
 function canReplanFailedStep(step: AgentPlanStepDraft): boolean {
   return ['navigate', 'click', 'input', 'wait', 'scroll', 'select', 'observe'].includes(step.action);
 }
@@ -2285,6 +2322,7 @@ function toPlannedStepExecution(
       ...(browserSession ? { browserSession } : {}),
       ...(preparation.observation ? { observation: preparation.observation } : {}),
       ...(preparation.reportArtifactPath ? { reportArtifactPath: preparation.reportArtifactPath } : {}),
+      ...(preparation.executionMetrics ? { metrics: preparation.executionMetrics } : {}),
     };
   }
 
@@ -2327,6 +2365,7 @@ function toPlannedStepExecution(
       ...(browserSession ? { browserSession } : {}),
       ...(preparation.observation ? { observation: preparation.observation } : {}),
       ...(preparation.reportArtifactPath ? { reportArtifactPath: preparation.reportArtifactPath } : {}),
+      ...(preparation.executionMetrics ? { metrics: preparation.executionMetrics } : {}),
     };
   }
 
@@ -2338,11 +2377,13 @@ function toPlannedStepExecution(
     browserActionMessage: preparation.message,
     ...(browserSession ? { browserSession } : {}),
     ...(preparation.observation ? { observation: preparation.observation } : {}),
+    ...(preparation.executionMetrics ? { metrics: preparation.executionMetrics } : {}),
   };
 }
 
 export class StudioRuntime {
   private sessionActive = false;
+  private activeTraceScope: string | null = null;
 
   constructor(
     private readonly emitRunEvent: (event: RunEventPayload) => void,
@@ -2509,6 +2550,8 @@ export class StudioRuntime {
   }
 
   async sendChatCommand(request: ChatCommandRequest): Promise<ChatCommandResponse> {
+    const traceScopeId = `agent-trace-${Date.now()}`;
+    const ownsTraceScope = await this.beginTraceScope(traceScopeId);
     const planningAttempt = await this.createAgentPlan(request);
     const modelAssignments = resolveAgentModelAssignments({
       midsceneConfig: request.midsceneConfig ?? defaultMidsceneConfig,
@@ -2533,26 +2576,33 @@ export class StudioRuntime {
           if (dynamicWaitAttempt) {
             executionMetrics = withDynamicWaitAttempt(executionMetrics);
           }
-          const retryPreparation = await this.prepareBrowserForAgent(request, step);
-          execution = {
-            ...toPlannedStepExecution(step, stepIndex, retryPreparation),
-            ...(dynamicWaitAttempt ? { dynamicWaitAttempts: [dynamicWaitAttempt] } : {}),
-            retryAttempts: [
-              {
-                status: failedAttempt.status,
-                summary: failedAttempt.summary,
-                evidence: failedAttempt.evidence,
-                ...(failedAttempt.failureReason ? { failureReason: failedAttempt.failureReason } : {}),
-                ...(failedAttempt.failureCategory ? { failureCategory: failedAttempt.failureCategory } : {}),
-                ...(failedAttempt.recoveryStrategy ? { recoveryStrategy: failedAttempt.recoveryStrategy } : {}),
-              },
-            ],
-          };
-          executionMetrics = withRetryAttempt(
-            mergeExecutionMetrics(executionMetrics, retryPreparation.executionMetrics) ?? executionMetrics,
-          );
+          if (dynamicWaitAttempt?.status === 'failed') {
+            execution = {
+              ...failedAttempt,
+              dynamicWaitAttempts: [...(failedAttempt.dynamicWaitAttempts ?? []), dynamicWaitAttempt],
+            };
+          } else {
+            const retryPreparation = await this.prepareBrowserForAgent(request, step);
+            execution = {
+              ...toPlannedStepExecution(step, stepIndex, retryPreparation),
+              ...(dynamicWaitAttempt ? { dynamicWaitAttempts: [dynamicWaitAttempt] } : {}),
+              retryAttempts: [
+                {
+                  status: failedAttempt.status,
+                  summary: failedAttempt.summary,
+                  evidence: failedAttempt.evidence,
+                  ...(failedAttempt.failureReason ? { failureReason: failedAttempt.failureReason } : {}),
+                  ...(failedAttempt.failureCategory ? { failureCategory: failedAttempt.failureCategory } : {}),
+                  ...(failedAttempt.recoveryStrategy ? { recoveryStrategy: failedAttempt.recoveryStrategy } : {}),
+                },
+              ],
+            };
+            executionMetrics = withRetryAttempt(
+              mergeExecutionMetrics(executionMetrics, retryPreparation.executionMetrics) ?? executionMetrics,
+            );
+          }
         }
-        if (execution.status !== 'passed' && canUseSelectorFallback(step)) {
+        if (execution.status !== 'passed' && shouldTrySelectorFallback(step, execution)) {
           const selectorFallback = await this.trySelectorFallbackForStep(request, step, stepIndex, execution);
           if (selectorFallback) {
             execution = selectorFallback.execution;
@@ -2584,6 +2634,7 @@ export class StudioRuntime {
               revisedPlan: nextPlan,
               executions: [...executions],
               failedStepIndex: stepIndex,
+              ...(revisedPlan.metrics ? { planningMetrics: revisedPlan.metrics } : {}),
             });
             plannedPlan = nextPlan;
             executionMetrics = mergeExecutionMetrics(executionMetrics, withReplanningCycle(revisedPlan.metrics)) ?? executionMetrics;
@@ -2596,7 +2647,7 @@ export class StudioRuntime {
         }
         executions.push(execution);
       }
-      const agentRun = await this.enhanceRunWithReporter(request, createPlannedAgentRun({
+      const tracedAgentRun = await this.finishTraceScope(traceScopeId, ownsTraceScope, createPlannedAgentRun({
         mode: request.mode,
         prompt: request.prompt,
         runtimeDescription: describeRuntimeProfile(request.runtimeProfile),
@@ -2606,11 +2657,14 @@ export class StudioRuntime {
         planner: planningAttempt.provenance,
         executions,
         ...(replanningHistory.length ? { replanningHistory } : {}),
+        ...(planningAttempt.result.metrics ? { planningMetrics: planningAttempt.result.metrics } : {}),
         executionMetrics,
         modelAssignments,
         ...(request.projectId ? { projectId: request.projectId } : {}),
         ...(request.testCaseId ? { testCaseId: request.testCaseId } : {}),
+        ...(request.documentId ? { documentId: request.documentId } : {}),
       }));
+      const agentRun = await this.enhanceRunWithReporter(request, tracedAgentRun);
       return this.createChatCommandResponse(request, agentRun);
     }
 
@@ -2629,7 +2683,7 @@ export class StudioRuntime {
         : undefined;
     const verificationEvaluation = browserPreparation.assertionEvaluation ?? unresolvedEvaluation;
     const executionMetrics = browserPreparation.executionMetrics;
-    const agentRun = await this.enhanceRunWithReporter(request, createStubAgentRun({
+    const tracedAgentRun = await this.finishTraceScope(traceScopeId, ownsTraceScope, createStubAgentRun({
       mode: request.mode,
       prompt: request.prompt,
       runtimeDescription: describeRuntimeProfile(request.runtimeProfile),
@@ -2666,8 +2720,42 @@ export class StudioRuntime {
         : {}),
       ...(request.projectId ? { projectId: request.projectId } : {}),
       ...(request.testCaseId ? { testCaseId: request.testCaseId } : {}),
+      ...(request.documentId ? { documentId: request.documentId } : {}),
     }));
+    const agentRun = await this.enhanceRunWithReporter(request, tracedAgentRun);
     return this.createChatCommandResponse(request, agentRun);
+  }
+
+  private async beginTraceScope(runId: string): Promise<boolean> {
+    if (this.activeTraceScope) {
+      return false;
+    }
+
+    this.activeTraceScope = runId;
+    try {
+      await this.browserObserver?.beginTrace?.(runId);
+      return true;
+    } catch {
+      this.activeTraceScope = null;
+      return false;
+    }
+  }
+
+  private async finishTraceScope(
+    runId: string,
+    ownsTraceScope: boolean,
+    agentRun: AgentRunResult,
+  ): Promise<AgentRunResult> {
+    if (!ownsTraceScope || this.activeTraceScope !== runId) {
+      return agentRun;
+    }
+
+    try {
+      const artifact = await this.browserObserver?.finishTrace?.();
+      return artifact ? appendTraceArtifact(agentRun, artifact) : agentRun;
+    } finally {
+      this.activeTraceScope = null;
+    }
   }
 
   private async enhanceRunWithReporter(
@@ -2721,6 +2809,7 @@ export class StudioRuntime {
         message: `${result.summary}\n\n${createReporterMarkdown(result)}`,
         status: agentRun.status,
         artifact,
+        ...(result.metrics ? { metrics: result.metrics } : {}),
         createdAt: new Date().toISOString(),
       };
       const htmlEvent: AgentRunEvent | undefined = htmlArtifact
@@ -2740,6 +2829,13 @@ export class StudioRuntime {
         events: [...agentRun.events, event, ...(htmlEvent ? [htmlEvent] : [])],
         artifacts: [...agentRun.artifacts, artifact, ...(htmlArtifact ? [htmlArtifact] : [])],
         metrics: mergeExecutionMetrics(agentRun.metrics, result.metrics) ?? agentRun.metrics,
+        reporter: {
+          summary: result.summary,
+          evidenceSummary: result.evidenceSummary,
+          failureAnalysis: result.failureAnalysis,
+          suggestedFixes: result.suggestedFixes,
+          modelName: result.modelName,
+        },
       };
     } catch {
       return agentRun;
@@ -3209,6 +3305,7 @@ export class StudioRuntime {
   async runWorkflow(request: RunWorkflowRequest): Promise<RunWorkflowResponse> {
     const runId = `agent-run-workflow-${Date.now()}`;
     const title = request.workflow.name;
+    const ownsTraceScope = await this.beginTraceScope(runId);
     const emitRunEvent = (event: RunEventPayload) => {
       if (!request.parentRunId) {
         this.emitRunEvent(event);
@@ -3296,6 +3393,7 @@ export class StudioRuntime {
         ...(request.project ? { project: request.project, projectId: request.project.id } : {}),
         ...(request.environment ? { environment: request.environment } : {}),
         testCaseId: request.workflow.id,
+        ...(request.documentId ? { documentId: request.documentId } : {}),
       });
       stepRuns.push(response.agentRun);
       emitRunEvent({
@@ -3309,13 +3407,14 @@ export class StudioRuntime {
       }
     }
 
-    const agentRun = createWorkflowAgentRun({
+    const agentRun = await this.finishTraceScope(runId, ownsTraceScope, createWorkflowAgentRun({
       workflow: request.workflow,
       stepRuns,
       runId,
       ...(request.project ? { projectId: request.project.id } : {}),
       ...(request.environment ? { environmentId: request.environment.id } : {}),
-    });
+      ...(request.documentId ? { documentId: request.documentId } : {}),
+    }));
     const detail = createWorkflowRunDetail(request, agentRun);
     emitRunEvent({
       runId,

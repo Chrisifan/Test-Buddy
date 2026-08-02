@@ -1,22 +1,196 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   copyTestStep,
+  createDemoStudioState,
+  createPrdDocumentAsset,
+  createRecordingFromGeneratedPath,
   createTestStep,
+  createTestCaseFromGeneratedPath,
   createEmptyProject,
   createInitialStudioState,
+  createManualStepAutomationReplacement,
+  createReporterFixDraft,
   getExclusiveRecordingReplayId,
+  isRecordingLinkedToGeneratedPath,
+  isTestCaseLinkedToGeneratedPath,
   getTestCaseRunBlocker,
+  getTestStepRunBlocker,
   hydrateStudioState,
   insertTestStep,
   isAgentRunnableTestCase,
   moveTestStep,
   removeTestStep,
+  updatePrdDocumentAnalysis,
 } from './studio.js';
 
 describe('studio state hydration', () => {
+  it('generates traceable test paths from concrete PRD requirements', () => {
+    const document = createPrdDocumentAsset({
+      name: 'member-management.md',
+      kind: 'markdown',
+      size: 240,
+      sourceText: `# 成员管理
+- 管理员必须能新增成员，并在列表中展示邮箱与状态。
+- 系统默认按创建时间倒序排序，支持按状态筛选。
+- 删除成员前必须二次确认，取消后不得改变列表。
+- 普通成员不能看到删除入口。`,
+    });
+
+    expect(document.generatedPaths).toHaveLength(4);
+    expect(document.generatedPaths.map((path) => path.sourceExcerpt)).toEqual([
+      '成员管理 - 管理员必须能新增成员，并在列表中展示邮箱与状态。',
+      '成员管理 - 系统默认按创建时间倒序排序，支持按状态筛选。',
+      '成员管理 - 删除成员前必须二次确认，取消后不得改变列表。',
+      '成员管理 - 普通成员不能看到删除入口。',
+    ]);
+    expect(document.generatedPaths.map((path) => path.priority)).toEqual(['P0', 'P1', 'P0', 'P0']);
+    expect(document.generatedPaths[0]).toMatchObject({
+      groupName: '账号权限',
+      title: expect.stringContaining('成员管理：管理员必须能新增成员'),
+      steps: [
+        expect.objectContaining({ type: 'ai', title: '进入对应功能页面' }),
+        expect.objectContaining({ type: 'ai', body: expect.stringContaining('管理员必须能新增成员') }),
+        expect.objectContaining({ type: 'aiAssert', body: expect.stringContaining('展示邮箱与状态') }),
+      ],
+    });
+  });
+
+  it('deduplicates repeated PRD clauses and keeps the generic fallback for unstructured text', () => {
+    const duplicateDocument = createPrdDocumentAsset({
+      name: 'duplicate.md',
+      kind: 'markdown',
+      size: 160,
+      sourceText: `# 订单管理
+- 用户必须填写收货地址后才能提交订单。
+- 用户必须填写收货地址后才能提交订单。`,
+    });
+    const inlineDocument = createPrdDocumentAsset({
+      name: 'inline-requirements.md',
+      kind: 'markdown',
+      size: 120,
+      sourceText: '# 订单列表\n系统支持按状态筛选；系统默认按创建时间倒序排序。',
+    });
+    const fallbackDocument = createPrdDocumentAsset({
+      name: 'overview.txt',
+      kind: 'text',
+      size: 100,
+      sourceText: '这份材料说明本次迭代的整体背景、范围和体验目标，供团队讨论使用。',
+    });
+
+    expect(duplicateDocument.generatedPaths).toHaveLength(1);
+    expect(duplicateDocument.generatedPaths[0]?.sourceExcerpt).toBe('订单管理 - 用户必须填写收货地址后才能提交订单。');
+    expect(inlineDocument.generatedPaths.map((path) => path.sourceExcerpt)).toEqual([
+      '订单列表 - 系统支持按状态筛选',
+      '订单列表 - 系统默认按创建时间倒序排序。',
+    ]);
+    expect(fallbackDocument.generatedPaths).toHaveLength(1);
+    expect(fallbackDocument.generatedPaths[0]).toMatchObject({ groupName: 'PRD 主路径' });
+    expect(fallbackDocument.generatedPaths[0]?.sourceExcerpt).toBeUndefined();
+  });
+
+  it('keeps stable PRD path references when assets are renamed or a document is re-analyzed', () => {
+    const project = createEmptyProject(1);
+    const document = createPrdDocumentAsset({
+      name: 'member-management.md',
+      kind: 'markdown',
+      size: 120,
+      sourceText: '# 成员管理\n- 管理员必须能新增成员，并在列表中展示邮箱与状态。',
+    });
+    const path = document.generatedPaths[0]!;
+    const testCase = createTestCaseFromGeneratedPath({
+      path,
+      documentId: document.id,
+      groupId: project.groups[0]!.id,
+      environmentId: project.environments[0]!.id,
+      url: project.defaultUrl,
+      seed: 1,
+    });
+    const recording = createRecordingFromGeneratedPath({
+      path,
+      documentId: document.id,
+      groupId: project.groups[0]!.id,
+      environmentId: project.environments[0]!.id,
+      startUrl: project.defaultUrl,
+      seed: 1,
+    });
+    const reanalyzedDocument = updatePrdDocumentAnalysis({
+      ...document,
+      sourceText: '# 成员管理\n- 管理员 必须能新增成员，并在列表中展示邮箱与状态。',
+    });
+    const reanalyzedPath = reanalyzedDocument.generatedPaths[0]!;
+
+    expect(testCase.prdPath).toEqual({ documentId: document.id, pathId: path.id });
+    expect(recording.prdPath).toEqual({ documentId: document.id, pathId: path.id });
+    expect(reanalyzedPath.id).toBe(path.id);
+    expect(isTestCaseLinkedToGeneratedPath({ ...testCase, name: '已改名用例' }, document.id, reanalyzedPath)).toBe(true);
+    expect(isRecordingLinkedToGeneratedPath({ ...recording, name: '已改名录制' }, document.id, reanalyzedPath)).toBe(true);
+    expect(isTestCaseLinkedToGeneratedPath({ ...testCase, prdPath: undefined }, document.id, path)).toBe(true);
+    expect(isRecordingLinkedToGeneratedPath({ ...recording, prdPath: undefined }, document.id, path)).toBe(true);
+    expect(isTestCaseLinkedToGeneratedPath(testCase, 'doc-other', reanalyzedPath)).toBe(false);
+    expect(isRecordingLinkedToGeneratedPath(recording, 'doc-other', reanalyzedPath)).toBe(false);
+  });
+
+  it('starts with an empty workspace and removes the legacy demo workspace during hydration', () => {
+    const initialState = createInitialStudioState();
+    const hydrated = hydrateStudioState(createDemoStudioState());
+
+    expect(initialState.projects).toEqual([]);
+    expect(initialState.recentRuns).toEqual([]);
+    expect(initialState.chatEntries).toEqual([]);
+    expect(hydrated.projects).toEqual([]);
+    expect(hydrated.recentRuns).toEqual([]);
+    expect(hydrated.chatEntries).toEqual([]);
+    expect(hydrated.selectedProjectId).toBe('');
+  });
+
+  it('keeps persisted user projects while removing only the legacy demo workspace', () => {
+    const userProject = { ...createEmptyProject(1), id: 'project-user' };
+    const legacyState = createDemoStudioState();
+    const hydrated = hydrateStudioState({
+      ...legacyState,
+      projects: [legacyState.projects[0]!, userProject],
+      selectedProjectId: 'project-demo',
+    });
+
+    expect(hydrated.projects.map((project) => project.id)).toEqual(['project-user']);
+    expect(hydrated.selectedProjectId).toBe('project-user');
+  });
+
+  it('resets persisted browser sessions because they cannot survive an app restart', () => {
+    const project = createEmptyProject(1);
+    const hydrated = hydrateStudioState({
+      ...createInitialStudioState(),
+      projects: [project],
+      selectedProjectId: project.id,
+      browserSession: {
+        id: 'session-stale',
+        status: 'error',
+        projectId: project.id,
+        environmentId: project.environments[0]!.id,
+        currentUrl: project.defaultUrl,
+        pageTitle: 'Stale browser',
+        message: "浏览器启动失败：browserType.launch: Executable doesn't exist",
+        updatedAt: '2026-08-02T00:00:00.000Z',
+      },
+    });
+
+    expect(hydrated.browserSession).toMatchObject({
+      id: 'session-idle',
+      status: 'idle',
+      currentUrl: '',
+      pageTitle: '尚未启动浏览器',
+      message: '选择项目环境后启动受控浏览器会话。',
+    });
+  });
+
   it('normalizes persisted visual diff masks and discards invalid regions', () => {
-    const rawState = createInitialStudioState();
+    const demoState = createDemoStudioState();
+    const rawState = {
+      ...demoState,
+      projects: [{ ...demoState.projects[0]!, id: 'project-user' }],
+      selectedProjectId: 'project-user',
+    };
     const recording = rawState.projects[0]!.recordings[0]!;
     recording.visualDiffMasks = [
       { id: 'clock', label: '实时钟', x: 95, y: -2, width: 20, height: 30 },
@@ -114,7 +288,7 @@ describe('studio state hydration', () => {
   });
 
   it('creates all test step types and reports only run-blocking configuration errors', () => {
-    const state = createInitialStudioState();
+    const state = createDemoStudioState();
     const project = state.projects[0]!;
     const baseCase = project.testCases[0]!;
     const recording = project.recordings[0]!;
@@ -133,5 +307,63 @@ describe('studio state hydration', () => {
     expect(getTestCaseRunBlocker({ ...baseCase, steps: [{ id: 'blank-body', type: 'manual', title: '人工检查', body: '  ' }] }, project.recordings)).toBe('emptyInstruction');
     expect(getTestCaseRunBlocker({ ...baseCase, steps: [{ id: 'missing-recording', type: 'recordingReplay', title: '回放', body: '回放录制', recordingId: 'missing' }] }, project.recordings)).toBe('missingRecording');
     expect(getTestCaseRunBlocker({ ...baseCase, steps: [createTestStep('recordingReplay', 6, recording)] }, project.recordings)).toBeUndefined();
+    expect(getTestStepRunBlocker({ id: 'blank-title', type: 'ai', title: ' ', body: '执行操作' }, project.recordings)).toBe('emptyTitle');
+    expect(getTestStepRunBlocker({ id: 'valid', type: 'manual', title: '人工检查', body: '确认状态' }, project.recordings)).toBeUndefined();
+  });
+
+  it('converts a manual check into an executable AI assertion without mutating its source step', () => {
+    const manualStep = {
+      id: 'manual-check',
+      type: 'manual' as const,
+      title: '确认订单状态',
+      body: '订单状态显示为已支付',
+    };
+
+    const replacement = createManualStepAutomationReplacement(manualStep);
+
+    expect(replacement).toEqual({
+      id: 'manual-check',
+      type: 'aiAssert',
+      title: '确认订单状态',
+      body: '验证：订单状态显示为已支付',
+      recordingId: undefined,
+    });
+    expect(manualStep).toEqual({
+      id: 'manual-check',
+      type: 'manual',
+      title: '确认订单状态',
+      body: '订单状态显示为已支付',
+    });
+  });
+
+  it('creates an independent fix draft from distinct Reporter suggestions', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-01T08:00:00.000Z'));
+    const source = createDemoStudioState().projects[0]!.testCases[0]!;
+
+    const draft = createReporterFixDraft(
+      source,
+      {
+        failureAnalysis: '页面数据尚未稳定。',
+        suggestedFixes: ['增加数据就绪等待', '增加数据就绪等待 ', '检查 /api/orders 响应'],
+      },
+      4,
+    );
+
+    expect(draft).toMatchObject({
+      id: 'case-reporter-1785571200000-4',
+      source: 'reporter',
+      name: `${source.name} · 修复草稿`,
+      notes: expect.stringContaining('页面数据尚未稳定。'),
+    });
+    expect(draft?.steps.map((step) => step.id)).not.toContain(source.steps[0]?.id);
+    expect(draft?.steps.slice(-2)).toEqual([
+      expect.objectContaining({ type: 'ai', title: '修复建议 1', body: '增加数据就绪等待' }),
+      expect.objectContaining({ type: 'ai', title: '修复建议 2', body: '检查 /api/orders 响应' }),
+    ]);
+    expect(source.source).not.toBe('reporter');
+
+    expect(createReporterFixDraft(source, { failureAnalysis: '无建议', suggestedFixes: [' ', ''] }, 5)).toBeUndefined();
+    vi.useRealTimers();
   });
 });

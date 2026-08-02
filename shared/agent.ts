@@ -202,7 +202,7 @@ export interface AgentDynamicWaitAttempt {
 
 export interface AgentArtifact {
   id: string;
-  type: 'screenshot' | 'trace' | 'report' | 'snapshot';
+  type: 'screenshot' | 'trace' | 'report' | 'snapshot' | 'attachment';
   label: string;
   path: string;
 }
@@ -241,6 +241,14 @@ export interface AgentModelAssignment {
   modelFamily: string;
   temperature?: string;
   hasApiKey: boolean;
+}
+
+export interface AgentReporterSummary {
+  summary: string;
+  evidenceSummary: string;
+  failureAnalysis: string;
+  suggestedFixes: string[];
+  modelName: string;
 }
 
 export interface AgentBrowserSessionSnapshot {
@@ -292,6 +300,8 @@ export interface AgentRunEvent {
   dynamicWait?: AgentDynamicWaitAttempt;
   retryAttempt?: AgentRetryAttempt;
   selectorFallback?: AgentSelectorFallbackAttempt;
+  /** Metrics emitted by the model operation associated with this event. */
+  metrics?: AgentExecutionMetrics;
   createdAt: string;
 }
 
@@ -305,6 +315,7 @@ export interface AgentRunResult {
   artifacts: AgentArtifact[];
   metrics?: AgentExecutionMetrics;
   modelAssignments?: AgentModelAssignment[];
+  reporter?: AgentReporterSummary;
   startedAt: string;
   endedAt?: string;
   failureReason?: string;

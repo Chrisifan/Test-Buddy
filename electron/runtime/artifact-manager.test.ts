@@ -49,6 +49,18 @@ describe('ArtifactManager', () => {
     expect(artifacts.isManagedArtifactPath('/tmp/unrelated-report.html')).toBe(false);
   });
 
+  it('allocates trace archives only inside managed artifact storage', async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'playtest-artifacts-'));
+    const artifacts = new ArtifactManager(rootDir);
+
+    const tracePath = await artifacts.createTracePath('agent/run:1');
+
+    expect(tracePath).toMatch(
+      new RegExp(`^${escapeRegExp(path.join(rootDir, 'studio-data', 'artifacts'))}.+agent-run-1.+-trace\\.zip$`),
+    );
+    expect(artifacts.isManagedArtifactPath(tracePath)).toBe(true);
+  });
+
   it('exports a managed artifact to a user-selected destination', async () => {
     const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'playtest-artifacts-'));
     const artifacts = new ArtifactManager(rootDir);
@@ -62,4 +74,32 @@ describe('ArtifactManager', () => {
       '只能导出应用生成的证据文件。',
     );
   });
+
+  it('imports a user-selected manual evidence file into managed storage', async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'playtest-artifacts-'));
+    const sourcePath = path.join(rootDir, 'selected-evidence.txt');
+    await fs.writeFile(sourcePath, '订单号和付款金额已核对。', 'utf8');
+    const artifacts = new ArtifactManager(rootDir);
+
+    const attachment = await artifacts.importManualEvidence(sourcePath);
+
+    expect(attachment).toMatchObject({
+      type: 'attachment',
+      label: 'selected-evidence.txt',
+    });
+    expect(attachment.path).toMatch(new RegExp(`^${escapeRegExp(path.join(rootDir, 'studio-data', 'artifacts'))}.+\\.txt$`));
+    expect(artifacts.isManagedArtifactPath(attachment.path)).toBe(true);
+    await expect(fs.readFile(attachment.path, 'utf8')).resolves.toBe('订单号和付款金额已核对。');
+  });
+
+  it('rejects directories as manual evidence', async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'playtest-artifacts-'));
+    const artifacts = new ArtifactManager(rootDir);
+
+    await expect(artifacts.importManualEvidence(rootDir)).rejects.toThrow('只能附加文件证据。');
+  });
 });
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}

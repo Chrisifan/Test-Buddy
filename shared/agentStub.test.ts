@@ -31,6 +31,28 @@ describe('createPlannedAgentRun replanning history', () => {
         },
       ],
     };
+    const planningMetrics = {
+      durationMs: 84,
+      modelTimeCostMs: 64,
+      calls: 1,
+      promptTokens: 42,
+      completionTokens: 8,
+      totalTokens: 50,
+      cachedInputTokens: 0,
+      byIntent: { planner: { promptTokens: 42, completionTokens: 8, totalTokens: 50, calls: 1 } },
+      byModel: { 'planner-large': { promptTokens: 42, completionTokens: 8, totalTokens: 50, calls: 1 } },
+    };
+    const actionMetrics = {
+      durationMs: 360,
+      modelTimeCostMs: 240,
+      calls: 2,
+      promptTokens: 120,
+      completionTokens: 30,
+      totalTokens: 150,
+      cachedInputTokens: 10,
+      byIntent: { action: { promptTokens: 120, completionTokens: 30, totalTokens: 150, calls: 2 } },
+      byModel: { 'ui-agent-model': { promptTokens: 120, completionTokens: 30, totalTokens: 150, calls: 2 } },
+    };
 
     const run = createPlannedAgentRun({
       mode: 'ai',
@@ -39,6 +61,7 @@ describe('createPlannedAgentRun replanning history', () => {
       targetEnvironment: 'staging',
       plannedPlan: revisedPlan,
       planner: { source: 'model', modelName: 'planner-large' },
+      planningMetrics,
       replanningHistory: [
         {
           cycle: 1,
@@ -72,6 +95,7 @@ describe('createPlannedAgentRun replanning history', () => {
           status: 'passed',
           summary: '已打开工作台',
           evidence: 'URL 已更新',
+          metrics: actionMetrics,
           browserSession: {
             status: 'ready',
             currentUrl: 'https://example.test',
@@ -103,6 +127,8 @@ describe('createPlannedAgentRun replanning history', () => {
     );
     expect(run.artifacts.filter((artifact) => artifact.path === '/tmp/replan.png')).toHaveLength(1);
     expect(run.artifacts).toEqual(expect.arrayContaining([expect.objectContaining({ path: '/tmp/replan-report.html' })]));
+    expect(run.events.find((event) => event.type === 'agent:plan-created')?.metrics).toEqual(planningMetrics);
+    expect(run.events.find((event) => event.type === 'agent:browser-action' && event.metrics)?.metrics).toEqual(actionMetrics);
   });
 
   it('uses the unrecovered final failure as the run failure reason', () => {

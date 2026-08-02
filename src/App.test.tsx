@@ -1,5 +1,5 @@
-import { fireEvent, render, screen } from '@testing-library/react';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { fireEvent, render, screen, within } from '@testing-library/react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { App } from './App.js';
 
@@ -28,18 +28,39 @@ describe('App shell', () => {
     expect(screen.getByPlaceholderText('搜索资源...')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '连接设备' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '项目设置' })).toBeInTheDocument();
+    expect(container.querySelector('.app-project-context')).toBeNull();
     expect(screen.queryByText('Connect Device')).not.toBeInTheDocument();
     expect(container.querySelector('.app-runtimebar')).toBeInTheDocument();
   });
 
-  it('opens settings as a workbench page instead of a modal', async () => {
+  it('opens application settings as a modal over the current workbench', async () => {
     const { container } = render(<App />);
 
     fireEvent.click(await screen.findByRole('button', { name: '跳过，进入工作台' }));
     fireEvent.click(screen.getByRole('button', { name: '设置' }));
 
-    expect(await screen.findByRole('heading', { level: 1, name: '项目设置' })).toBeInTheDocument();
-    expect(container.querySelector('.settings-page-shell')).toBeInTheDocument();
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: '应用设置' })).toBeInTheDocument();
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    expect(container.querySelector('.settings-page-shell')).toBeNull();
+    expect(screen.getByLabelText('空态首页')).toBeInTheDocument();
+  });
+
+  it('uses an in-app confirmation dialog when deleting a project', async () => {
+    const nativeConfirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole('button', { name: '跳过，进入工作台' }));
+    fireEvent.click(screen.getByRole('button', { name: '创建新项目' }));
+    fireEvent.click(await screen.findByRole('button', { name: '删除项目' }));
+
+    const dialog = await screen.findByRole('dialog', { name: '删除此项？' });
+    expect(nativeConfirm).not.toHaveBeenCalled();
+    expect(dialog).toHaveTextContent('确认删除项目');
+
+    fireEvent.click(within(dialog).getByRole('button', { name: '删除' }));
+
+    expect(await screen.findByLabelText('空态首页')).toBeInTheDocument();
+    nativeConfirm.mockRestore();
   });
 });

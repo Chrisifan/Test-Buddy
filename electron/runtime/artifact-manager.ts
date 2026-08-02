@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 
 import type { RunArtifact } from '../../shared/studio.js';
 
@@ -28,6 +29,27 @@ export class ArtifactManager {
     await fs.copyFile(artifactPath, destinationPath);
   }
 
+  async importManualEvidence(sourcePath: string): Promise<RunArtifact> {
+    const source = path.resolve(sourcePath);
+    const sourceStats = await fs.stat(source);
+    if (!sourceStats.isFile()) {
+      throw new Error('只能附加文件证据。');
+    }
+
+    await this.ensureReady();
+    const sourceName = path.basename(source);
+    const extension = getSafeExtension(sourceName);
+    const artifactPath = path.join(this.artifactsDir, `manual-${Date.now()}-${randomUUID()}${extension}`);
+    await fs.copyFile(source, artifactPath);
+
+    return {
+      id: `artifact-manual-${randomUUID()}`,
+      type: 'attachment',
+      label: sourceName || '人工检查附件',
+      path: artifactPath,
+    };
+  }
+
   async createSnapshot(runId: string, label: string, title: string, url: string): Promise<RunArtifact> {
     await this.ensureReady();
     const artifactPath = path.join(this.artifactsDir, `${runId}-${Date.now()}.svg`);
@@ -46,6 +68,12 @@ export class ArtifactManager {
       label,
       path: artifactPath,
     };
+  }
+
+  async createTracePath(runId: string): Promise<string> {
+    await this.ensureReady();
+    const safeRunId = runId.replace(/[^a-zA-Z0-9_-]/g, '-').replace(/-+/g, '-');
+    return path.join(this.artifactsDir, `${safeRunId || 'agent-run'}-${Date.now()}-trace.zip`);
   }
 
   async createMarkdownReport(runId: string, label: string, markdown: string): Promise<RunArtifact> {
@@ -85,6 +113,11 @@ export class ArtifactManager {
       },
     };
   }
+}
+
+function getSafeExtension(sourceName: string): string {
+  const extension = path.extname(sourceName).toLowerCase();
+  return /^\.[a-z0-9]{1,16}$/.test(extension) ? extension : '';
 }
 
 function renderReporterHtml(markdown: string): string {

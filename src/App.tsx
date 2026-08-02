@@ -9,6 +9,7 @@ import {
   PlaySquare,
   Search,
   Settings2,
+  Trash2,
   Workflow,
 } from 'lucide-react';
 
@@ -20,6 +21,7 @@ import {
   createEmptyProject,
   createEmptyRecordingAsset,
   createEmptyTestCase,
+  createReporterFixDraft,
   createInitialStudioState,
   createPrdDocumentAsset,
   createRecordingStep,
@@ -31,6 +33,7 @@ import {
   detachRecordingFromTestCases,
   findDefaultRecordingForCaseStep,
   getTestCaseRunBlocker,
+  isTestCaseLinkedToGeneratedPath,
   initialRunLog,
   insertTestStep,
   isMidsceneConfigured,
@@ -52,6 +55,7 @@ import {
   type ProjectDraft,
   type RuntimeInfo,
   type RuntimeProfile,
+  type RunArtifact,
   type RunDetail,
   type RunSummary,
   type RunTone,
@@ -63,11 +67,12 @@ import {
   type WorkflowDraft,
   updatePrdDocumentAnalysis,
 } from '../shared/studio.js';
-import type { AgentRunResult } from '../shared/agent.js';
+import type { AgentReporterSummary, AgentRunResult } from '../shared/agent.js';
 import type { AppPage } from './app/pageMeta.js';
 import { NavButton } from './components/NavButton.js';
 import { StatusPill } from './components/StatusPill.js';
 import { Button } from './components/ui/button.js';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from './components/ui/dialog.js';
 import { TestCaseManagementPage } from './features/cases/TestCaseManagementPage.js';
 import { DocumentAnalysisPage } from './features/documents/DocumentAnalysisPage.js';
 import { HomePage } from './features/home/HomePage.js';
@@ -82,6 +87,8 @@ import { createTranslator, I18nProvider, resolveLocale } from './i18n';
 import { getRuntimeInfo, loadStudioState, saveStudioState } from './lib/persistence';
 import { formatRunDuration } from './lib/duration.js';
 import {
+  attachManualEvidence,
+  analyzePrdDocument,
   captureBrowserSnapshot,
   endSession,
   navigateBrowserSession,
@@ -94,6 +101,7 @@ import {
   sendChatCommand,
   startBrowserSession,
   startSession,
+  testMidsceneConnection,
 } from './lib/runtime';
 
 const initialState = createInitialStudioState();
@@ -103,6 +111,10 @@ const initialTranslator = createTranslator(resolveLocale(initialState.appearance
 
 type SaveMode = 'debounced' | 'immediate';
 type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
+type PendingDeletion =
+  | { kind: 'project'; id: string; description: string }
+  | { kind: 'group'; id: string; description: string }
+  | { kind: 'recording'; id: string; description: string };
 
 function createTimestampLabel(): string {
   const now = new Date();
@@ -152,8 +164,15 @@ export function App() {
   const [isSending, setIsSending] = useState(false);
   const [isRunning, setIsRunning] = useState(false);
   const [isBrowserBusy, setIsBrowserBusy] = useState(false);
+  const [semanticAnalyzingDocumentId, setSemanticAnalyzingDocumentId] = useState<string | null>(null);
+  const [semanticAnalysisError, setSemanticAnalysisError] = useState<{
+    documentId: string;
+    message: string;
+  } | null>(null);
   const [navigateUrl, setNavigateUrl] = useState(initialState.projects[0]?.defaultUrl ?? '');
   const [settingsInitialSection, setSettingsInitialSection] = useState<SettingsSectionId>('appearance');
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [pendingDeletion, setPendingDeletion] = useState<PendingDeletion | null>(null);
   const [startupGuide, setStartupGuide] = useState<StartupGuideState>(initialState.startupGuide);
   const [pendingPage, setPendingPage] = useState<AppPage | null>(null);
   const [runStatus, setRunStatus] = useState<RunTone>('neutral');
@@ -163,6 +182,13 @@ export function App() {
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
   const pageTransitionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const selectedRecordingIdRef = useRef(selectedRecordingId);
+  const pendingTestCaseRunContextRef = useRef<{
+    projectId: string;
+    testCaseId: string;
+    documentId?: string;
+    environmentId: string;
+    environmentName: string;
+  } | null>(null);
   const previousLocaleRef = useRef(resolveLocale(initialState.appearance.localeMode));
   const latestStudioStateRef = useRef<StudioState | undefined>(undefined);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -378,24 +404,27 @@ export function App() {
   useEffect(() => {
     const unsubscribe = onRunEvent((event) => {
       if (event.type === 'status') {
+        const runContext = pendingTestCaseRunContextRef.current;
+        const summary = event.summary;
         setIsRunning(event.status === 'running');
         setRunId(event.runId);
         setRunTitle(event.title);
         if (event.status) {
           setRunStatus(event.status);
         }
-        if (event.summary) {
+        if (summary) {
           setRecentRuns((current) => [
             {
               id: event.runId,
               name: event.title,
               status: event.status ?? 'running',
               duration: event.duration ?? '00:00:00',
-              summary: event.summary,
-              projectId: selectedProjectId,
-              testCaseId: selectedTestCaseId,
-              environmentId: selectedEnvironment?.id,
-              environmentName: selectedEnvironment?.name,
+              summary,
+              projectId: runContext?.projectId ?? selectedProjectId,
+              testCaseId: runContext?.testCaseId ?? selectedTestCaseId,
+              ...(runContext?.documentId ? { documentId: runContext.documentId } : {}),
+              environmentId: runContext?.environmentId ?? selectedEnvironment?.id,
+              environmentName: runContext?.environmentName ?? selectedEnvironment?.name,
               startedAt: new Date().toISOString(),
             },
             ...current.filter((run) => run.id !== event.runId).slice(0, 9),
@@ -476,6 +505,16 @@ export function App() {
   }
 
   function updateRuntimeProfile(patch: Partial<RuntimeProfile>) {
+    const nextRuntimeProfile = {
+      ...(latestStudioStateRef.current?.runtimeProfile ?? runtimeProfile),
+      ...patch,
+    };
+    if (latestStudioStateRef.current) {
+      latestStudioStateRef.current = {
+        ...latestStudioStateRef.current,
+        runtimeProfile: nextRuntimeProfile,
+      };
+    }
     setRuntimeProfile((current) => ({
       ...current,
       ...patch,
@@ -483,6 +522,16 @@ export function App() {
   }
 
   function updateMidsceneConfig(patch: Partial<MidsceneConfig>) {
+    const nextMidsceneConfig = {
+      ...(latestStudioStateRef.current?.midsceneConfig ?? midsceneConfig),
+      ...patch,
+    };
+    if (latestStudioStateRef.current) {
+      latestStudioStateRef.current = {
+        ...latestStudioStateRef.current,
+        midsceneConfig: nextMidsceneConfig,
+      };
+    }
     setMidsceneConfig((current) => ({
       ...current,
       ...patch,
@@ -490,6 +539,20 @@ export function App() {
   }
 
   function updateAgentModelConfig(role: AgentModelRole, patch: Partial<AgentRoleModelConfig>) {
+    const currentAgentModelConfig = latestStudioStateRef.current?.agentModelConfig ?? agentModelConfig;
+    const nextAgentModelConfig = {
+      ...currentAgentModelConfig,
+      [role]: {
+        ...currentAgentModelConfig[role],
+        ...patch,
+      },
+    };
+    if (latestStudioStateRef.current) {
+      latestStudioStateRef.current = {
+        ...latestStudioStateRef.current,
+        agentModelConfig: nextAgentModelConfig,
+      };
+    }
     setAgentModelConfig((current) => ({
       ...current,
       [role]: {
@@ -500,6 +563,16 @@ export function App() {
   }
 
   function updateAppearance(patch: Partial<AppearanceConfig>) {
+    const nextAppearance = {
+      ...(latestStudioStateRef.current?.appearance ?? appearance),
+      ...patch,
+    };
+    if (latestStudioStateRef.current) {
+      latestStudioStateRef.current = {
+        ...latestStudioStateRef.current,
+        appearance: nextAppearance,
+      };
+    }
     setAppearance((current) => ({
       ...current,
       ...patch,
@@ -625,7 +698,12 @@ export function App() {
   function openSettings(page?: AppPage, section?: SettingsSectionId) {
     setPendingPage(page ?? null);
     setSettingsInitialSection(section ?? getRequiredSettingsSection(page));
-    switchPage('settings');
+    setIsSettingsOpen(true);
+  }
+
+  function closeSettings() {
+    setIsSettingsOpen(false);
+    setPendingPage(null);
   }
 
   function goToPage(page: AppPage) {
@@ -667,7 +745,16 @@ export function App() {
       return;
     }
 
-    if (typeof window !== 'undefined' && !window.confirm(t('app.confirm.deleteProject', { name: project.name }))) {
+    setPendingDeletion({
+      kind: 'project',
+      id: projectId,
+      description: t('app.confirm.deleteProject', { name: project.name }),
+    });
+  }
+
+  function performDeleteProject(projectId: string) {
+    const project = projects.find((item) => item.id === projectId);
+    if (!project) {
       return;
     }
 
@@ -731,6 +818,43 @@ export function App() {
     }));
   }
 
+  async function handleAnalyzeDocument(documentId: string) {
+    if (!selectedProject) {
+      return;
+    }
+
+    const document = selectedProject.documents.find((item) => item.id === documentId);
+    if (!document) {
+      return;
+    }
+
+    setSemanticAnalyzingDocumentId(documentId);
+    setSemanticAnalysisError(null);
+    try {
+      const analysis = await analyzePrdDocument({
+        document,
+        midsceneConfig,
+        agentModelConfig,
+      });
+      updateSelectedProject(
+        (project) => ({
+          ...project,
+          documents: project.documents.map((item) =>
+            item.id === documentId ? analysis.document : item,
+          ),
+        }),
+        'immediate',
+      );
+    } catch {
+      setSemanticAnalysisError({
+        documentId,
+        message: t('documents.analysis.unexpectedFailure'),
+      });
+    } finally {
+      setSemanticAnalyzingDocumentId(null);
+    }
+  }
+
   function handleCreateCaseFromPath(documentId: string, pathId: string) {
     if (!selectedProject || !selectedEnvironment) {
       return;
@@ -754,6 +878,7 @@ export function App() {
     const groupId = existingGroup?.id ?? generatedGroup?.id ?? selectedGroup?.id ?? selectedProject.groups[0]?.id ?? '';
     const testCase = createTestCaseFromGeneratedPath({
       path,
+      documentId,
       groupId,
       environmentId: selectedEnvironment.id,
       url: selectedProject.defaultUrl,
@@ -806,6 +931,7 @@ export function App() {
     const { groupId, generatedGroup } = ensureGroupForGeneratedPath(path.groupName);
     const recording = createRecordingFromGeneratedPath({
       path,
+      documentId,
       groupId,
       environmentId: selectedEnvironment.id,
       startUrl: selectedProject.defaultUrl,
@@ -832,10 +958,9 @@ export function App() {
       return;
     }
 
-    const existingCaseNames = new Set(
-      selectedProject.testCases.filter((testCase) => testCase.source === 'prd').map((testCase) => testCase.name),
+    const pathsToCreate = document.generatedPaths.filter(
+      (path) => !selectedProject.testCases.some((testCase) => isTestCaseLinkedToGeneratedPath(testCase, documentId, path)),
     );
-    const pathsToCreate = document.generatedPaths.filter((path) => !existingCaseNames.has(path.title));
     if (!pathsToCreate.length) {
       return;
     }
@@ -859,6 +984,7 @@ export function App() {
     const nextCases = pathsToCreate.map((path, index) =>
       createTestCaseFromGeneratedPath({
         path,
+        documentId,
         groupId: groupsByName.get(path.groupName)?.id ?? selectedProject.groups[0]?.id ?? '',
         environmentId: selectedEnvironment.id,
         url: selectedProject.defaultUrl,
@@ -898,7 +1024,20 @@ export function App() {
       return;
     }
 
-    if (typeof window !== 'undefined' && !window.confirm(t('app.confirm.deleteGroup', { name: group.name }))) {
+    setPendingDeletion({
+      kind: 'group',
+      id: groupId,
+      description: t('app.confirm.deleteGroup', { name: group.name }),
+    });
+  }
+
+  function performDeleteGroup(groupId: string) {
+    if (!selectedProject) {
+      return;
+    }
+
+    const group = selectedProject.groups.find((item) => item.id === groupId);
+    if (!group) {
       return;
     }
 
@@ -1087,6 +1226,8 @@ export function App() {
     stepId: string,
     status: 'passed' | 'failed',
     note: string,
+    screenshotPath?: string,
+    attachments: RunArtifact[] = [],
   ) {
     const confirmedAt = new Date().toISOString();
     let nextSummary = '';
@@ -1118,60 +1259,118 @@ export function App() {
             : nextStatus === 'passed'
               ? '全部步骤已完成并获得执行或人工确认。'
               : '人工检查已确认，仍有步骤等待执行。';
+        const manualArtifactId = `${runId}-artifact-manual-${stepId}`;
+        const manualArtifact = screenshotPath
+          ? {
+              id: manualArtifactId,
+              type: 'snapshot' as const,
+              label: '人工检查截图证据',
+              path: screenshotPath,
+            }
+          : undefined;
+        const previousEvidence = detail.manualEvidence?.find((evidence) => evidence.stepId === stepId);
+        const previousManualArtifactIds = new Set([
+          manualArtifactId,
+          ...(previousEvidence?.attachments ?? []).map((attachment) => attachment.id),
+        ]);
+        const manualArtifacts: RunArtifact[] = [
+          ...(manualArtifact ? [manualArtifact] : []),
+          ...attachments,
+        ];
+        const attachmentLabels = attachments.map((attachment) => attachment.label).join('、');
+        const attachmentSummary = attachmentLabels ? `（已附加文件：${attachmentLabels}）` : '';
         const manualEvidence = [
           ...(detail.manualEvidence ?? []).filter((evidence) => evidence.stepId !== stepId),
-          { stepId, status, note, confirmedAt },
+          {
+            stepId,
+            status,
+            note,
+            confirmedAt,
+            ...(screenshotPath ? { screenshotPath } : {}),
+            ...(attachments.length ? { attachments } : {}),
+          },
         ];
-        const agentRun = detail.agentRun
+        const currentAgentRun = detail.agentRun;
+        const agentRun = currentAgentRun
           ? (() => {
-              const remainingEvents = detail.agentRun.events.filter(
-                (event) => event.type !== 'agent:run-finished' && !(event.type === 'agent:assertion-result' && event.stepId === stepId),
+              const manualArtifactEventPrefix = `${currentAgentRun.runId}-event-manual-artifact-${stepId}`;
+              const remainingEvents = currentAgentRun.events.filter(
+                (event) =>
+                  event.type !== 'agent:run-finished' &&
+                  !(event.type === 'agent:assertion-result' && event.stepId === stepId) &&
+                  !(event.type === 'agent:artifact-created' && event.id.startsWith(manualArtifactEventPrefix)),
               );
               const verificationEvent = {
-                id: `${detail.agentRun.runId}-event-manual-${stepId}`,
-                runId: detail.agentRun.runId,
+                id: `${currentAgentRun.runId}-event-manual-${stepId}`,
+                runId: currentAgentRun.runId,
                 type: 'agent:assertion-result' as const,
                 stepId,
-                message: `人工检查${status === 'passed' ? '通过' : '失败'}：${note}`,
+                message: `人工检查${status === 'passed' ? '通过' : '失败'}：${note}${screenshotPath ? '（已附加当前页面截图）' : ''}${attachmentSummary}`,
                 status,
                 verification: {
-                  id: `${detail.agentRun.runId}-verification-manual-${stepId}`,
+                  id: `${currentAgentRun.runId}-verification-manual-${stepId}`,
                   stepId,
                   status,
                   summary: `人工检查${status === 'passed' ? '通过' : '失败'}。`,
-                  evidence: note,
+                  evidence: `${note}${screenshotPath ? `；已附加截图：${screenshotPath}` : ''}${attachmentLabels ? `；已附加文件：${attachmentLabels}` : ''}`,
                   ...(status === 'failed' ? { failureReason: note } : {}),
                   createdAt: confirmedAt,
                 },
                 createdAt: confirmedAt,
               };
+              const artifactEvents = manualArtifacts.map((artifact) =>
+                ({
+                    id: `${manualArtifactEventPrefix}-${artifact.id}`,
+                    runId: currentAgentRun.runId,
+                    type: 'agent:artifact-created' as const,
+                    stepId,
+                    message: artifact.type === 'snapshot' ? '已附加人工检查截图证据。' : `已附加人工检查文件：${artifact.label}。`,
+                    status,
+                    artifact,
+                    createdAt: confirmedAt,
+                  }),
+              );
+              const { failureReason: previousFailureReason, ...agentRunWithoutPreviousFailure } = currentAgentRun;
               return {
-                ...detail.agentRun,
+                ...agentRunWithoutPreviousFailure,
                 status: nextStatus,
                 summary: nextSummary,
                 events: [
                   ...remainingEvents,
                   verificationEvent,
+                  ...artifactEvents,
                   {
-                    id: `${detail.agentRun.runId}-event-finished`,
-                    runId: detail.agentRun.runId,
+                    id: `${currentAgentRun.runId}-event-finished`,
+                    runId: currentAgentRun.runId,
                     type: 'agent:run-finished' as const,
                     message: nextSummary,
                     status: nextStatus,
                     createdAt: confirmedAt,
                   },
                 ],
+                artifacts: [
+                  ...currentAgentRun.artifacts.filter((artifact) => !previousManualArtifactIds.has(artifact.id)),
+                  ...manualArtifacts,
+                ],
                 ...(nextStatus === 'failed' ? { failureReason: note } : {}),
               };
             })()
           : undefined;
+        const { failureReason: previousFailureReason, ...detailWithoutPreviousFailure } = detail;
 
         return {
-          ...detail,
+          ...detailWithoutPreviousFailure,
           status: nextStatus,
           summary: nextSummary,
-          logs: [...detail.logs, `[${createTimestampLabel()}] 人工检查${status === 'passed' ? '通过' : '失败'}：${note}`],
+          logs: [
+            ...detail.logs,
+            `[${createTimestampLabel()}] 人工检查${status === 'passed' ? '通过' : '失败'}：${note}${screenshotPath ? '（已附加当前页面截图）' : ''}${attachmentSummary}`,
+          ],
           steps,
+          artifacts: [
+            ...detail.artifacts.filter((artifact) => !previousManualArtifactIds.has(artifact.id)),
+            ...manualArtifacts,
+          ],
           manualEvidence,
           ...(agentRun ? { agentRun } : {}),
           ...(nextStatus === 'failed' ? { failureReason: note } : {}),
@@ -1189,6 +1388,29 @@ export function App() {
           : run,
       ),
     );
+  }
+
+  async function handleCaptureManualEvidence(): Promise<string | undefined> {
+    setIsBrowserBusy(true);
+    try {
+      const session = await captureBrowserSnapshot();
+      setBrowserSession(session);
+      return session.screenshotPath;
+    } catch {
+      appendSystemMessage(t('app.runtime.browserCaptureFailed'));
+      return undefined;
+    } finally {
+      setIsBrowserBusy(false);
+    }
+  }
+
+  async function handleAttachManualEvidence(): Promise<RunArtifact | undefined> {
+    try {
+      return await attachManualEvidence();
+    } catch {
+      appendSystemMessage(t('app.runtime.manualEvidenceAttachFailed'));
+      return undefined;
+    }
   }
 
   function handleUpdateRecording(updater: (recording: RecordingAsset) => RecordingAsset) {
@@ -1347,6 +1569,7 @@ export function App() {
           summary: result.detail.summary,
           projectId: selectedProject.id,
           testCaseId: selectedRecording.id,
+          ...(result.detail.documentId ? { documentId: result.detail.documentId } : {}),
           environmentId: environment.id,
           environmentName: environment.name,
           startedAt: result.agentRun.startedAt,
@@ -1381,7 +1604,16 @@ export function App() {
       ? t('app.confirm.deleteRecordingReferenced', { name: target.name, count: affectedSteps })
       : t('app.confirm.deleteRecording', { name: target.name });
 
-    if (typeof window !== 'undefined' && !window.confirm(confirmMessage)) {
+    setPendingDeletion({ kind: 'recording', id: recordingId, description: confirmMessage });
+  }
+
+  function performDeleteRecording(recordingId: string) {
+    if (!selectedProject) {
+      return;
+    }
+
+    const target = selectedProject.recordings.find((item) => item.id === recordingId);
+    if (!target) {
       return;
     }
 
@@ -1393,6 +1625,23 @@ export function App() {
       testCases: detached.testCases,
     }));
     setSelectedRecordingId(nextRecordings[0]?.id ?? '');
+  }
+
+  function confirmPendingDeletion() {
+    if (!pendingDeletion) {
+      return;
+    }
+
+    const deletion = pendingDeletion;
+    setPendingDeletion(null);
+
+    if (deletion.kind === 'project') {
+      performDeleteProject(deletion.id);
+    } else if (deletion.kind === 'group') {
+      performDeleteGroup(deletion.id);
+    } else {
+      performDeleteRecording(deletion.id);
+    }
   }
 
   function handleCreateStep(type: TestStepDraft['type'], index: number): string | undefined {
@@ -1530,6 +1779,7 @@ export function App() {
     const environmentName = selectedEnvironment?.name ?? targetEnvironment;
     const projectId = agentRun.intent.projectId ?? selectedProject?.id ?? '';
     const testCaseId = agentRun.intent.testCaseId ?? selectedTestCase?.id ?? '';
+    const documentId = agentRun.intent.documentId;
     const logs = agentRun.events.map((event) => `[${createTimestampLabel()}] ${event.type}: ${event.message}`);
     const fallbackDurationMs = agentRun.endedAt
       ? Date.parse(agentRun.endedAt) - Date.parse(agentRun.startedAt)
@@ -1539,6 +1789,7 @@ export function App() {
       id: agentRun.runId,
       projectId,
       testCaseId,
+      ...(documentId ? { documentId } : {}),
       environmentId,
       title: agentRun.plan.title,
       status: agentRun.status,
@@ -1570,6 +1821,7 @@ export function App() {
       summary: agentRun.summary,
       projectId,
       testCaseId,
+      ...(documentId ? { documentId } : {}),
       environmentId,
       environmentName,
       startedAt: agentRun.startedAt,
@@ -1725,30 +1977,43 @@ export function App() {
     }
   }
 
-  async function handleRunTestCase() {
+  async function handleRunTestCase(
+    testCaseToRun: TestCaseDraft | undefined = selectedTestCase,
+    environmentToRun = selectedCaseEnvironment,
+  ) {
+    const runBlocker = selectedProject && testCaseToRun
+      ? getTestCaseRunBlocker(testCaseToRun, selectedProject.recordings)
+      : undefined;
     if (
       !selectedProject ||
-      !selectedTestCase ||
-      !selectedCaseEnvironment ||
-      selectedTestCaseRunBlocker ||
+      !testCaseToRun ||
+      !environmentToRun ||
+      runBlocker ||
       isRunning
     ) {
       return;
     }
 
     setIsRunning(true);
+    pendingTestCaseRunContextRef.current = {
+      projectId: selectedProject.id,
+      testCaseId: testCaseToRun.id,
+      ...(testCaseToRun.prdPath?.documentId ? { documentId: testCaseToRun.prdPath.documentId } : {}),
+      environmentId: environmentToRun.id,
+      environmentName: environmentToRun.name,
+    };
     setRunStatus('running');
     setRunLogs([
-      `[${createTimestampLabel()}] Dispatching test case: ${selectedTestCase.name}`,
+      `[${createTimestampLabel()}] Dispatching test case: ${testCaseToRun.name}`,
       `[${createTimestampLabel()}] Project: ${selectedProject.name}`,
-      `[${createTimestampLabel()}] Environment: ${selectedCaseEnvironment.name}`,
+      `[${createTimestampLabel()}] Environment: ${environmentToRun.name}`,
     ]);
 
     try {
       const result = await runTestCase({
         project: selectedProject,
-        testCase: selectedTestCase,
-        environment: selectedCaseEnvironment,
+        testCase: testCaseToRun,
+        environment: environmentToRun,
         runtimeProfile,
         midsceneConfig,
         agentModelConfig,
@@ -1756,19 +2021,80 @@ export function App() {
       });
       setRunId(result.runId);
       setRunTitle(result.title);
+      setRunStatus(result.detail.status);
+      setIsRunning(false);
       setRunDetails((current) => [result.detail, ...current.filter((run) => run.id !== result.runId)]);
+      setRecentRuns((current) => [
+        {
+          id: result.runId,
+          name: result.title,
+          status: result.detail.status,
+          duration: result.detail.duration,
+          summary: result.detail.summary,
+          projectId: selectedProject.id,
+          testCaseId: testCaseToRun.id,
+          ...(result.detail.documentId ? { documentId: result.detail.documentId } : {}),
+          environmentId: environmentToRun.id,
+          environmentName: environmentToRun.name,
+          startedAt: result.detail.startedAt,
+        },
+        ...current.filter((run) => run.id !== result.runId).slice(0, 11),
+      ]);
       setSelectedRunId(result.runId);
       setBrowserSession((current) => ({
         ...current,
         projectId: selectedProject.id,
-        environmentId: selectedCaseEnvironment.id,
+        environmentId: environmentToRun.id,
       }));
+      pendingTestCaseRunContextRef.current = null;
       switchPage('runs');
     } catch {
+      pendingTestCaseRunContextRef.current = null;
       setIsRunning(false);
       setRunStatus('failed');
       appendSystemMessage(t('app.runtime.caseFailed'));
     }
+  }
+
+  function handleRerunTestCase(run: RunDetail) {
+    if (!selectedProject) {
+      return;
+    }
+
+    const testCase = selectedProject.testCases.find((item) => item.id === run.testCaseId);
+    const environment = selectedProject.environments.find((item) => item.id === run.environmentId);
+    if (!testCase || !environment) {
+      appendSystemMessage(t('app.runtime.rerunUnavailable'));
+      return;
+    }
+
+    setSelectedTestCaseId(testCase.id);
+    setSelectedGroupId(testCase.groupId);
+    void handleRunTestCase(testCase, environment);
+  }
+
+  function handleCreateReporterFixDraft(run: RunDetail, reporter: AgentReporterSummary) {
+    if (!selectedProject || run.projectId !== selectedProject.id) {
+      return;
+    }
+
+    const source = selectedProject.testCases.find((testCase) => testCase.id === run.testCaseId);
+    if (!source) {
+      return;
+    }
+
+    const draft = createReporterFixDraft(source, reporter, selectedProject.testCases.length + 1);
+    if (!draft) {
+      return;
+    }
+
+    updateSelectedProject((project) => ({
+      ...project,
+      testCases: [draft, ...project.testCases],
+    }), 'immediate');
+    setSelectedGroupId(draft.groupId);
+    setSelectedTestCaseId(draft.id);
+    switchPage('cases');
   }
 
   function handleSaveSettings() {
@@ -1781,10 +2107,14 @@ export function App() {
     if (requiresMidsceneBeforeSave && !startupGuide.completed) {
       completeStartupGuide('configured');
     }
+
+    // An explicit save must not depend on the background debounce completing before a reload.
+    persistLatestStudioState('immediate');
     if (pendingPage) {
       switchPage(pendingPage);
       setPendingPage(null);
     }
+    setIsSettingsOpen(false);
   }
 
   if (isHydrated && !startupGuide.completed) {
@@ -1806,14 +2136,14 @@ export function App() {
 
   return (
     <I18nProvider locale={effectiveLocale}>
-    <div className="grid h-screen grid-cols-[224px_minmax(0,1fr)] overflow-hidden bg-background text-foreground max-md:grid-cols-1 max-md:grid-rows-[auto_minmax(0,1fr)]">
+    <div className="app-shell grid h-screen grid-cols-[240px_minmax(0,1fr)] overflow-hidden bg-background text-foreground max-md:grid-cols-1 max-md:grid-rows-[auto_minmax(0,1fr)]">
       <nav aria-label={t('app.nav.main')} className="app-rail flex min-h-0 shrink-0 flex-col px-3 pb-4 pt-11 max-md:hidden">
         <button
           className="nav-brand flex cursor-pointer items-center gap-2.5 px-2 text-left transition hover:opacity-92"
           onClick={() => goToPage('home')}
           type="button"
         >
-          <img alt="" className="h-10 w-10 shrink-0 rounded-[8px] object-cover shadow-sm" src={brandLogo} />
+          <img alt="" className="h-9 w-9 shrink-0 rounded-[8px] object-cover shadow-sm" src={brandLogo} />
           <span className="min-w-0">
             <span className="block truncate text-[18px] font-black leading-6 tracking-[-0.04em] text-primary">TestBuddy</span>
             <span className="block truncate font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">{t('app.brand.subtitle')}</span>
@@ -1832,7 +2162,7 @@ export function App() {
         </div>
 
         <div className="nav-tools mt-4 grid gap-1 pt-3">
-          <NavButton active={activePage === 'settings'} icon={<Settings2 className="h-4 w-4" />} label={t('app.nav.settings')} onClick={() => openSettings(undefined, 'appearance')} />
+          <NavButton active={isSettingsOpen} icon={<Settings2 className="h-4 w-4" />} label={t('app.nav.settings')} onClick={() => openSettings(undefined, 'appearance')} />
           <Button
             aria-label={t('app.shell.openSettings')}
             className="hidden"
@@ -1855,20 +2185,24 @@ export function App() {
         >
           <img alt="" className="h-full w-full object-cover" src={brandLogo} />
         </button>
-        <div className="flex items-center gap-1">
-          <NavButton active={activePage === 'home'} icon={<House className="h-4 w-4" />} label={t('app.nav.overview')} onClick={() => goToPage('home')} />
-          <NavButton active={activePage === 'projects'} icon={<FolderKanban className="h-4 w-4" />} label={t('app.nav.projects')} onClick={() => goToPage('projects')} />
-          <NavButton active={activePage === 'cases'} icon={<ClipboardList className="h-4 w-4" />} label={t('app.nav.cases')} onClick={() => goToPage('cases')} />
-          <NavButton active={activePage === 'runs'} icon={<PlaySquare className="h-4 w-4" />} label={t('app.nav.runs')} onClick={() => goToPage('runs')} />
+        <div className="mobile-nav-menu flex min-w-0 flex-1 items-center gap-1 overflow-x-auto px-2">
+          <NavButton active={activePage === 'home'} icon={<House className="h-4 w-4" />} label={t('app.nav.overview')} onClick={() => goToPage('home')} showLabel={false} />
+          <NavButton active={activePage === 'projects'} icon={<FolderKanban className="h-4 w-4" />} label={t('app.nav.projects')} onClick={() => goToPage('projects')} showLabel={false} />
+          <NavButton active={activePage === 'documents'} icon={<FileText className="h-4 w-4" />} label={t('app.nav.documents')} onClick={() => goToPage('documents')} showLabel={false} />
+          <NavButton active={activePage === 'cases'} icon={<ClipboardList className="h-4 w-4" />} label={t('app.nav.cases')} onClick={() => goToPage('cases')} showLabel={false} />
+          <NavButton active={activePage === 'runs'} icon={<PlaySquare className="h-4 w-4" />} label={t('app.nav.runs')} onClick={() => goToPage('runs')} showLabel={false} />
+          <NavButton active={activePage === 'nl'} icon={<MessageSquareText className="h-4 w-4" />} label={t('app.nav.naturalLanguage')} onClick={() => goToPage('nl')} showLabel={false} />
+          <NavButton active={activePage === 'workflow'} icon={<Workflow className="h-4 w-4" />} label={t('app.nav.workflow')} onClick={() => goToPage('workflow')} showLabel={false} />
+          <NavButton active={activePage === 'recording'} icon={<MousePointerClick className="h-4 w-4" />} label={t('app.nav.recording')} onClick={() => goToPage('recording')} showLabel={false} />
         </div>
         <Button aria-label={t('app.shell.openSettings')} className="h-10 w-10 rounded-[4px]" onClick={() => openSettings(undefined, 'appearance')} size="icon" type="button" variant="ghost">
           <Settings2 className="h-4 w-4" />
         </Button>
       </nav>
 
-      <div className="grid min-h-0 min-w-0 grid-rows-[56px_minmax(0,1fr)] max-md:grid-rows-[minmax(0,1fr)]">
+      <div className="app-workspace grid min-h-0 min-w-0 grid-rows-[64px_minmax(0,1fr)_40px] max-md:grid-rows-[minmax(0,1fr)]">
         <header className="app-topbar flex items-center justify-between gap-4 px-6 max-md:hidden">
-          <div className="app-search flex h-9 w-[min(320px,30vw)] items-center gap-2 rounded-full px-3">
+          <div className="app-search flex h-10 w-[min(448px,40vw)] items-center gap-2 rounded-[4px] px-3">
             <Search className="h-4 w-4 text-muted-foreground" />
             <input
               className="h-full min-w-0 flex-1 border-0 bg-transparent p-0 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:ring-0"
@@ -1877,25 +2211,14 @@ export function App() {
             />
           </div>
           <div className="app-topbar-actions flex items-center gap-2">
+            <Button className="rounded-[4px]" onClick={() => goToPage('projects')} type="button" variant="outline">
+              <FolderKanban className="h-4 w-4" />
+              {t('app.shell.projectSettings')}
+            </Button>
             <Button className="rounded-[4px]" onClick={() => goToPage('recording')} type="button">
               <MousePointerClick className="h-4 w-4" />
               {t('app.shell.connectDevice')}
             </Button>
-            <Button className="rounded-[4px]" onClick={() => goToPage('projects')} type="button" variant="ghost">
-              <FolderKanban className="h-4 w-4" />
-              {t('app.shell.projectSettings')}
-            </Button>
-            <div className="app-project-context ml-2 flex items-center gap-3 border-l border-border pl-4">
-              <div className="min-w-0 text-right">
-                <span className="block max-w-[220px] truncate text-sm font-semibold">{selectedProject?.name ?? t('app.shell.noProject')}</span>
-                <span className="block max-w-[220px] truncate font-mono text-[10px] uppercase tracking-[0.06em] text-muted-foreground">
-                  {selectedEnvironment?.name ?? t('app.runtime.environmentMissing')}
-                </span>
-              </div>
-              <span className="flex h-8 w-8 items-center justify-center rounded-full bg-secondary text-xs font-bold text-secondary-foreground">
-                TB
-              </span>
-            </div>
           </div>
         </header>
         <main
@@ -1936,47 +2259,51 @@ export function App() {
               onCreateCaseFromPath={handleCreateCaseFromPath}
               onCreateDocument={handleCreateDocument}
               onCreateRecordingFromPath={handleCreateRecordingFromPath}
+              onAnalyzeDocument={handleAnalyzeDocument}
+              onOpenProjects={() => goToPage('projects')}
               onSelectDocument={setSelectedDocumentId}
               onUpdateDocument={handleUpdateDocument}
+              semanticAnalysisError={
+                semanticAnalysisError?.documentId === selectedDocumentId
+                  ? semanticAnalysisError.message
+                  : null
+              }
+              semanticAnalyzingDocumentId={semanticAnalyzingDocumentId}
               project={selectedProject}
               selectedDocumentId={selectedDocumentId}
             />
           ) : null}
 
           {activePage === 'cases' ? (
-              <TestCaseManagementPage
-                browserSession={browserSession}
-                isBrowserBusy={isBrowserBusy}
-                isRunning={isRunning}
-                navigateUrl={navigateUrl}
-                onAppendStep={handleAppendStep}
-                onCaptureBrowser={handleCaptureBrowser}
-                onChangeNavigateUrl={setNavigateUrl}
-                onCreateTestCase={handleCreateTestCase}
-                onDeleteStep={(stepId) =>
-                  updateSelectedTestCase((testCase) => ({
-                    ...testCase,
-                    steps: testCase.steps.filter((step) => step.id !== stepId),
-                  }))
-                }
-                onNavigateBrowser={handleNavigateBrowser}
-                onRunTestCase={handleRunTestCase}
-                onStartBrowserSession={handleStartBrowserSession}
-                onSelectGroup={setSelectedGroupId}
-                onSelectTestCase={setSelectedTestCaseId}
-                onUpdateTestCase={updateSelectedTestCase}
-                project={selectedProject}
-                runStatus={runStatus}
-                selectedEnvironment={selectedEnvironment}
-                selectedGroup={selectedGroup}
-                selectedTestCase={selectedTestCase}
-                selectedTestCaseId={selectedTestCaseId}
-              />
+            <TestCaseManagementPage
+              isRunning={isRunning}
+              onCopyStep={handleCopyStep}
+              onCreateStep={handleCreateStep}
+              onCreateTestCase={handleCreateTestCase}
+              onDeleteStep={handleDeleteStep}
+              onMoveStep={handleMoveStep}
+              onOpenProjects={() => goToPage('projects')}
+              onRetrySave={() => persistLatestStudioState('immediate')}
+              onRunTestCase={handleRunTestCase}
+              onSelectTestCase={handleSelectTestCase}
+              onUpdateTestCase={updateSelectedTestCase}
+              project={selectedProject}
+              runBlocker={selectedTestCaseRunBlocker}
+              runStatus={runStatus}
+              saveStatus={saveStatus}
+              selectedTestCase={selectedTestCase}
+              selectedTestCaseId={selectedTestCaseId}
+            />
           ) : null}
 
           {activePage === 'runs' ? (
             <RunRecordsPage
+              isRunning={isRunning}
+              onAttachManualEvidence={runtimeInfo.platform === 'desktop' ? handleAttachManualEvidence : undefined}
+              onCaptureManualEvidence={handleCaptureManualEvidence}
               onConfirmManualStep={handleConfirmManualStep}
+              onCreateReporterFixDraft={handleCreateReporterFixDraft}
+              onRerunTestCase={handleRerunTestCase}
               onSelectRun={setSelectedRunId}
               project={selectedProject}
               recentRuns={recentRuns}
@@ -2011,6 +2338,7 @@ export function App() {
 
           {activePage === 'workflow' ? (
             <WorkflowPage
+              hasProject={Boolean(selectedProject)}
               isRunning={isRunning}
               onAppendStep={(type) => handleAppendStep(type)}
               onCreateWorkflow={handleCreateTestCase}
@@ -2021,6 +2349,7 @@ export function App() {
                 }))
               }
               onDuplicateStepType={(type) => handleAppendStep(type)}
+              onOpenProjects={() => goToPage('projects')}
               onRunWorkflow={handleRunWorkflow}
               onSelectWorkflow={setSelectedTestCaseId}
               onUpdateRuntimeProfile={updateRuntimeProfile}
@@ -2048,6 +2377,7 @@ export function App() {
               onCaptureSnapshot={handleCaptureRecordingSnapshot}
               onDeleteRecording={handleDeleteRecording}
               onImportPlayback={() => handleCreateRecording('imported')}
+              onOpenProjects={() => goToPage('projects')}
               onRunRecording={handleRunRecording}
               onStartRecording={handleStartRecordingSession}
               onSelectRecording={handleSelectRecording}
@@ -2057,29 +2387,8 @@ export function App() {
             />
           ) : null}
 
-          {activePage === 'settings' ? (
-            <SettingsModal
-              agentModelConfig={agentModelConfig}
-              appearance={appearance}
-              effectiveTheme={effectiveTheme}
-              initialSection={settingsInitialSection}
-              locale={effectiveLocale}
-              midsceneConfig={midsceneConfig}
-              midsceneReady={midsceneReady}
-              onClose={() => switchPage('home')}
-              onSave={handleSaveSettings}
-              onUpdateAgentModelConfig={updateAgentModelConfig}
-              onUpdateAppearance={updateAppearance}
-              onUpdateMidsceneConfig={updateMidsceneConfig}
-              onUpdateRuntimeProfile={updateRuntimeProfile}
-              open
-              pageMode
-              requiresMidsceneBeforeSave={pendingPage ? isGatedFeaturePage(pendingPage) : false}
-              runtimeProfile={runtimeProfile}
-            />
-          ) : null}
         </main>
-        <footer className="app-runtimebar hidden items-center justify-between gap-4 px-6 font-mono text-[11px] max-md:hidden">
+        <footer className="app-runtimebar flex items-center justify-between gap-4 px-6 font-mono text-[11px] max-md:hidden">
           <div className="flex min-w-0 items-center gap-3">
             <span
               aria-hidden="true"
@@ -2097,6 +2406,48 @@ export function App() {
           </div>
         </footer>
       </div>
+
+      <SettingsModal
+        agentModelConfig={agentModelConfig}
+        appearance={appearance}
+        effectiveTheme={effectiveTheme}
+        initialSection={settingsInitialSection}
+        locale={effectiveLocale}
+        midsceneConfig={midsceneConfig}
+        midsceneReady={midsceneReady}
+        onClose={closeSettings}
+        onSave={handleSaveSettings}
+        onTestMidsceneConnection={testMidsceneConnection}
+        onUpdateAgentModelConfig={updateAgentModelConfig}
+        onUpdateAppearance={updateAppearance}
+        onUpdateMidsceneConfig={updateMidsceneConfig}
+        onUpdateRuntimeProfile={updateRuntimeProfile}
+        open={isSettingsOpen}
+        requiresMidsceneBeforeSave={pendingPage ? isGatedFeaturePage(pendingPage) : false}
+        runtimeProfile={runtimeProfile}
+      />
+
+      <Dialog onOpenChange={(open) => !open && setPendingDeletion(null)} open={Boolean(pendingDeletion)}>
+        <DialogContent aria-describedby={undefined} className="max-w-md" showCloseButton>
+          <DialogHeader>
+            <DialogTitle>{t('app.confirm.deleteTitle')}</DialogTitle>
+            {pendingDeletion ? (
+              <DialogDescription className="whitespace-pre-line leading-6">
+                {pendingDeletion.description}
+              </DialogDescription>
+            ) : null}
+          </DialogHeader>
+          <DialogFooter>
+            <Button onClick={() => setPendingDeletion(null)} type="button" variant="outline">
+              {t('app.confirm.cancel')}
+            </Button>
+            <Button onClick={confirmPendingDeletion} type="button" variant="destructive">
+              <Trash2 className="size-4" />
+              {t('app.confirm.deleteAction')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
     </div>
     </I18nProvider>

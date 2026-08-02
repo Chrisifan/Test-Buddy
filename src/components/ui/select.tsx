@@ -12,8 +12,11 @@ function SelectGroup(props: React.ComponentProps<typeof SelectPrimitive.Group>) 
   return <SelectPrimitive.Group data-slot="select-group" {...props} />;
 }
 
-function SelectValue(props: React.ComponentProps<typeof SelectPrimitive.Value>) {
-  return <SelectPrimitive.Value data-slot="select-value" {...props} />;
+function SelectValue({
+  className,
+  ...props
+}: React.ComponentProps<typeof SelectPrimitive.Value>) {
+  return <SelectPrimitive.Value className={cn('min-w-0 flex-1 truncate text-left', className)} data-slot="select-value" {...props} />;
 }
 
 function SelectTrigger({
@@ -24,7 +27,7 @@ function SelectTrigger({
   return (
     <SelectPrimitive.Trigger
       className={cn(
-        'flex h-[34px] w-full items-center justify-between rounded-[4px] border border-input bg-card px-3 py-1.5 text-sm shadow-none outline-none transition-colors hover:bg-accent data-[placeholder]:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring/35 disabled:cursor-not-allowed disabled:opacity-50 [&_svg]:pointer-events-none',
+        'flex h-[var(--density-control-height)] min-w-0 w-full items-center justify-between rounded-[4px] border border-input bg-card px-2.5 py-1 text-[length:var(--font-size-control)] shadow-none outline-none transition-colors hover:bg-accent data-[placeholder]:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring/35 disabled:cursor-not-allowed disabled:opacity-50 [&_svg]:pointer-events-none',
         className,
       )}
       data-slot="select-trigger"
@@ -105,7 +108,7 @@ function SelectLabel({
 }: React.ComponentProps<typeof SelectPrimitive.Label>) {
   return (
     <SelectPrimitive.Label
-      className={cn('px-2 py-1.5 text-sm font-semibold', className)}
+          className={cn('px-2 py-1 text-[length:var(--font-size-control)] font-semibold', className)}
       data-slot="select-label"
       {...props}
     />
@@ -120,7 +123,7 @@ function SelectItem({
   return (
     <SelectPrimitive.Item
       className={cn(
-        'relative flex w-full cursor-default select-none items-center rounded-sm py-1.5 pl-8 pr-2 text-sm outline-none focus:bg-accent focus:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50',
+        'relative flex w-full cursor-default select-none items-center rounded-sm py-1.5 pl-7 pr-2 text-[length:var(--font-size-control)] outline-none focus:bg-accent focus:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50',
         className,
       )}
       data-slot="select-item"

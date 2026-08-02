@@ -100,6 +100,11 @@ export class TestRunner {
             environment: request.environment,
             recording,
             testCaseId: request.testCase.id,
+            ...(request.testCase.prdPath?.documentId
+              ? { documentId: request.testCase.prdPath.documentId }
+              : recording.prdPath?.documentId
+                ? { documentId: recording.prdPath.documentId }
+                : {}),
             parentRunId: runId,
           });
           if (isAgentRunResult(replay.agentRun)) {
@@ -203,6 +208,7 @@ export class TestRunner {
           ...(request.browserSession ? { browserSession: request.browserSession } : {}),
           project: request.project,
           environment: request.environment,
+          ...(request.testCase.prdPath?.documentId ? { documentId: request.testCase.prdPath.documentId } : {}),
           parentRunId: runId,
           preserveCurrentPage: index > 0,
         });
@@ -278,6 +284,7 @@ export class TestRunner {
       id: runId,
       projectId: request.project.id,
       testCaseId: request.testCase.id,
+      ...(request.testCase.prdPath?.documentId ? { documentId: request.testCase.prdPath.documentId } : {}),
       environmentId: request.environment.id,
       title,
       status: hasFailure ? 'failed' : hasNeutral ? 'neutral' : 'passed',

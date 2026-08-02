@@ -5,6 +5,10 @@ import type {
   ChatCommandRequest,
   ChatCommandResponse,
   ChatEntry,
+  MidsceneConfig,
+  MidsceneConnectionTestResult,
+  PrdSemanticAnalysisRequest,
+  PrdSemanticAnalysisResponse,
   RunDetail,
   RuntimeProfile,
   RunEventPayload,
@@ -17,9 +21,15 @@ import type {
   RunWorkflowResponse,
   SaveCredentialRequest,
   CredentialRef,
+  RunArtifact,
   SessionStartRequest,
 } from '../../shared/studio.js';
-import { getExclusiveRecordingReplayId, isAgentRunnableTestCase, testCaseToWorkflow } from '../../shared/studio.js';
+import {
+  getExclusiveRecordingReplayId,
+  isAgentRunnableTestCase,
+  testCaseToWorkflow,
+  updatePrdDocumentAnalysis,
+} from '../../shared/studio.js';
 import { createStubAgentRun, createWorkflowAgentRun } from '../../shared/agentStub.js';
 import { createRecordingAgentRun } from '../../shared/recordingAgent.js';
 
@@ -61,6 +71,52 @@ export async function exportArtifact(artifactPath: string): Promise<boolean> {
   }
 
   return desktopApi.exportArtifact(artifactPath);
+}
+
+export async function attachManualEvidence(): Promise<RunArtifact | undefined> {
+  const desktopApi = getDesktopApi();
+  if (!desktopApi) {
+    return undefined;
+  }
+
+  return (await desktopApi.attachManualEvidence()) ?? undefined;
+}
+
+export async function testMidsceneConnection(config: MidsceneConfig): Promise<MidsceneConnectionTestResult> {
+  const desktopApi = getDesktopApi();
+  if (desktopApi) {
+    return desktopApi.testMidsceneConnection(config);
+  }
+
+  return {
+    status: 'failed',
+    modelName: config.modelName.trim(),
+    durationMs: 0,
+    failure: 'network',
+  };
+}
+
+export async function analyzePrdDocument(
+  request: PrdSemanticAnalysisRequest,
+): Promise<PrdSemanticAnalysisResponse> {
+  const desktopApi = getDesktopApi();
+  if (desktopApi) {
+    return desktopApi.analyzePrdDocument(request);
+  }
+
+  const document = updatePrdDocumentAnalysis(request.document);
+  return {
+    document: {
+      ...document,
+      analysisMetadata: {
+        source: 'rule',
+        analyzedAt: new Date().toISOString(),
+        fallbackReason: 'desktopUnavailable',
+      },
+    },
+    source: 'rule',
+    fallbackReason: 'desktopUnavailable',
+  };
 }
 
 function describeRuntimeProfile(profile: RuntimeProfile): string {
@@ -347,11 +403,13 @@ export async function runWorkflow(
     runId,
     ...(request.project ? { projectId: request.project.id } : {}),
     ...(request.environment ? { environmentId: request.environment.id } : {}),
+    ...(request.documentId ? { documentId: request.documentId } : {}),
   });
   const detail: RunDetail = {
     id: runId,
     projectId: request.project?.id ?? '',
     testCaseId: request.workflow.id,
+    ...(request.documentId ? { documentId: request.documentId } : {}),
     environmentId: request.environment?.id ?? request.targetEnvironment,
     title,
     status: 'neutral',
@@ -401,6 +459,7 @@ export async function runTestCase(request: RunTestCaseRequest): Promise<RunTestC
       environment: request.environment,
       recording,
       testCaseId: request.testCase.id,
+      ...(request.testCase.prdPath?.documentId ? { documentId: request.testCase.prdPath.documentId } : {}),
     });
   }
 
@@ -420,6 +479,7 @@ export async function runTestCase(request: RunTestCaseRequest): Promise<RunTestC
       ...(request.browserSession ? { browserSession: request.browserSession } : {}),
       project: request.project,
       environment: request.environment,
+      ...(request.testCase.prdPath?.documentId ? { documentId: request.testCase.prdPath.documentId } : {}),
     });
   }
 
@@ -444,6 +504,7 @@ export async function runTestCase(request: RunTestCaseRequest): Promise<RunTestC
     id: runId,
     projectId: request.project.id,
     testCaseId: request.testCase.id,
+    ...(request.testCase.prdPath?.documentId ? { documentId: request.testCase.prdPath.documentId } : {}),
     environmentId: request.environment.id,
     title,
     status: 'neutral',
@@ -485,17 +546,20 @@ export async function runRecording(request: RunRecordingRequest): Promise<RunRec
 
   const runId = `agent-run-recording-${Date.now()}`;
   const title = `${request.recording.name} 回放`;
+  const documentId = request.documentId ?? request.recording.prdPath?.documentId;
   const agentRun = createRecordingAgentRun({
     recording: request.recording,
     replayResults: [],
     projectId: request.project.id,
     ...(request.testCaseId ? { testCaseId: request.testCaseId } : {}),
+    ...(documentId ? { documentId } : {}),
     runId,
   });
   const detail: RunDetail = {
     id: runId,
     projectId: request.project.id,
     testCaseId: request.testCaseId ?? request.recording.id,
+    ...(documentId ? { documentId } : {}),
     environmentId: request.environment.id,
     title,
     status: 'neutral',

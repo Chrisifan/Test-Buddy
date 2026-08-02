@@ -17,6 +17,7 @@
 - semantic click / input / assert 已具备可替换执行 contract，并能区分成功、失败和等待状态。
 - Midscene `PlaywrightAgent` adapter 已绑定当前 BrowserRuntime Page，并在 Main Process 完成装配。
 - Midscene 单动作耗时、模型调用量和 token usage 已进入 Agent Run 与运行记录，异常动作也会保留指标。
+- Planner、重规划、语义动作和 Reporter 的单次耗时、调用量与 token usage 已按事件归档；运行记录可在事件流和选中证据中定位每一步的模型成本，同时保留整次运行聚合指标。
 - Workflow 已转换为统一父级 Agent plan，顺序执行自然语言步骤并聚合事件、产物、指标和失败状态。
 - 仅包含 `ai`、`aiAssert`、`aiQuery` 步骤的测试用例会复用统一 Workflow Agent Runtime，获得真实浏览器动作、验证、证据与报告；网页 fallback 和无法由专用执行器处理的步骤明确保持 `neutral`，不再模拟通过。
 - 浏览器 fallback 的 Workflow 只生成等待态，不再模拟通过。
@@ -30,7 +31,7 @@
 - 带明确 selector/URL 的确定性浏览器步骤会在重规划前进行一次同计划重试，并记录重试事件与实际重试次数；明确 selector 的动作重试前会按 `selector visible -> network idle -> timeout` 的顺序做一次动态等待；断言失败不会自动重试。
 - 明确 selector 的 `click/input/select` 在同计划重试失败后，会基于 Observer 的可交互元素做最多 3 个受控 selector fallback，并记录 fallback 事件与次数。
 - 确定性浏览器步骤失败时已生成结构化 `failureCategory`，可区分 selector、timeout、navigation、network、assertion、runtime 和 unknown，并映射为 `recoveryStrategy`：selector 建议替换 selector，timeout/network 建议等待就绪，navigation 建议重规划导航，assertion 建议停止并报告，runtime 建议等待后重试，unknown 建议从当前状态重规划。分类和策略会写入重试事件、验证结果与 Planner 重规划上下文。
-- `waitForReadiness` 策略已开始驱动恢复路径：timeout/network 类失败在同计划重试前，如果失败上下文明确涉及 table/list/grid/data/chart 等数据加载语义，会优先等待页面数据就绪；其余情况等待页面网络空闲，而不是只使用固定 500ms 等待。
+- `waitForReadiness` 策略已开始驱动恢复路径：timeout/network 类失败在同计划重试前，如果失败上下文明确涉及 table/list/grid/data/chart 等数据加载语义，会优先等待页面数据就绪；其余情况等待页面网络空闲，而不是只使用固定 500ms 等待。就绪等待自身失败时不会重复原操作或尝试 selector fallback，而是携带当前观察直接进入 Planner 重规划。
 - 图表稳定等待会在目标区域临时冻结 CSS/SVG 动画与过渡，并将 Canvas 的低分辨率像素签名纳入稳定判断；等待结束后自动移除冻结样式，避免影响后续交互。
 - `replanNavigation` 策略已开始驱动恢复路径：导航失败不会盲目重试同一个坏 URL，而是直接把失败分类、策略和当前页面观察交给 Planner 重规划。
 - `replaceSelector` 策略已开始驱动恢复路径：明确 selector 找不到时不会重复点击同一个坏 selector，而是直接进入受控 selector fallback；没有可靠候选时再交给 Planner 重规划。
@@ -49,7 +50,12 @@
 - Verifier 已接入独立 OpenAI-compatible 模型路由，处理规则断言覆盖不了的复杂语义断言，并保留确定性断言优先级。
 - Reporter 已接入独立 OpenAI-compatible 模型路由，可为失败/等待态运行生成证据摘要、失败归因和修复建议。
 - Reporter Markdown 和 HTML 已持久化为运行 artifact；运行记录可通过受控 IPC 打开或导出应用管理目录内的本地报告，渲染进程不能借此访问任意本地路径。
+- Reporter 结构化建议会随 Agent Run 持久化；用户可在运行记录中将仍存在原用例的建议显式创建为独立修复草稿，保留原用例不变并进入图形化编辑器审阅。
+- MidScene 设置页可使用当前未保存的配置发起最小 OpenAI-compatible completion 探针，明确展示连接耗时、HTTP、网络、配置或响应格式失败；探针仅在主进程执行，不持久化密钥或创建运行记录。
+- 真实 Playwright 浏览器会话已使用独立 BrowserContext；自然语言 Agent、Workflow 和录制回放会在运行开始时启用 tracing，在结束时将 Trace `.zip` 写入 `studio-data/artifacts`。归档后的 Trace 同时进入 `AgentRunResult.artifacts`、`RunDetail.artifacts` 和 `agent:artifact-created` 事件；未连接真实浏览器的 stub/fallback 不会伪造 Trace。
 - 运行记录已提供运行内证据链：可从 Agent 事件流定位同一节点的页面观察、验证依据、浏览器状态、截图预览和同步骤产物，并对受控本地产物执行打开或导出。
+- 运行记录可按项目、分组、用例、环境和状态筛选；同一用例同一环境的历史运行可对比结果、步骤状态、产物数量与耗时。
+- 用例编辑器支持将人工检查步骤转换为可编辑的 `aiAssert` 智能断言，保留检查意图并复用统一 Agent 执行链路。
 - 运行智能分析已按可见运行样本对结构化失败原因做保守聚类，并展示高频失败模式及样本数；仅归并空白和末尾标点差异，不猜测语义等价原因。
 - 运行智能分析会在至少 4 条带时间戳样本时比较近期与早期窗口的失败率，展示上升、下降或稳定趋势；样本不足时明确显示而不推断风险走向。
 
@@ -181,16 +187,18 @@ Intent -> Plan -> Execute -> Observe -> Verify -> Report -> Asset
 功能：
 
 - PDF 文本抽取。
-- LLM/Midscene 参与需求分析。
-- 生成功能点、验收标准、测试路径、优先级。
-- 生成用例或录制草稿。
-- 标记覆盖状态。
+- 已完成基于 Markdown 标题、列表和句子的规则化需求提取；最多生成 8 条去重的需求路径，并保留原文摘录、覆盖域和保守优先级。
+- 已完成从路径写入可编辑用例或录制草稿，并用 `documentId + pathId` 维护稳定覆盖引用；资产改名、同名条款或重新分析未变更条款不会误判覆盖。PRD 来源会沿测试执行进入 Agent Run、RunDetail 和运行列表。
+- 已接入 Planner 角色的已配置 OpenAI-compatible / Midscene 模型做需求语义复核：模型只能细化规则已提取路径的标题、分组、优先级、步骤和摘要，不能新增无原文来源的路径或改变稳定 `pathId`。模型停用、未配置、请求失败或返回非法路径时明确保留规则结果并标注原因。
+- 已提供项目级 PRD 覆盖矩阵，在同一视图汇总全部文档路径及其用例、录制覆盖状态；稳定引用优先，历史无引用资产仍沿用既有兼容匹配。
 
 验收：
 
 - 用户上传一份 PRD 后能得到可编辑测试路径。
+- 每条规则化路径可回溯到对应的 PRD 原文摘录；重复条款不会重复生成路径。
 - 测试路径能转成正式用例。
-- 运行记录能关联 PRD 来源。
+- PRD 生成的用例或录制执行后，运行记录能保留并展示来源文档。
+- 模型复核不改变已有路径的原文摘录和稳定覆盖引用；缺少可用模型时不会伪造模型分析成功。
 
 ## 8. Milestone 6：报告与结果分析
 

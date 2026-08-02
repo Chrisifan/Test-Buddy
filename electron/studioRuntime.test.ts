@@ -21,6 +21,58 @@ const midsceneConfig: MidsceneConfig = {
 };
 
 describe('StudioRuntime agent observation', () => {
+  it('adds a completed Playwright trace to the natural language agent evidence chain', async () => {
+    const currentState: BrowserSessionState = {
+      id: 'session-trace',
+      status: 'ready',
+      currentUrl: 'https://example.test/dashboard',
+      pageTitle: 'Dashboard',
+      message: 'ready',
+      updatedAt: '2026-07-03T08:00:00.000Z',
+    };
+    const beginTrace = vi.fn().mockResolvedValue(true);
+    const finishTrace = vi.fn().mockResolvedValue({
+      id: 'trace-1',
+      type: 'trace' as const,
+      label: 'Playwright Trace',
+      path: '/tmp/agent-trace.zip',
+    });
+    const runtime = new StudioRuntime(vi.fn(), {
+      start: vi.fn(),
+      navigate: vi.fn(),
+      click: vi.fn(),
+      input: vi.fn(),
+      capture: vi.fn<() => Promise<BrowserSessionState>>().mockResolvedValue(currentState),
+      getState: () => currentState,
+      beginTrace,
+      finishTrace,
+    });
+
+    const response = await runtime.sendChatCommand({
+      mode: 'aiAssert',
+      prompt: '验证页面包含 Dashboard',
+      targetEnvironment: 'staging',
+      deepThink: true,
+      deepLocate: false,
+      runtimeProfile: {
+        browser: 'chromium',
+        baseUrl: 'https://example.test',
+        viewport: 'desktop',
+        locale: 'zh-CN',
+        headless: false,
+      },
+    });
+
+    expect(beginTrace).toHaveBeenCalledWith(expect.stringMatching(/^agent-trace-/));
+    expect(finishTrace).toHaveBeenCalledOnce();
+    expect(response.agentRun.artifacts).toContainEqual(
+      expect.objectContaining({ type: 'trace', path: '/tmp/agent-trace.zip' }),
+    );
+    expect(response.agentRun.events).toContainEqual(
+      expect.objectContaining({ type: 'agent:artifact-created', artifact: expect.objectContaining({ type: 'trace' }) }),
+    );
+  });
+
   it('captures browser state before creating a chat agent run', async () => {
     const capturedState: BrowserSessionState = {
       id: 'session-1',
@@ -1171,6 +1223,13 @@ describe('StudioRuntime agent observation', () => {
     );
     expect(response.agentRun.status).toBe('failed');
     expect(response.agentRun.summary).toContain('Reporter 判断失败集中在图表刷新未完成。');
+    expect(response.agentRun.reporter).toEqual({
+      summary: 'Reporter 判断失败集中在图表刷新未完成。',
+      evidenceSummary: '断言失败证据：页面仍显示加载中。',
+      failureAnalysis: '图表接口或前端渲染可能未在等待窗口内完成。',
+      suggestedFixes: ['增加图表稳定等待', '检查 /api/chart 响应耗时'],
+      modelName: 'reporter-large',
+    });
     expect(response.agentRun.artifacts).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -2373,6 +2432,138 @@ describe('StudioRuntime agent observation', () => {
     );
   });
 
+  it('replans after data readiness fails instead of retrying a stale action or selector fallback', async () => {
+    const currentState: BrowserSessionState = {
+      id: 'session-ready',
+      status: 'ready',
+      currentUrl: 'https://example.test/orders',
+      pageTitle: 'Orders',
+      message: 'ready',
+      updatedAt: '2026-07-03T08:00:00.000Z',
+    };
+    const actionOrder: string[] = [];
+    const click = vi.fn(async ({ selector }: { selector: string }) => {
+      actionOrder.push(`click:${selector}`);
+      throw new Error('Timeout 10000ms exceeded while waiting for orders table data');
+    });
+    const waitForDataReady = vi.fn(async ({ timeoutMs }: { timeoutMs?: number }) => {
+      actionOrder.push(`waitForDataReady:${timeoutMs}`);
+      throw new Error('orders table is still loading');
+    });
+    const createPlan = vi
+      .fn()
+      .mockResolvedValueOnce({
+        plan: {
+          title: '查看订单详情',
+          summary: '等待订单表格加载后打开详情。',
+          risks: [],
+          steps: [
+            {
+              action: 'click',
+              title: '打开订单详情',
+              instruction: '等待订单表格数据加载完成后，点击订单详情按钮',
+              selector: '#order-detail',
+            },
+          ],
+        },
+        modelName: 'planner-large',
+        metrics: {
+          durationMs: 20,
+          modelTimeCostMs: 20,
+          calls: 1,
+          promptTokens: 10,
+          completionTokens: 10,
+          totalTokens: 20,
+          cachedInputTokens: 0,
+          byIntent: { planner: { calls: 1, promptTokens: 10, completionTokens: 10, totalTokens: 20 } },
+          byModel: { 'planner-large': { calls: 1, promptTokens: 10, completionTokens: 10, totalTokens: 20 } },
+        },
+      })
+      .mockResolvedValueOnce({
+        plan: {
+          title: '订单页恢复观察',
+          summary: '保留当前页面状态并重新观察。',
+          risks: [],
+          steps: [{ action: 'observe', title: '观察订单页', instruction: '观察当前订单页状态' }],
+        },
+        modelName: 'planner-large',
+        metrics: {
+          durationMs: 20,
+          modelTimeCostMs: 20,
+          calls: 1,
+          promptTokens: 10,
+          completionTokens: 10,
+          totalTokens: 20,
+          cachedInputTokens: 0,
+          byIntent: { planner: { calls: 1, promptTokens: 10, completionTokens: 10, totalTokens: 20 } },
+          byModel: { 'planner-large': { calls: 1, promptTokens: 10, completionTokens: 10, totalTokens: 20 } },
+        },
+      });
+    const runtime = new StudioRuntime(
+      vi.fn(),
+      {
+        start: vi.fn(),
+        navigate: vi.fn(),
+        click,
+        input: vi.fn(),
+        waitForDataReady,
+        capture: vi.fn(async () => currentState),
+        captureObservation: vi.fn().mockResolvedValue({
+          textSummary: '订单页仍在加载。',
+          domSummary: '订单表格尚未就绪。',
+          interactiveElements: ['button "订单详情" #observed-order-detail'],
+        }),
+        getState: () => currentState,
+      },
+      undefined,
+      { createPlan },
+    );
+    const agentModelConfig: AgentModelConfig = {
+      ...defaultAgentModelConfig,
+      planner: {
+        ...defaultAgentModelConfig.planner,
+        provider: 'openaiCompatible',
+        modelBaseUrl: 'https://planner.example.test/v1',
+        modelApiKey: 'planner-secret',
+        modelName: 'planner-large',
+      },
+    };
+
+    const response = await runtime.sendChatCommand({
+      mode: 'ai',
+      prompt: '等待订单表格加载完成后打开详情',
+      targetEnvironment: 'staging',
+      deepThink: true,
+      deepLocate: true,
+      midsceneConfig,
+      agentModelConfig,
+      runtimeProfile: {
+        browser: 'chromium',
+        baseUrl: 'https://example.test',
+        viewport: 'desktop',
+        locale: 'zh-CN',
+        headless: false,
+      },
+    });
+
+    expect(createPlan).toHaveBeenCalledTimes(2);
+    expect(actionOrder).toEqual(['click:#order-detail', 'waitForDataReady:1500']);
+    expect(response.agentRun.status).toBe('passed');
+    expect(response.agentRun.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: 'agent:dynamic-wait', status: 'failed' }),
+        expect.objectContaining({ type: 'agent:plan-revised' }),
+      ]),
+    );
+    expect(response.agentRun.events.some((event) => event.type === 'agent:step-retried')).toBe(false);
+    expect(response.agentRun.events.some((event) => event.type === 'agent:selector-fallback')).toBe(false);
+    expect(response.agentRun.metrics).toEqual(
+      expect.objectContaining({ dynamicWaitAttempts: 1, replanningCycles: 1 }),
+    );
+    expect(response.agentRun.metrics?.retryAttempts ?? 0).toBe(0);
+    expect(response.agentRun.metrics?.selectorFallbackAttempts ?? 0).toBe(0);
+  });
+
   it('tries a bounded selector fallback from observed interactive elements before replanning', async () => {
     let currentState: BrowserSessionState = {
       id: 'session-ready',
@@ -3313,6 +3504,9 @@ describe('StudioRuntime agent observation', () => {
     expect(response.agentRun?.status).toBe('passed');
     expect(response.agentRun?.events.find((event) => event.type === 'agent:browser-action')?.message).toContain(
       'Midscene 已点击登录按钮',
+    );
+    expect(response.agentRun?.events.find((event) => event.type === 'agent:browser-action')?.metrics).toEqual(
+      expect.objectContaining({ durationMs: 360, calls: 2, totalTokens: 150 }),
     );
     expect(response.agentRun?.artifacts).toContainEqual(
       expect.objectContaining({
@@ -5225,6 +5419,13 @@ describe('StudioRuntime agent observation', () => {
       status: 'passed',
       message: 'Midscene 已验证登录成功。',
     });
+    const beginTrace = vi.fn().mockResolvedValue(true);
+    const finishTrace = vi.fn().mockResolvedValue({
+      id: 'trace-workflow',
+      type: 'trace' as const,
+      label: 'Playwright Trace',
+      path: '/tmp/workflow-trace.zip',
+    });
     const emitRunEvent = vi.fn();
     const runtime = new StudioRuntime(
       emitRunEvent,
@@ -5235,6 +5436,8 @@ describe('StudioRuntime agent observation', () => {
         input: vi.fn(),
         capture: vi.fn<() => Promise<BrowserSessionState>>().mockImplementation(async () => currentState),
         getState: () => currentState,
+        beginTrace,
+        finishTrace,
       },
       {
         click: semanticClick,
@@ -5267,6 +5470,7 @@ describe('StudioRuntime agent observation', () => {
       },
       project,
       environment,
+      documentId: 'doc-login',
       midsceneConfig,
       browserSession: currentState,
     });
@@ -5275,8 +5479,15 @@ describe('StudioRuntime agent observation', () => {
     expect(semanticClick).toHaveBeenCalledTimes(1);
     expect(semanticAssert).toHaveBeenCalledTimes(1);
     expect(response.agentRun.intent.source).toBe('workflow');
+    expect(response.agentRun.intent.documentId).toBe('doc-login');
+    expect(response.detail.documentId).toBe('doc-login');
     expect(response.agentRun.plan.steps.map((step) => step.action)).toEqual(['click', 'assert']);
     expect(response.agentRun.status).toBe('passed');
+    expect(beginTrace).toHaveBeenCalledWith(response.runId);
+    expect(finishTrace).toHaveBeenCalledOnce();
+    expect(response.agentRun.artifacts).toContainEqual(
+      expect.objectContaining({ type: 'trace', path: '/tmp/workflow-trace.zip' }),
+    );
     expect(response.detail.agentRun).toBe(response.agentRun);
     expect(response.detail.steps).toHaveLength(2);
     expect(emitRunEvent).toHaveBeenCalledWith(

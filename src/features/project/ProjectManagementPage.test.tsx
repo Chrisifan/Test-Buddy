@@ -2,7 +2,7 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { ProjectManagementPage } from './ProjectManagementPage.js';
-import { createInitialStudioState } from '../../../shared/studio.js';
+import { createDemoStudioState } from '../../../shared/studio.js';
 import { I18nProvider } from '../../i18n/index.js';
 
 describe('ProjectManagementPage', () => {
@@ -29,7 +29,7 @@ describe('ProjectManagementPage', () => {
   });
 
   it('translates project forms and environment controls to English', () => {
-    const state = createInitialStudioState();
+    const state = createDemoStudioState();
     const project = state.projects[0];
 
     render(

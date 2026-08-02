@@ -1,17 +1,18 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
-import { createInitialStudioState, testCaseToWorkflow } from '../../../shared/studio.js';
+import { createDemoStudioState, testCaseToWorkflow } from '../../../shared/studio.js';
 import { I18nProvider } from '../../i18n/index.js';
 import { WorkflowPage } from './WorkflowPage.js';
 
-const state = createInitialStudioState();
+const state = createDemoStudioState();
 const workflow = testCaseToWorkflow(state.projects[0].testCases[0]);
 
 function renderPage(locale: 'zh-CN' | 'en-US' = 'zh-CN') {
   return render(
     <I18nProvider locale={locale}>
       <WorkflowPage
+        hasProject
         isRunning={false}
         onAppendStep={vi.fn()}
         onCreateWorkflow={vi.fn()}
@@ -35,6 +36,40 @@ function renderPage(locale: 'zh-CN' | 'en-US' = 'zh-CN') {
 }
 
 describe('WorkflowPage', () => {
+  it('guides users to projects before creating a flow', () => {
+    const onOpenProjects = vi.fn();
+
+    render(
+      <I18nProvider locale="zh-CN">
+        <WorkflowPage
+          hasProject={false}
+          isRunning={false}
+          onAppendStep={vi.fn()}
+          onCreateWorkflow={vi.fn()}
+          onDeleteStep={vi.fn()}
+          onDuplicateStepType={vi.fn()}
+          onOpenProjects={onOpenProjects}
+          onRunWorkflow={vi.fn()}
+          onSelectWorkflow={vi.fn()}
+          onUpdateRuntimeProfile={vi.fn()}
+          onUpdateWorkflow={vi.fn()}
+          runId=""
+          runLogs={[]}
+          runStatus="neutral"
+          runTitle=""
+          runtimeProfile={state.runtimeProfile}
+          selectedWorkflowId=""
+          workflows={[]}
+        />
+      </I18nProvider>,
+    );
+
+    expect(screen.getByText('选择一个项目')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '新建流程' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '项目' }));
+    expect(onOpenProjects).toHaveBeenCalledTimes(1);
+  });
+
   it('uses Chinese workflow labels by default', () => {
     renderPage();
 

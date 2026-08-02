@@ -15,7 +15,6 @@ import {
   FileText,
   MousePointerClick,
   Plus,
-  RadioTower,
   ScanSearch,
   ShieldCheck,
   Rocket,
@@ -261,8 +260,6 @@ export function HomePage({
     { groups: 0, environments: 0, testCases: 0, recordings: 0, documents: 0, generatedPaths: 0 },
   );
   const coverageIndex = getCoverageIndex(projects, recentRuns);
-  const activeRuns = recentRuns.filter((run) => run.status === 'running').length;
-  const failedRuns = recentRuns.filter((run) => run.status === 'failed').length;
   const passRate = recentRuns.length
     ? Math.round((recentRuns.filter((run) => run.status === 'passed').length / recentRuns.length) * 100)
     : 0;
@@ -310,159 +307,182 @@ export function HomePage({
       tone: 'cyan' as const,
     },
   ];
-  const signalBars = [
-    workspaceAssets.testCases,
-    workspaceAssets.recordings,
-    workspaceAssets.groups,
-    workspaceAssets.documents,
-    workspaceAssets.generatedPaths,
-    recentRuns.length,
+  const metricCards = [
+    {
+      label: t('home.overview.title'),
+      value: t('home.overview.projectCount', { count: projects.length }),
+      description: t('home.overview.assetCount', {
+        groups: workspaceAssets.groups,
+        environments: workspaceAssets.environments,
+        documents: workspaceAssets.documents,
+      }),
+      Icon: DatabaseZap,
+      tone: 'cyan' as const,
+    },
+    {
+      label: t('home.health.title'),
+      value: signal.badge,
+      description: t('home.health.projectCount', { count: projects.length }),
+      Icon: ShieldCheck,
+      tone: 'blue' as const,
+    },
+    {
+      label: t('home.asset.cases'),
+      value: `${workspaceAssets.testCases}`,
+      description: t('home.asset.casesDescription'),
+      Icon: FileText,
+      tone: 'blue' as const,
+    },
+    {
+      label: t('home.health.passRate'),
+      value: `${passRate}%`,
+      description: t('home.health.assetCount', {
+        groups: workspaceAssets.groups,
+        cases: workspaceAssets.testCases,
+      }),
+      Icon: CheckCircle2,
+      tone: 'cyan' as const,
+    },
+    {
+      label: t('home.asset.recordings'),
+      value: `${workspaceAssets.recordings}`,
+      description: t('home.asset.recordingsDescription'),
+      Icon: MousePointerClick,
+      tone: 'amber' as const,
+    },
+    {
+      label: t('home.health.coverage'),
+      value: `${coverageIndex}`,
+      description: t('home.asset.pathsDescription'),
+      Icon: ScanSearch,
+      tone: 'pink' as const,
+    },
   ];
-  const highestSignal = Math.max(...signalBars, 1);
+  const recentRunHistory = recentRuns.slice(0, 3);
 
   return (
-    <PageShell className="home-dashboard">
-      <PageHeader
-        title={t('home.header.title')}
-      />
+    <PageShell className="home-dashboard figma-overview-page">
+      <PageHeader title={t('home.header.title')} />
 
       <PageBody>
-        <section aria-label={t('home.aria.workbench')} className="home-dashboard-layout">
-          <div className="home-summary-grid">
-            <DashboardCard className="home-summary-card home-project-overview-card p-3">
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <p className="home-faint font-mono text-[11px] uppercase tracking-[0.1em]">{t('home.overview.title')}</p>
-                  <p className="home-text mt-2 truncate text-sm font-semibold">{t('home.overview.projectCount', { count: projects.length })}</p>
-                </div>
-                <StatGlyph testId="home-summary-icon" tone="cyan"><DatabaseZap className="h-5 w-5" /></StatGlyph>
-              </div>
-              <p className="home-muted mt-2 text-xs leading-5">
-                {t('home.overview.assetCount', {
-                  groups: workspaceAssets.groups,
-                  environments: workspaceAssets.environments,
-                  documents: workspaceAssets.documents,
-                })}
-              </p>
-            </DashboardCard>
-            <DashboardCard className="home-summary-card home-health-card p-3">
-              <div className="flex items-start justify-between gap-3">
-                <StatGlyph testId="home-summary-icon" tone="blue"><ShieldCheck className="h-5 w-5" /></StatGlyph>
-                <StatusPill tone={failedRuns ? 'failed' : activeRuns ? 'running' : 'passed'} />
-              </div>
-              <p className="home-faint mt-2 font-mono text-[11px] uppercase tracking-[0.1em]">{t('home.health.title')}</p>
-              <p className="home-text mt-1 text-[24px] font-bold leading-none tracking-[-0.04em]">{signal.badge}</p>
-              <p className="home-muted mt-1.5 truncate text-xs">{t('home.health.projectCount', { count: projects.length })}</p>
-            </DashboardCard>
-            {[
-              {
-                label: t('home.asset.cases'),
-                value: `${workspaceAssets.testCases}`,
-                description: t('home.asset.casesDescription'),
-                Icon: FileText,
-                tone: 'blue' as const,
-              },
-              {
-                label: t('home.health.passRate'),
-                value: `${passRate}%`,
-                description: t('home.health.assetCount', { groups: workspaceAssets.groups, cases: workspaceAssets.testCases }),
-                Icon: CheckCircle2,
-                tone: 'cyan' as const,
-              },
-              {
-                label: t('home.asset.recordings'),
-                value: `${workspaceAssets.recordings}`,
-                description: t('home.asset.recordingsDescription'),
-                Icon: MousePointerClick,
-                tone: 'amber' as const,
-              },
-              {
-                label: t('home.health.coverage'),
-                value: `${coverageIndex}`,
-                description: t('home.asset.pathsDescription'),
-                Icon: ScanSearch,
-                tone: 'pink' as const,
-              },
-            ].map(({ label, value, description, Icon, tone }) => (
-              <DashboardCard className="home-summary-card p-3" key={label}>
+        <section aria-label={t('home.aria.workbench')} className="home-dashboard-layout figma-overview-canvas">
+          <div className="home-summary-grid home-metric-grid grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-6">
+            {metricCards.map(({ label, value, description, Icon, tone }) => (
+              <DashboardCard className="home-summary-card home-metric-card p-4" key={label}>
                 <div className="flex items-start justify-between gap-3">
                   <p className="home-faint font-mono text-[11px] uppercase tracking-[0.1em]">{label}</p>
                   <StatGlyph testId="home-summary-icon" tone={tone}><Icon className="h-5 w-5" /></StatGlyph>
                 </div>
-                <p className="home-text mt-2 text-[28px] font-bold leading-none tracking-[-0.04em]">{value}</p>
-                <p className="home-muted mt-1.5 text-xs leading-5">{description}</p>
+                <div className="mt-3 flex min-w-0 items-center gap-2">
+                  <p className="home-text min-w-0 truncate text-[24px] font-bold leading-none tracking-[-0.04em]">{value}</p>
+                </div>
+                <p className="home-muted mt-2 line-clamp-2 text-xs leading-5">{description}</p>
               </DashboardCard>
             ))}
           </div>
 
-          <div className="home-operation-grid">
-            <Surface className="home-trace-panel p-5" variant="panel">
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <p className="home-faint font-mono text-[11px] uppercase tracking-[0.1em]">{t('home.pipeline.eyebrow')}</p>
-                  <h2 className="mt-1 text-lg font-semibold tracking-[-0.02em]">{t('home.pipeline.title')}</h2>
-                </div>
-                <button className="home-link cursor-pointer text-sm font-semibold transition" onClick={() => onGoToPage('runs')} type="button">
-                  {t('home.pipeline.viewRuns')}
-                </button>
-              </div>
-              <div aria-hidden="true" className="home-signal-chart">
-                {signalBars.map((value, index) => (
-                  <span className="home-signal-column" key={`${value}-${index}`}>
-                    <span className="home-signal-bar" style={{ height: `${Math.max(14, Math.round((value / highestSignal) * 100))}%` }} />
-                  </span>
-                ))}
-                <span className="home-signal-baseline" />
-              </div>
-              <div className="mt-5 grid gap-px overflow-hidden rounded-[6px] border border-border bg-border md:grid-cols-3">
-                {pipeline.map((item) => (
-                  <button className="home-route-row cursor-pointer text-left" key={item.title} onClick={() => onGoToPage(item.page)} type="button">
-                    <span className="home-mini-icon flex h-8 w-8 items-center justify-center rounded-[4px]">{item.icon}</span>
-                    <span className="min-w-0">
-                      <span className="home-text block truncate text-sm font-semibold">{item.title}</span>
-                      <span className="home-faint mt-1 block line-clamp-2 text-xs leading-5">{item.description}</span>
-                    </span>
-                  </button>
-                ))}
-              </div>
-            </Surface>
-
-            <aside className="home-run-sidebar">
-              <DashboardCard className="home-active-run p-5">
-                <div className="flex items-start justify-between gap-4">
+          <div className="home-main-band grid min-w-0 gap-4 lg:grid-cols-12">
+            <div className="home-main-content grid min-w-0 gap-4 lg:col-span-8">
+              <Surface className="home-entry-panel p-5" variant="panel">
+                <div className="flex items-center justify-between gap-4">
                   <div className="min-w-0">
-                    <p className="home-faint font-mono text-[11px] uppercase tracking-[0.1em]">{t('home.latest.title')}</p>
-                    <p className="home-text mt-2 truncate text-base font-semibold">{latestRun?.name ?? t('home.latest.empty')}</p>
+                    <p className="home-faint font-mono text-[11px] uppercase tracking-[0.1em]">{t('home.pipeline.eyebrow')}</p>
+                    <h2 className="mt-1 text-lg font-semibold">{t('home.pipeline.title')}</h2>
                   </div>
-                  {latestRun ? <StatusPill tone={latestRun.status} /> : <RadioTower className="home-accent-text h-5 w-5" />}
                 </div>
-                <p className="home-muted mt-3 line-clamp-2 text-xs leading-5">{latestRun?.summary ?? t('home.latest.description')}</p>
-                <div className="mt-4 flex items-center justify-between border-t border-border pt-3 font-mono text-[11px] text-muted-foreground">
-                  <span>{latestRun?.duration ?? '--:--'}</span>
-                  <span>{latestRun?.status ?? t('home.latest.empty')}</span>
+                <div className="home-entry-grid mt-4 grid gap-3 md:grid-cols-3">
+                  {pipeline.map((item) => (
+                    <button
+                      className="home-route-row home-entry-card cursor-pointer rounded-[6px] border border-border text-left"
+                      key={item.title}
+                      onClick={() => onGoToPage(item.page)}
+                      type="button"
+                    >
+                      <span className="home-mini-icon flex h-8 w-8 items-center justify-center rounded-[4px]">{item.icon}</span>
+                      <span className="min-w-0">
+                        <span className="home-text block truncate text-sm font-semibold">{item.title}</span>
+                        <span className="home-faint mt-1 block line-clamp-2 text-xs leading-5">{item.description}</span>
+                      </span>
+                    </button>
+                  ))}
                 </div>
-              </DashboardCard>
-              <DashboardCard className="home-baseline-card p-5">
-                <div className="flex items-center gap-3">
-                  <StatGlyph tone="amber"><ShieldCheck className="h-5 w-5" /></StatGlyph>
-                  <div className="min-w-0"><p className="home-text text-sm font-semibold">{t('home.baseline.title')}</p><p className="home-muted mt-1 truncate text-xs">{signal.description}</p></div>
+              </Surface>
+
+              <Surface
+                aria-label={t('home.aria.timeline')}
+                className="home-insights-panel p-5"
+                variant="panel"
+              >
+                <div className="home-risk-summary flex flex-col gap-4 border-b border-border pb-4 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="flex min-w-0 items-center gap-3">
+                    <StatGlyph tone="amber"><ShieldCheck className="h-5 w-5" /></StatGlyph>
+                    <div className="min-w-0">
+                      <h2 className="home-text text-sm font-semibold">{t('home.baseline.title')}</h2>
+                      <p className="home-muted mt-1 line-clamp-2 text-xs leading-5">{signal.description}</p>
+                    </div>
+                  </div>
+                  <div className="home-run-signal-grid grid shrink-0 grid-cols-3 gap-px overflow-hidden rounded-[6px] bg-border">
+                    <CompactStat label={t('common.status.passed')} value={`${signal.passed}`} />
+                    <CompactStat label={t('home.health.failed')} value={`${signal.failed}`} />
+                    <CompactStat label={t('home.health.running')} value={`${signal.running}`} />
+                  </div>
                 </div>
-                <div className="mt-4 grid grid-cols-3 gap-px overflow-hidden rounded-[6px] bg-border">
+
+                <div className="home-insight-grid mt-4 grid gap-3 md:grid-cols-3">
+                  {optimizationCards.map((item) => (
+                    <div className="home-insight-card flex min-h-0 items-start gap-3 rounded-[6px] border border-border p-3" key={item.title}>
+                      <StatGlyph tone={item.tone}>{item.icon}</StatGlyph>
+                      <div className="min-w-0">
+                        <p className="home-text text-sm font-semibold">{item.title}</p>
+                        <p className="home-muted mt-1 line-clamp-3 text-xs leading-5">{item.description}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="home-baseline-grid mt-4 grid grid-cols-1 gap-px overflow-hidden rounded-[6px] bg-border sm:grid-cols-3">
                   <CompactStat label={t('home.baseline.environment')} value={`${workspaceAssets.environments}`} />
                   <CompactStat label={t('home.baseline.browser')} value={browserSession.status} />
                   <CompactStat label={t('home.baseline.runtime')} value={runtimeInfo?.platform ?? 'browser'} />
                 </div>
-              </DashboardCard>
-            </aside>
-          </div>
+              </Surface>
+            </div>
 
-          <section aria-label={t('home.aria.timeline')} className="home-insight-grid">
-            {optimizationCards.map((item) => (
-              <DashboardCard className="home-insight-card p-4" key={item.title}>
-                <div className="flex h-full items-start gap-3"><StatGlyph tone={item.tone}>{item.icon}</StatGlyph><div><p className="home-text text-sm font-semibold">{item.title}</p><p className="home-muted mt-1 text-xs leading-5">{item.description}</p></div></div>
-              </DashboardCard>
-            ))}
-          </section>
+            <Surface className="home-recent-runs-panel flex min-w-0 flex-col p-5 lg:col-span-4" variant="panel">
+              <div className="flex items-center justify-between gap-4 border-b border-border pb-4">
+                <h2 className="text-base font-semibold">{t('home.latest.title')}</h2>
+                <button className="home-link cursor-pointer text-sm font-semibold transition" onClick={() => onGoToPage('runs')} type="button">
+                  {t('home.pipeline.viewRuns')}
+                </button>
+              </div>
+
+              {recentRunHistory.length ? (
+                <div className="home-run-history-list divide-y divide-border">
+                  {recentRunHistory.map((run) => (
+                    <button
+                      className="home-run-history-row grid w-full cursor-pointer gap-3 py-4 text-left"
+                      key={run.id}
+                      onClick={() => onGoToPage('runs')}
+                      type="button"
+                    >
+                      <span className="flex min-w-0 items-start justify-between gap-3">
+                        <span className="home-text min-w-0 truncate text-sm font-semibold">{run.name}</span>
+                        <StatusPill tone={run.status} />
+                      </span>
+                      <span className="home-muted line-clamp-2 text-xs leading-5">{run.summary}</span>
+                      <span className="home-faint font-mono text-[11px]">{run.duration}</span>
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <div className="home-run-history-empty flex min-h-40 flex-1 flex-col items-center justify-center px-6 text-center">
+                  <Clock3 className="home-accent-text h-6 w-6" />
+                  <p className="home-text mt-3 text-sm font-semibold">{t('home.latest.empty')}</p>
+                  <p className="home-muted mt-1 max-w-64 text-xs leading-5">{t('home.latest.description')}</p>
+                </div>
+              )}
+            </Surface>
+          </div>
         </section>
       </PageBody>
     </PageShell>

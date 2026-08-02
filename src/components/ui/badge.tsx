@@ -4,13 +4,13 @@ import { cva, type VariantProps } from 'class-variance-authority';
 import { cn } from '@/lib/utils';
 
 const badgeVariants = cva(
-  'inline-flex items-center rounded-full px-2.5 py-0.5 font-mono text-xs font-medium transition-colors',
+  'inline-flex min-h-5 items-center rounded-[var(--control-radius)] px-1.5 py-0.5 text-[length:var(--font-size-meta)] font-medium leading-4',
   {
     variants: {
       variant: {
         default: 'bg-primary text-primary-foreground shadow-none',
         secondary: 'bg-secondary text-secondary-foreground shadow-none',
-        outline: 'border border-border bg-card text-foreground shadow-none',
+        outline: 'border-0 bg-[var(--surface-container-low)] text-muted-foreground shadow-none',
       },
     },
     defaultVariants: {
@@ -24,7 +24,7 @@ function Badge({
   variant,
   ...props
 }: React.ComponentProps<'div'> & VariantProps<typeof badgeVariants>) {
-  return <div className={cn(badgeVariants({ variant }), className)} {...props} />;
+  return <div className={cn(badgeVariants({ variant }), className)} data-slot="badge" {...props} />;
 }
 
 export { Badge, badgeVariants };

@@ -1,5 +1,8 @@
 import type { ComponentPropsWithoutRef, ReactNode } from 'react';
 
+import { FolderKanban } from 'lucide-react';
+
+import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 
 type Tone = 'neutral' | 'primary' | 'passed' | 'failed' | 'running';
@@ -184,5 +187,32 @@ export function EvidenceCard({
         {action}
       </div>
     </Surface>
+  );
+}
+
+export function ProjectRequiredState({
+  title,
+  description,
+  actionLabel,
+  onOpenProjects,
+}: {
+  title: string;
+  description: string;
+  actionLabel: string;
+  onOpenProjects?: () => void;
+}) {
+  return (
+    <section className="project-required-state" aria-live="polite">
+      <EvidenceCard
+        action={onOpenProjects ? (
+          <Button onClick={onOpenProjects} type="button">
+            <FolderKanban className="size-4" />
+            {actionLabel}
+          </Button>
+        ) : null}
+        description={description}
+        title={title}
+      />
+    </section>
   );
 }

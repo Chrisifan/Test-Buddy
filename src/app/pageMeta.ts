@@ -6,8 +6,7 @@ export type AppPage =
   | 'runs'
   | 'nl'
   | 'workflow'
-  | 'recording'
-  | 'settings';
+  | 'recording';
 
 export const pageMeta: Record<
   Exclude<AppPage, 'home' | 'projects' | 'documents' | 'cases' | 'runs'>,
@@ -31,10 +30,5 @@ export const pageMeta: Record<
     title: '操作录制回放',
     description: '录制浏览器操作并回放，后续可转译成可维护测试资产。',
     cta: '进入录制回放',
-  },
-  settings: {
-    title: '项目设置',
-    description: '统一管理外观、模型、运行环境和目标入口。',
-    cta: '进入设置',
   },
 };

@@ -7,7 +7,7 @@ import type {
 
 import { PlayCircle, Plus, Settings2, Trash2 } from 'lucide-react';
 
-import { EvidenceCard, MetricTile, PageHeader, Surface, PageBody, PageShell } from '../../components/workbench.js';
+import { EvidenceCard, MetricTile, PageHeader, ProjectRequiredState, Surface, PageBody, PageShell } from '../../components/workbench.js';
 import { StatusPill } from '../../components/StatusPill.js';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -65,6 +65,8 @@ export function WorkflowPage({
   onDeleteStep,
   onDuplicateStepType,
   onUpdateRuntimeProfile,
+  hasProject,
+  onOpenProjects,
 }: {
   workflows: WorkflowDraft[];
   selectedWorkflow?: WorkflowDraft;
@@ -83,8 +85,26 @@ export function WorkflowPage({
   onDeleteStep: (stepId: string) => void;
   onDuplicateStepType: (type: WorkflowStepDraft['type']) => void;
   onUpdateRuntimeProfile: (patch: Partial<RuntimeProfile>) => void;
+  hasProject: boolean;
+  onOpenProjects?: () => void;
 }) {
   const { t } = useI18n();
+
+  if (!hasProject) {
+    return (
+      <PageShell>
+        <PageHeader title={t('workflow.header.title')} />
+        <PageBody className="flex min-h-0">
+          <ProjectRequiredState
+            actionLabel={t('app.nav.projects')}
+            description={t('project.select.description')}
+            onOpenProjects={onOpenProjects}
+            title={t('project.select.title')}
+          />
+        </PageBody>
+      </PageShell>
+    );
+  }
 
   return (
     <PageShell>

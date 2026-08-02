@@ -1,3 +1,7 @@
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+
 import { describe, expect, it, vi } from 'vitest';
 
 import { ArtifactManager } from './artifact-manager.js';
@@ -8,6 +12,37 @@ describe('BrowserRuntime page access', () => {
     const runtime = new BrowserRuntime('/tmp/playtest-browser-runtime-test', new ArtifactManager('/tmp'));
 
     expect(runtime.getPage()).toBeNull();
+  });
+
+  it('archives a Playwright trace only when a real browser context is available', async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'playtest-browser-runtime-'));
+    const tracing = {
+      start: vi.fn().mockResolvedValue(undefined),
+      stop: vi.fn().mockResolvedValue(undefined),
+    };
+    const runtime = new BrowserRuntime(rootDir, new ArtifactManager(rootDir));
+    (runtime as unknown as { context: { tracing: typeof tracing } }).context = { tracing };
+
+    await expect(runtime.beginTrace('agent/run:1')).resolves.toBe(true);
+    const trace = await runtime.finishTrace();
+
+    expect(tracing.start).toHaveBeenCalledWith({ screenshots: true, snapshots: true, sources: true });
+    expect(tracing.stop).toHaveBeenCalledWith({ path: trace?.path });
+    expect(trace).toEqual(
+      expect.objectContaining({
+        type: 'trace',
+        label: 'Playwright Trace',
+        path: expect.stringMatching(/agent-run-1.+-trace\.zip$/),
+      }),
+    );
+    expect(new ArtifactManager(rootDir).isManagedArtifactPath(trace?.path ?? '')).toBe(true);
+  });
+
+  it('does not fabricate a trace when no real browser context is available', async () => {
+    const runtime = new BrowserRuntime('/tmp/playtest-browser-runtime-test', new ArtifactManager('/tmp'));
+
+    await expect(runtime.beginTrace('agent-run-stub')).resolves.toBe(false);
+    await expect(runtime.finishTrace()).resolves.toBeUndefined();
   });
 
   it('captures structured table and chart evidence from the current page', async () => {

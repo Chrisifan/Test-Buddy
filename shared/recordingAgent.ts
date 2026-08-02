@@ -34,6 +34,7 @@ export interface RecordingAgentRunRequest {
   replayResults: RecordingReplayEvidence[];
   projectId?: string;
   testCaseId?: string;
+  documentId?: string;
   runId?: string;
   startedAt?: string;
   endedAt?: string;
@@ -48,6 +49,7 @@ function recordingAction(kind: RecordingStepDraft['kind']): AgentStepAction {
 export function createRecordingAgentRun(request: RecordingAgentRunRequest): AgentRunResult {
   const now = new Date().toISOString();
   const runId = request.runId ?? `agent-run-recording-${Date.now()}`;
+  const documentId = request.documentId ?? request.recording.prdPath?.documentId;
   const visualComparisons = request.visualComparisons ?? [];
   const visualComparisonByStepId = new Map(visualComparisons.map((comparison) => [comparison.stepId, comparison]));
   const hasBaseline = request.recording.steps.some((step) => Boolean(step.screenshotPath));
@@ -67,6 +69,7 @@ export function createRecordingAgentRun(request: RecordingAgentRunRequest): Agen
     page: 'recording',
     ...(request.projectId ? { projectId: request.projectId } : {}),
     ...(request.testCaseId ? { testCaseId: request.testCaseId } : {}),
+    ...(documentId ? { documentId } : {}),
     environmentId: request.recording.environmentId,
     groupId: request.recording.groupId,
   });

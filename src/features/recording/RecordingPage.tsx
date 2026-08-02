@@ -9,7 +9,7 @@ import type {
 
 import { CircleDashed, Film, Import, Play, Plus, Radar, Sparkles, Trash2 } from 'lucide-react';
 
-import { EvidenceCard, MetricTile, PageHeader, Surface, PageBody, PageShell } from '../../components/workbench.js';
+import { EvidenceCard, MetricTile, PageHeader, ProjectRequiredState, Surface, PageBody, PageShell } from '../../components/workbench.js';
 import { StatusPill } from '../../components/StatusPill.js';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -91,6 +91,7 @@ export function RecordingPage({
   onCreateTestCaseFromRecording,
   onDeleteRecording,
   onCaptureSnapshot,
+  onOpenProjects,
 }: {
   project?: ProjectDraft;
   environment?: ProjectEnvironment;
@@ -108,6 +109,7 @@ export function RecordingPage({
   onCreateTestCaseFromRecording: (recordingId: string) => void;
   onDeleteRecording: (recordingId: string) => void;
   onCaptureSnapshot: () => void;
+  onOpenProjects?: () => void;
 }) {
   const { locale, t } = useI18n();
 
@@ -117,8 +119,13 @@ export function RecordingPage({
         <PageHeader
           title={t('app.nav.recording')}
         />
-        <PageBody>
-        <EvidenceCard title={t('recording.empty.noProject')} description={t('recording.empty.noProjectDescription')} />
+        <PageBody className="flex min-h-0">
+          <ProjectRequiredState
+            actionLabel={t('app.nav.projects')}
+            description={t('recording.empty.noProjectDescription')}
+            onOpenProjects={onOpenProjects}
+            title={t('recording.empty.noProject')}
+          />
         </PageBody>
       </PageShell>
     );
@@ -129,7 +136,7 @@ export function RecordingPage({
   const sessionTone = browserSession.status === 'error' ? 'failed' : browserSession.status === 'ready' ? 'passed' : 'neutral';
 
   return (
-    <PageShell>
+    <PageShell className="figma-recording-page">
       <PageHeader
         action={
           <div className="flex flex-wrap gap-2">
@@ -158,7 +165,7 @@ export function RecordingPage({
           t('recording.meta.steps', { count: recording?.steps.length ?? 0 }),
           t('recording.meta.browser', { status: browserSession.status }),
         ].map((item) => (
-          <Badge className="rounded-[4px] px-3 py-1.5" key={item} variant="outline">
+          <Badge className="page-header-meta" key={item} variant="outline">
             {item}
           </Badge>
         ))}
@@ -166,7 +173,7 @@ export function RecordingPage({
       />
 
       <PageBody>
-        <section className="designer-split recording-console">
+        <section className="designer-split recording-console figma-recording-console">
           <main className="designer-panel flex min-h-0 flex-col">
             <div className="designer-panel-header flex flex-wrap items-center justify-between gap-3">
               <div>

@@ -1,13 +1,43 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
-import { createInitialStudioState } from '../../../shared/studio.js';
+import { createDemoStudioState } from '../../../shared/studio.js';
 import { RecordingPage } from './RecordingPage.js';
 import { I18nProvider } from '../../i18n/index.js';
 
 describe('RecordingPage', () => {
+  it('guides users to projects before opening the recording console', () => {
+    const onOpenProjects = vi.fn();
+    const state = createDemoStudioState();
+
+    render(
+      <I18nProvider locale="zh-CN">
+        <RecordingPage
+          browserSession={state.browserSession}
+          browserSessionMessage={state.browserSession.message}
+          isReplaying={false}
+          onAppendStep={vi.fn()}
+          onCaptureSnapshot={vi.fn()}
+          onCreateRecording={vi.fn()}
+          onCreateTestCaseFromRecording={vi.fn()}
+          onDeleteRecording={vi.fn()}
+          onImportPlayback={vi.fn()}
+          onOpenProjects={onOpenProjects}
+          onRunRecording={vi.fn()}
+          onSelectRecording={vi.fn()}
+          onStartRecording={vi.fn()}
+          onUpdateRecording={vi.fn()}
+        />
+      </I18nProvider>,
+    );
+
+    expect(screen.getByText('尚未选择项目')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '项目' }));
+    expect(onOpenProjects).toHaveBeenCalledTimes(1);
+  });
+
   it('runs the selected recording directly from the replay workbench', () => {
-    const state = createInitialStudioState();
+    const state = createDemoStudioState();
     const project = state.projects[0];
     const recording = project.recordings[0];
     const environment = project.environments.find((item) => item.id === recording.environmentId) ?? project.environments[0];
@@ -44,7 +74,7 @@ describe('RecordingPage', () => {
   });
 
   it('switches recording actions to English', () => {
-    const state = createInitialStudioState();
+    const state = createDemoStudioState();
     const project = state.projects[0];
     const recording = project.recordings[0];
 
@@ -77,7 +107,7 @@ describe('RecordingPage', () => {
   });
 
   it('stores the visual difference threshold as a normalized percentage', () => {
-    const state = createInitialStudioState();
+    const state = createDemoStudioState();
     const project = state.projects[0];
     const recording = project.recordings[0];
     const onUpdateRecording = vi.fn();
@@ -110,7 +140,7 @@ describe('RecordingPage', () => {
   });
 
   it('adds a screenshot-relative dynamic region mask to the recording asset', () => {
-    const state = createInitialStudioState();
+    const state = createDemoStudioState();
     const project = state.projects[0];
     const recording = project.recordings[0];
     const onUpdateRecording = vi.fn();

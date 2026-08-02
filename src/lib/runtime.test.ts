@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createEmptyProject, type ChatCommandRequest, type DesktopApi } from '../../shared/studio.js';
 import * as runtime from './runtime.js';
 
-const { runRecording, runTestCase, runWorkflow, sendChatCommand } = runtime;
+const { runRecording, runTestCase, runWorkflow, sendChatCommand, testMidsceneConnection } = runtime;
 
 const request: ChatCommandRequest = {
   mode: 'ai',
@@ -73,7 +73,8 @@ describe('browser fallback agent runtime', () => {
         kind: 'scenario',
         groupId: project.groups[0].id,
         environmentId: environment.id,
-        source: 'manual',
+        source: 'prd',
+        prdPath: { documentId: 'doc-login', pathId: 'path-login' },
         name: '登录验证',
         category: '核心链路',
         lastEdited: '刚刚',
@@ -84,7 +85,9 @@ describe('browser fallback agent runtime', () => {
     });
 
     expect(response.detail.status).toBe('neutral');
+    expect(response.detail.documentId).toBe('doc-login');
     expect(response.detail.agentRun?.intent.source).toBe('workflow');
+    expect(response.detail.agentRun?.intent.documentId).toBe('doc-login');
     expect(response.detail.steps[0]?.message).toContain('等待桌面 Agent runtime 执行');
   });
 
@@ -169,6 +172,7 @@ describe('browser fallback agent runtime', () => {
       startUrl: environment.url,
       comparisonGoal: '页面与基线一致',
       tags: [],
+      prdPath: { documentId: 'doc-recording', pathId: 'path-recording' },
       createdAt: new Date(0).toISOString(),
       updatedAt: new Date(0).toISOString(),
       steps: [],
@@ -177,6 +181,8 @@ describe('browser fallback agent runtime', () => {
     const response = await runRecording({ project, environment, recording });
 
     expect(response.agentRun.status).toBe('neutral');
+    expect(response.agentRun.intent.documentId).toBe('doc-recording');
+    expect(response.detail.documentId).toBe('doc-recording');
     expect(response.detail.status).toBe('neutral');
     expect(response.detail.agentRun).toBe(response.agentRun);
   });
@@ -200,6 +206,46 @@ describe('browser fallback agent runtime', () => {
     await expect(runtime.exportArtifact('/tmp/playtest-artifacts/agent-run-1-reporter.html')).resolves.toBe(true);
 
     expect(desktopApi.exportArtifact).toHaveBeenCalledWith('/tmp/playtest-artifacts/agent-run-1-reporter.html');
+    window.desktopApi = originalDesktopApi;
+  });
+
+  it('delegates manual evidence attachment to the desktop bridge', async () => {
+    const originalDesktopApi = window.desktopApi;
+    const attachment = {
+      id: 'artifact-manual-1',
+      type: 'attachment' as const,
+      label: 'payment-proof.pdf',
+      path: '/tmp/playtest-artifacts/manual-1.pdf',
+    };
+    const desktopApi = { attachManualEvidence: vi.fn().mockResolvedValue(attachment) } as unknown as DesktopApi;
+    window.desktopApi = desktopApi;
+
+    await expect(runtime.attachManualEvidence()).resolves.toEqual(attachment);
+
+    expect(desktopApi.attachManualEvidence).toHaveBeenCalledOnce();
+    window.desktopApi = originalDesktopApi;
+  });
+
+  it('delegates the MidScene connection probe to the desktop bridge', async () => {
+    const originalDesktopApi = window.desktopApi;
+    const result = { status: 'passed' as const, modelName: 'ui-agent-model', durationMs: 42 };
+    const desktopApi = { testMidsceneConnection: vi.fn().mockResolvedValue(result) } as unknown as DesktopApi;
+    window.desktopApi = desktopApi;
+
+    await expect(
+      testMidsceneConnection({
+        modelBaseUrl: 'https://models.example.test/v1',
+        modelApiKey: 'test-key',
+        modelName: 'ui-agent-model',
+        modelFamily: 'openai',
+        preferredLanguage: 'Chinese',
+        replanningCycleLimit: '10',
+        openaiHttpProxy: '',
+        defaultContext: '',
+      }),
+    ).resolves.toEqual(result);
+
+    expect(desktopApi.testMidsceneConnection).toHaveBeenCalledOnce();
     window.desktopApi = originalDesktopApi;
   });
 });

@@ -18,6 +18,7 @@ describe('RecordingRunner', () => {
       startUrl: `${environment.url}/login`,
       comparisonGoal: '登录后页面与基线一致',
       tags: [],
+      prdPath: { documentId: 'doc-login', pathId: 'path-login' },
       createdAt: new Date(0).toISOString(),
       updatedAt: new Date(0).toISOString(),
       steps: [
@@ -68,7 +69,9 @@ describe('RecordingRunner', () => {
     expect(replayRecordingSteps).toHaveBeenCalledWith(recording.steps, response.runId);
     expect(response.agentRun.intent.source).toBe('recording');
     expect(response.agentRun.intent.testCaseId).toBe('case-recording-login');
+    expect(response.agentRun.intent.documentId).toBe('doc-login');
     expect(response.detail.testCaseId).toBe('case-recording-login');
+    expect(response.detail.documentId).toBe('doc-login');
     expect(response.agentRun.status).toBe('neutral');
     expect(response.detail.agentRun).toBe(response.agentRun);
     expect(response.detail.artifacts).toEqual(
@@ -79,6 +82,60 @@ describe('RecordingRunner', () => {
     );
     expect(emitRunEvent).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'complete', status: 'neutral', detail: response.detail }),
+    );
+  });
+
+  it('attaches an archived trace to recording evidence when the browser runtime provides one', async () => {
+    const project = createEmptyProject(1);
+    const environment = project.environments[0];
+    const recording = {
+      id: 'recording-trace',
+      name: '带 Trace 的回放',
+      summary: '',
+      source: 'live' as const,
+      groupId: project.groups[0].id,
+      environmentId: environment.id,
+      startUrl: environment.url,
+      comparisonGoal: '回放完成',
+      tags: [],
+      createdAt: new Date(0).toISOString(),
+      updatedAt: new Date(0).toISOString(),
+      steps: [],
+    };
+    const beginTrace = vi.fn().mockResolvedValue(true);
+    const finishTrace = vi.fn().mockResolvedValue({
+      id: 'trace-1',
+      type: 'trace' as const,
+      label: 'Playwright Trace',
+      path: '/tmp/recording-trace.zip',
+    });
+    const runner = new RecordingRunner(
+      {
+        beginTrace,
+        finishTrace,
+        start: vi.fn().mockResolvedValue({
+          id: 'session-trace',
+          status: 'ready',
+          currentUrl: environment.url,
+          pageTitle: 'Home',
+          message: 'ready',
+          updatedAt: new Date(0).toISOString(),
+        }),
+        navigate: vi.fn(),
+        replayRecordingSteps: vi.fn().mockResolvedValue([]),
+      },
+      vi.fn(),
+    );
+
+    const response = await runner.run({ project, environment, recording });
+
+    expect(beginTrace).toHaveBeenCalledWith(response.runId);
+    expect(finishTrace).toHaveBeenCalledOnce();
+    expect(response.agentRun.artifacts).toContainEqual(
+      expect.objectContaining({ type: 'trace', path: '/tmp/recording-trace.zip' }),
+    );
+    expect(response.agentRun.events).toContainEqual(
+      expect.objectContaining({ type: 'agent:artifact-created', artifact: expect.objectContaining({ type: 'trace' }) }),
     );
   });
 

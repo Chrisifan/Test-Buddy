@@ -90,7 +90,7 @@ export function ProjectManagementPage({
   };
 
   return (
-    <PageShell>
+    <PageShell className="figma-project-page">
       <PageHeader
         action={
         <Button className="project-create-button" onClick={onCreateProject} type="button">
@@ -101,7 +101,7 @@ export function ProjectManagementPage({
         title={t('project.header.title')}
       />
       <PageBody className="project-overview-scroll">
-        <main className="project-overview" aria-label={t('project.overview.aria')}>
+        <main className="project-overview figma-project-inventory" aria-label={t('project.overview.aria')}>
           <section aria-label={t('project.overview.summaryAria')} className="project-overview-metrics">
             <ProjectMetric icon={ListChecks} label={t('project.overview.totalCases')} value={totalCases} />
             <ProjectMetric icon={Layers3} label={t('project.overview.totalGroups')} value={totalGroups} />

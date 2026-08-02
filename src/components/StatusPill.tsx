@@ -10,11 +10,11 @@ export function StatusPill({ tone }: { tone: RunTone }) {
   return (
     <Badge
       className={cn(
-        'rounded-[4px] px-2.5 py-1 text-[11px] font-medium uppercase tracking-[0.18em]',
+        'status-pill rounded-[var(--control-radius)] px-1.5 py-0.5 text-[length:var(--font-size-meta)] font-medium normal-case tracking-normal',
         tone === 'passed' && 'status-pill-passed',
         tone === 'running' && 'status-pill-running',
         tone === 'failed' && 'status-pill-failed',
-        tone === 'neutral' && 'bg-muted text-muted-foreground shadow-[inset_0_0_0_1px_color-mix(in_oklch,var(--border)_36%,transparent)]',
+        tone === 'neutral' && 'status-pill-neutral',
       )}
       variant="outline"
     >

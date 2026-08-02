@@ -1,13 +1,17 @@
+import path from 'node:path';
+
 import type {
   BrowserSessionRequest,
   BrowserSessionState,
   BrowserNavigateRequest,
   RecordingStepDraft,
   RunDetail,
+  RunArtifact,
   RunEventPayload,
   RunRecordingRequest,
   RunRecordingResponse,
 } from '../../shared/studio.js';
+import type { AgentArtifact, AgentRunResult } from '../../shared/agent.js';
 import { createRecordingAgentRun } from '../../shared/recordingAgent.js';
 import type { RecordingVisualComparison } from '../../shared/recordingAgent.js';
 import type { RecordingReplayResult } from './browser-runtime.js';
@@ -17,6 +21,8 @@ interface RecordingBrowserRuntime {
   start: (request: BrowserSessionRequest) => Promise<BrowserSessionState>;
   navigate: (request: BrowserNavigateRequest) => Promise<BrowserSessionState>;
   replayRecordingSteps: (steps: RecordingStepDraft[], sessionId: string) => Promise<RecordingReplayResult[]>;
+  beginTrace?: (runId: string) => Promise<boolean>;
+  finishTrace?: () => Promise<RunArtifact | undefined>;
 }
 
 interface RecordingVisualDiff {
@@ -46,8 +52,11 @@ export class RecordingRunner {
   async run(request: RunRecordingRequest): Promise<RunRecordingResponse> {
     const runId = `agent-run-recording-${Date.now()}`;
     const title = `${request.recording.name} 回放`;
+    const documentId = request.documentId ?? request.recording.prdPath?.documentId;
     const startedAt = new Date();
     const emitEvents = !request.parentRunId;
+
+    await this.browserRuntime.beginTrace?.(runId);
 
     if (emitEvents) {
       this.emitRunEvent({
@@ -78,20 +87,24 @@ export class RecordingRunner {
     const replayResults = await this.browserRuntime.replayRecordingSteps(request.recording.steps, runId);
     const visualComparisons = await this.compareScreenshots(request, replayResults);
     const endedAt = new Date();
-    const agentRun = createRecordingAgentRun({
+    const traceArtifact = await this.browserRuntime.finishTrace?.();
+    const baseAgentRun = createRecordingAgentRun({
       recording: request.recording,
       replayResults,
       projectId: request.project.id,
       ...(request.testCaseId ? { testCaseId: request.testCaseId } : {}),
+      ...(documentId ? { documentId } : {}),
       runId,
       startedAt: startedAt.toISOString(),
       endedAt: endedAt.toISOString(),
       visualComparisons,
     });
+    const agentRun = traceArtifact ? appendTraceArtifact(baseAgentRun, traceArtifact) : baseAgentRun;
     const detail: RunDetail = {
       id: runId,
       projectId: request.project.id,
       testCaseId: request.testCaseId ?? request.recording.id,
+      ...(documentId ? { documentId } : {}),
       environmentId: request.environment.id,
       title,
       status: agentRun.status,
@@ -166,4 +179,28 @@ export class RecordingRunner {
     return comparisons.filter((comparison): comparison is NonNullable<typeof comparison> => Boolean(comparison));
   }
 }
-import path from 'node:path';
+
+function appendTraceArtifact(agentRun: AgentRunResult, trace: RunArtifact): AgentRunResult {
+  const artifact: AgentArtifact = {
+    id: `${agentRun.runId}-artifact-trace`,
+    type: 'trace',
+    label: trace.label,
+    path: trace.path,
+  };
+  return {
+    ...agentRun,
+    events: [
+      ...agentRun.events,
+      {
+        id: `${agentRun.runId}-event-trace`,
+        runId: agentRun.runId,
+        type: 'agent:artifact-created',
+        message: 'Playwright Trace 已归档。',
+        status: agentRun.status,
+        artifact,
+        createdAt: new Date().toISOString(),
+      },
+    ],
+    artifacts: [...agentRun.artifacts, artifact],
+  };
+}

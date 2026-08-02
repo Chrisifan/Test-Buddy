@@ -1,4 +1,4 @@
-import type { AgentModelAssignment, AgentRunResult } from './agent.js';
+import type { AgentModelAssignment, AgentReporterSummary, AgentRunResult } from './agent.js';
 
 export type RunTone = 'running' | 'passed' | 'failed' | 'neutral';
 export type ChatRole = 'system' | 'user' | 'assistant';
@@ -6,16 +6,25 @@ export type CommandMode = 'ai' | 'aiAssert' | 'aiQuery';
 export type StepType = 'ai' | 'aiAssert' | 'aiQuery';
 export type TestStepType = StepType | 'recordingReplay' | 'manual';
 export type TestCaseRunBlocker = 'emptySteps' | 'emptyTitle' | 'emptyInstruction' | 'missingRecording';
+export type TestStepRunBlocker = Exclude<TestCaseRunBlocker, 'emptySteps'>;
 export type WorkflowKind = 'scenario' | 'assertion' | 'extraction';
 export type TestCaseKind = WorkflowKind | 'recording';
 export type BrowserEngine = 'chromium' | 'firefox' | 'webkit';
 export type ViewportPreset = 'desktop' | 'laptop' | 'mobile';
-export type TestCaseSource = 'manual' | 'naturalLanguage' | 'recording' | 'prd';
+export type TestCaseSource = 'manual' | 'naturalLanguage' | 'recording' | 'prd' | 'reporter';
 export type EnvironmentKind = 'local' | 'staging' | 'productionMirror';
 export type CredentialKind = 'password' | 'cookie' | 'token';
 export type BrowserSessionStatus = 'idle' | 'starting' | 'ready' | 'navigating' | 'closed' | 'error';
 export type PrdDocumentKind = 'pdf' | 'markdown' | 'text';
 export type PrdAnalysisStatus = 'draft' | 'analyzed';
+export type PrdAnalysisSource = 'rule' | 'model';
+export type PrdAnalysisFallbackReason =
+  | 'modelDisabled'
+  | 'modelNotConfigured'
+  | 'noRulePaths'
+  | 'requestFailed'
+  | 'invalidResponse'
+  | 'desktopUnavailable';
 export type RecordingSource = 'live' | 'imported';
 export type RecordingStepKind = 'navigate' | 'click' | 'input' | 'wait' | 'assert' | 'snapshot';
 export type ThemeMode = 'light' | 'dark' | 'system';
@@ -31,6 +40,7 @@ export interface RunSummary {
   summary: string;
   projectId?: string;
   testCaseId?: string;
+  documentId?: string;
   environmentId?: string;
   environmentName?: string;
   startedAt?: string;
@@ -62,11 +72,17 @@ export interface TestStepDraft {
   recordingId?: string;
 }
 
+export interface PrdPathReference {
+  documentId: string;
+  pathId: string;
+}
+
 export interface TestCaseDraft extends Omit<WorkflowDraft, 'kind' | 'steps'> {
   kind: TestCaseKind;
   groupId: string;
   environmentId: string;
   source: TestCaseSource;
+  prdPath?: PrdPathReference;
   steps: TestStepDraft[];
 }
 
@@ -114,6 +130,7 @@ export interface RecordingAsset {
   visualDiffThreshold?: number;
   visualDiffMasks?: VisualDiffMask[];
   tags: string[];
+  prdPath?: PrdPathReference;
   steps: RecordingStepDraft[];
   createdAt: string;
   updatedAt: string;
@@ -125,6 +142,7 @@ export interface GeneratedTestPath {
   priority: 'P0' | 'P1' | 'P2';
   groupName: string;
   rationale: string;
+  sourceExcerpt?: string;
   steps: TestStepDraft[];
 }
 
@@ -139,6 +157,14 @@ export interface PrdDocumentAsset {
   summary: string;
   coverageAreas: string[];
   generatedPaths: GeneratedTestPath[];
+  analysisMetadata?: PrdAnalysisMetadata;
+}
+
+export interface PrdAnalysisMetadata {
+  source: PrdAnalysisSource;
+  analyzedAt: string;
+  modelName?: string;
+  fallbackReason?: PrdAnalysisFallbackReason;
 }
 
 export interface ProjectGroup {
@@ -188,7 +214,7 @@ export interface ProjectDraft {
 
 export interface RunArtifact {
   id: string;
-  type: 'screenshot' | 'trace' | 'report' | 'snapshot';
+  type: 'screenshot' | 'trace' | 'report' | 'snapshot' | 'attachment';
   label: string;
   path: string;
 }
@@ -207,12 +233,15 @@ export interface ManualStepEvidence {
   status: 'passed' | 'failed';
   note: string;
   confirmedAt: string;
+  screenshotPath?: string;
+  attachments?: RunArtifact[];
 }
 
 export interface RunDetail {
   id: string;
   projectId: string;
   testCaseId: string;
+  documentId?: string;
   environmentId: string;
   title: string;
   status: RunTone;
@@ -264,6 +293,16 @@ export interface MidsceneConfig {
   replanningCycleLimit: string;
   openaiHttpProxy: string;
   defaultContext: string;
+}
+
+export type MidsceneConnectionFailure = 'configuration' | 'http' | 'network' | 'response';
+
+export interface MidsceneConnectionTestResult {
+  status: 'passed' | 'failed';
+  modelName: string;
+  durationMs: number;
+  httpStatus?: number;
+  failure?: MidsceneConnectionFailure;
 }
 
 export interface AgentRoleModelConfig {
@@ -328,6 +367,7 @@ export interface ChatCommandRequest {
   environment?: ProjectEnvironment;
   projectId?: string;
   testCaseId?: string;
+  documentId?: string;
 }
 
 export interface ChatCommandResponse {
@@ -344,6 +384,7 @@ export interface RunWorkflowRequest {
   preserveCurrentPage?: boolean;
   project?: ProjectDraft;
   environment?: ProjectEnvironment;
+  documentId?: string;
   midsceneConfig?: MidsceneConfig;
   agentModelConfig?: AgentModelConfig;
   browserSession?: BrowserSessionState;
@@ -364,6 +405,7 @@ export interface RunRecordingRequest {
   recording: RecordingAsset;
   environment: ProjectEnvironment;
   testCaseId?: string;
+  documentId?: string;
   parentRunId?: string;
 }
 
@@ -372,6 +414,19 @@ export interface RunWorkflowResponse {
   title: string;
   detail: RunDetail;
   agentRun: AgentRunResult;
+}
+
+export interface PrdSemanticAnalysisRequest {
+  document: PrdDocumentAsset;
+  midsceneConfig: MidsceneConfig;
+  agentModelConfig: AgentModelConfig;
+}
+
+export interface PrdSemanticAnalysisResponse {
+  document: PrdDocumentAsset;
+  source: PrdAnalysisSource;
+  modelName?: string;
+  fallbackReason?: PrdAnalysisFallbackReason;
 }
 
 export interface RunTestCaseResponse {
@@ -475,8 +530,10 @@ export interface DesktopApi {
   loadStudioState: () => Promise<StudioState | null>;
   saveStudioState: (state: StudioState) => Promise<void>;
   getRuntimeInfo: () => Promise<RuntimeInfo>;
+  testMidsceneConnection: (config: MidsceneConfig) => Promise<MidsceneConnectionTestResult>;
   createProject: (project: ProjectDraft) => Promise<ProjectDraft>;
   updateProject: (project: ProjectDraft) => Promise<ProjectDraft>;
+  analyzePrdDocument: (request: PrdSemanticAnalysisRequest) => Promise<PrdSemanticAnalysisResponse>;
   saveCredential: (request: SaveCredentialRequest) => Promise<CredentialRef>;
   startBrowserSession: (request: BrowserSessionRequest) => Promise<BrowserSessionState>;
   navigateBrowserSession: (request: BrowserNavigateRequest) => Promise<BrowserSessionState>;
@@ -486,6 +543,7 @@ export interface DesktopApi {
   loadRunDetail: (runId: string) => Promise<RunDetail | null>;
   openArtifact: (artifactPath: string) => Promise<void>;
   exportArtifact: (artifactPath: string) => Promise<boolean>;
+  attachManualEvidence: () => Promise<RunArtifact | null>;
   startSession: (request: SessionStartRequest) => Promise<ChatEntry>;
   endSession: () => Promise<ChatEntry>;
   sendChatCommand: (request: ChatCommandRequest) => Promise<ChatCommandResponse>;
@@ -496,7 +554,7 @@ export interface DesktopApi {
 
 export const defaultRuntimeProfile: RuntimeProfile = {
   browser: 'chromium',
-  baseUrl: 'https://demo-shop.local',
+  baseUrl: '',
   viewport: 'desktop',
   locale: 'zh-CN',
   headless: true,
@@ -718,13 +776,10 @@ export const initialChatTimeline: ChatEntry[] = [
   },
 ];
 
-export const initialRunLog = [
-  '[13:20:10] Browser session started',
-  '[13:20:12] MidScene agent initialized with checkout context',
-  '[13:20:17] Task 1 / Step 2 passed: aiAssert',
-  '[13:20:23] Captured variable currentPrice = "¥249.00"',
-  '[13:20:31] Waiting for order summary to stabilize',
-];
+export const initialRunLog: string[] = [];
+
+const builtInMockProjectId = 'project-demo';
+const builtInMockChatEntryIds = new Set(['chat-001', 'chat-002', 'chat-003']);
 
 export function workflowToTestCase(
   workflow: WorkflowDraft,
@@ -882,16 +937,15 @@ export function createDemoProject(): ProjectDraft {
 }
 
 export function createInitialStudioState(): StudioState {
-  const project = createDemoProject();
   return {
-    selectedProjectId: project.id,
-    selectedGroupId: project.groups[0]?.id ?? '',
-    selectedTestCaseId: project.testCases[0]?.id ?? '',
-    selectedRecordingId: project.recordings[0]?.id ?? '',
-    projects: [project],
+    selectedProjectId: '',
+    selectedGroupId: '',
+    selectedTestCaseId: '',
+    selectedRecordingId: '',
+    projects: [],
     runDetails: [],
-    recentRuns: structuredClone(initialRecentRuns),
-    chatEntries: structuredClone(initialChatTimeline),
+    recentRuns: [],
+    chatEntries: [],
     runtimeProfile: structuredClone(defaultRuntimeProfile),
     midsceneConfig: structuredClone(defaultMidsceneConfig),
     agentModelConfig: structuredClone(defaultAgentModelConfig),
@@ -903,6 +957,25 @@ export function createInitialStudioState(): StudioState {
       ...defaultBrowserSession,
       updatedAt: new Date().toISOString(),
     },
+    selectedWorkflowId: '',
+    workflows: [],
+  };
+}
+
+/** Provides the legacy demo workspace exclusively for isolated UI and state fixtures. */
+export function createDemoStudioState(): StudioState {
+  const project = createDemoProject();
+  const initialState = createInitialStudioState();
+
+  return {
+    ...initialState,
+    selectedProjectId: project.id,
+    selectedGroupId: project.groups[0]?.id ?? '',
+    selectedTestCaseId: project.testCases[0]?.id ?? '',
+    selectedRecordingId: project.recordings[0]?.id ?? '',
+    projects: [project],
+    recentRuns: structuredClone(initialRecentRuns),
+    chatEntries: structuredClone(initialChatTimeline),
     selectedWorkflowId: project.testCases[0]?.id ?? '',
     workflows: project.testCases.map(testCaseToWorkflow),
   };
@@ -916,19 +989,11 @@ export function hydrateStudioState(
     return initialState;
   }
 
-  const migratedProjects =
-    Array.isArray(rawState.projects) && rawState.projects.length
-      ? rawState.projects.map(normalizeProjectDraft)
-      : [
-          {
-            ...createDemoProject(),
-            testCases: Array.isArray(rawState.workflows)
-              ? rawState.workflows.map((workflow) =>
-                  workflowToTestCase(normalizeWorkflowDraft(workflow)),
-                )
-              : initialState.projects[0].testCases,
-          },
-        ];
+  const migratedProjects = Array.isArray(rawState.projects)
+    ? rawState.projects
+        .filter((project) => project?.id !== builtInMockProjectId)
+        .map(normalizeProjectDraft)
+    : [];
 
   const selectedProjectId =
     rawState.selectedProjectId && migratedProjects.some((project) => project.id === rawState.selectedProjectId)
@@ -978,16 +1043,22 @@ export function hydrateStudioState(
     selectedTestCaseId,
     selectedRecordingId,
     projects: migratedProjects,
-    runDetails: Array.isArray(rawState.runDetails) ? rawState.runDetails : initialState.runDetails,
+    runDetails: Array.isArray(rawState.runDetails)
+      ? rawState.runDetails.filter((run) => run.projectId !== builtInMockProjectId)
+      : initialState.runDetails,
     recentRuns: Array.isArray(rawState.recentRuns)
-      ? rawState.recentRuns
+      ? rawState.recentRuns.filter((run) => run.projectId !== builtInMockProjectId)
       : initialState.recentRuns,
     chatEntries: Array.isArray(rawState.chatEntries)
-      ? rawState.chatEntries
+      ? rawState.chatEntries.filter((entry) => !builtInMockChatEntryIds.has(entry.id))
       : initialState.chatEntries,
     runtimeProfile: {
       ...initialState.runtimeProfile,
       ...(rawState.runtimeProfile ?? {}),
+      baseUrl:
+        rawState.runtimeProfile?.baseUrl === 'https://demo-shop.local'
+          ? ''
+          : rawState.runtimeProfile?.baseUrl ?? initialState.runtimeProfile.baseUrl,
     },
     midsceneConfig: hydratedMidsceneConfig,
     agentModelConfig: hydratedAgentModelConfig,
@@ -1000,10 +1071,9 @@ export function hydrateStudioState(
       ...rawStartupGuide,
       completed: rawStartupGuide.completed ?? isMidsceneConfigured(hydratedMidsceneConfig),
     },
-    browserSession: {
-      ...initialState.browserSession,
-      ...(rawState.browserSession ?? {}),
-    },
+    // A Playwright page belongs to the Electron process and cannot outlive it.
+    // Restoring its former status would display stale errors or a false-ready state.
+    browserSession: initialState.browserSession,
     selectedWorkflowId: selectedTestCaseId,
     workflows: selectedProject?.testCases.map(testCaseToWorkflow) ?? initialState.workflows,
   };
@@ -1056,8 +1126,19 @@ function normalizeWorkflowDraft(rawWorkflow: WorkflowDraft): WorkflowDraft {
   };
 }
 
+function normalizePrdPathReference(rawReference: unknown): PrdPathReference | undefined {
+  if (!rawReference || typeof rawReference !== 'object') {
+    return undefined;
+  }
+
+  const reference = rawReference as Partial<PrdPathReference>;
+  const documentId = typeof reference.documentId === 'string' ? reference.documentId.trim() : '';
+  const pathId = typeof reference.pathId === 'string' ? reference.pathId.trim() : '';
+  return documentId && pathId ? { documentId, pathId } : undefined;
+}
+
 function normalizeProjectDraft(rawProject: ProjectDraft): ProjectDraft {
-  const fallback = createDemoProject();
+  const fallback = createEmptyProject(1);
   const environments = Array.isArray(rawProject.environments) && rawProject.environments.length
     ? rawProject.environments
     : fallback.environments;
@@ -1079,6 +1160,7 @@ function normalizeProjectDraft(rawProject: ProjectDraft): ProjectDraft {
             : 0,
         visualDiffMasks: normalizeVisualDiffMasks(recording.visualDiffMasks),
         tags: Array.isArray(recording.tags) ? recording.tags : [],
+        prdPath: normalizePrdPathReference(recording.prdPath),
         steps: Array.isArray(recording.steps)
           ? recording.steps.map((step) => ({
               ...step,
@@ -1109,6 +1191,7 @@ function normalizeProjectDraft(rawProject: ProjectDraft): ProjectDraft {
           groupId: testCase.groupId || groups[0]?.id || '',
           environmentId: testCase.environmentId || environmentId,
           source: testCase.source || 'manual',
+          prdPath: normalizePrdPathReference(testCase.prdPath),
           steps: Array.isArray(testCase.steps) ? testCase.steps : [],
         }))
       : fallback.testCases,
@@ -1217,9 +1300,10 @@ export function createPrdDocumentAsset({
   size: number;
   sourceText: string;
 }): PrdDocumentAsset {
-  const analysis = analyzePrdText(sourceText, name);
+  const id = `doc-${Date.now()}`;
+  const analysis = analyzePrdText(sourceText, name, id);
   return {
-    id: `doc-${Date.now()}`,
+    id,
     name,
     kind,
     size,
@@ -1229,28 +1313,38 @@ export function createPrdDocumentAsset({
     summary: analysis.summary,
     coverageAreas: analysis.coverageAreas,
     generatedPaths: analysis.generatedPaths,
+    analysisMetadata: {
+      source: 'rule',
+      analyzedAt: new Date().toISOString(),
+    },
   };
 }
 
 export function updatePrdDocumentAnalysis(document: PrdDocumentAsset): PrdDocumentAsset {
-  const analysis = analyzePrdText(document.sourceText, document.name);
+  const analysis = analyzePrdText(document.sourceText, document.name, document.id);
   return {
     ...document,
     status: analysis.generatedPaths.length ? 'analyzed' : 'draft',
     summary: analysis.summary,
     coverageAreas: analysis.coverageAreas,
     generatedPaths: analysis.generatedPaths,
+    analysisMetadata: {
+      source: 'rule',
+      analyzedAt: new Date().toISOString(),
+    },
   };
 }
 
 export function createTestCaseFromGeneratedPath({
   path,
+  documentId,
   groupId,
   environmentId,
   url,
   seed,
 }: {
   path: GeneratedTestPath;
+  documentId: string;
   groupId: string;
   environmentId: string;
   url: string;
@@ -1262,6 +1356,10 @@ export function createTestCaseFromGeneratedPath({
     groupId,
     environmentId,
     source: 'prd',
+    prdPath: {
+      documentId,
+      pathId: path.id,
+    },
     name: path.title,
     category: path.groupName,
     lastEdited: '刚刚',
@@ -1276,12 +1374,14 @@ export function createTestCaseFromGeneratedPath({
 
 export function createRecordingFromGeneratedPath({
   path,
+  documentId,
   groupId,
   environmentId,
   startUrl,
   seed,
 }: {
   path: GeneratedTestPath;
+  documentId: string;
   groupId: string;
   environmentId: string;
   startUrl: string;
@@ -1298,6 +1398,10 @@ export function createRecordingFromGeneratedPath({
     startUrl,
     comparisonGoal: `回放完成后验证：${path.rationale}`,
     tags: ['PRD', path.priority, path.groupName],
+    prdPath: {
+      documentId,
+      pathId: path.id,
+    },
     createdAt: now,
     updatedAt: now,
     steps: path.steps.map((step, index) => ({
@@ -1546,6 +1650,71 @@ export function createTestStep(
   };
 }
 
+export function createManualStepAutomationReplacement(step: TestStepDraft): TestStepDraft {
+  if (step.type !== 'manual') {
+    return step;
+  }
+
+  const instruction = step.body.trim();
+  const body = !instruction
+    ? ''
+    : /^(?:验证|断言|确认|检查)/.test(instruction) || /^(?:verify|assert|confirm|check)\b/i.test(instruction)
+      ? instruction
+      : `验证：${instruction}`;
+
+  return {
+    ...step,
+    type: 'aiAssert',
+    body,
+    recordingId: undefined,
+  };
+}
+
+export function createReporterFixDraft(
+  source: TestCaseDraft,
+  reporter: Pick<AgentReporterSummary, 'failureAnalysis' | 'suggestedFixes'>,
+  seed: number,
+): TestCaseDraft | undefined {
+  const seenFixes = new Set<string>();
+  const suggestedFixes = reporter.suggestedFixes.flatMap((fix) => {
+    const trimmed = fix.trim();
+    const key = trimmed.replace(/\s+/g, ' ').toLocaleLowerCase();
+    if (!trimmed || seenFixes.has(key)) {
+      return [];
+    }
+
+    seenFixes.add(key);
+    return [trimmed];
+  }).slice(0, 5);
+  if (!suggestedFixes.length) {
+    return undefined;
+  }
+
+  const draftId = `case-reporter-${Date.now()}-${seed}`;
+  const notes = [
+    source.notes.trim(),
+    `基于 Reporter 失败归因：${reporter.failureAnalysis.trim()}`,
+  ].filter(Boolean).join('\n\n');
+
+  return {
+    ...source,
+    id: draftId,
+    source: 'reporter',
+    name: `${source.name} · 修复草稿`,
+    lastEdited: '刚刚',
+    notes,
+    steps: [
+      ...source.steps.map((step, index) => ({ ...step, id: `${draftId}-source-${index + 1}` })),
+      ...suggestedFixes.map((fix, index) => ({
+        id: `${draftId}-fix-${index + 1}`,
+        type: 'ai' as const,
+        title: `修复建议 ${index + 1}`,
+        body: fix,
+      })),
+    ],
+  };
+}
+
 export function insertTestStep(steps: TestStepDraft[], step: TestStepDraft, index: number): TestStepDraft[] {
   const insertionIndex = Math.max(0, Math.min(index, steps.length));
   return [...steps.slice(0, insertionIndex), step, ...steps.slice(insertionIndex)];
@@ -1587,20 +1756,54 @@ export function getTestCaseRunBlocker(
   }
 
   for (const step of testCase.steps) {
-    if (!step.title.trim()) {
-      return 'emptyTitle';
-    }
-
-    if (step.type === 'recordingReplay') {
-      if (!step.recordingId || !recordings.some((recording) => recording.id === step.recordingId)) {
-        return 'missingRecording';
-      }
-    } else if (!step.body.trim()) {
-      return 'emptyInstruction';
+    const blocker = getTestStepRunBlocker(step, recordings);
+    if (blocker) {
+      return blocker;
     }
   }
 
   return undefined;
+}
+
+export function getTestStepRunBlocker(
+  step: TestStepDraft,
+  recordings: RecordingAsset[],
+): TestStepRunBlocker | undefined {
+  if (!step.title.trim()) {
+    return 'emptyTitle';
+  }
+
+  if (step.type === 'recordingReplay') {
+    return !step.recordingId || !recordings.some((recording) => recording.id === step.recordingId)
+      ? 'missingRecording'
+      : undefined;
+  }
+
+  return step.body.trim() ? undefined : 'emptyInstruction';
+}
+
+export function isTestCaseLinkedToGeneratedPath(
+  testCase: TestCaseDraft,
+  documentId: string,
+  path: GeneratedTestPath,
+): boolean {
+  if (testCase.prdPath) {
+    return testCase.prdPath.documentId === documentId && testCase.prdPath.pathId === path.id;
+  }
+
+  return testCase.source === 'prd' && testCase.name === path.title;
+}
+
+export function isRecordingLinkedToGeneratedPath(
+  recording: RecordingAsset,
+  documentId: string,
+  path: GeneratedTestPath,
+): boolean {
+  if (recording.prdPath) {
+    return recording.prdPath.documentId === documentId && recording.prdPath.pathId === path.id;
+  }
+
+  return recording.tags.includes('PRD') && recording.name === `${path.title} 回放草稿`;
 }
 
 function normalizePrdDocument(rawDocument: PrdDocumentAsset): PrdDocumentAsset {
@@ -1611,12 +1814,210 @@ function normalizePrdDocument(rawDocument: PrdDocumentAsset): PrdDocumentAsset {
     summary: rawDocument.summary ?? '尚未分析',
     coverageAreas: Array.isArray(rawDocument.coverageAreas) ? rawDocument.coverageAreas : [],
     generatedPaths: Array.isArray(rawDocument.generatedPaths)
-      ? rawDocument.generatedPaths
+      ? rawDocument.generatedPaths.map((path) => ({
+          ...path,
+          sourceExcerpt: typeof path.sourceExcerpt === 'string' ? path.sourceExcerpt : undefined,
+        }))
       : [],
+    analysisMetadata: rawDocument.analysisMetadata
+      ? {
+          source: rawDocument.analysisMetadata.source === 'model' ? 'model' : 'rule',
+          analyzedAt: rawDocument.analysisMetadata.analyzedAt ?? rawDocument.uploadedAt,
+          ...(typeof rawDocument.analysisMetadata.modelName === 'string' && rawDocument.analysisMetadata.modelName.trim()
+            ? { modelName: rawDocument.analysisMetadata.modelName.trim() }
+            : {}),
+          ...(rawDocument.analysisMetadata.fallbackReason
+            ? { fallbackReason: rawDocument.analysisMetadata.fallbackReason }
+            : {}),
+        }
+      : {
+          source: 'rule',
+          analyzedAt: rawDocument.uploadedAt,
+        },
   };
 }
 
-function analyzePrdText(sourceText: string, documentName: string) {
+interface PrdRequirementClause {
+  content: string;
+  sourceExcerpt: string;
+  section?: string;
+}
+
+const PRD_REQUIREMENT_LIMIT = 8;
+const PRD_REQUIREMENT_SIGNAL = /支持|必须|应当|需要|默认|仅|不得|不能|禁止|校验|验证|展示|导出|新增|创建|编辑|修改|删除|保存|提交|筛选|过滤|查询|搜索|排序|分页|登录|退出|审批|审核|驳回|流转|上传|下载|选择|切换|允许|拒绝|返回|提示|显示|隐藏|点击|输入|打开|关闭|跳转|加载|刷新|can|must|should|shall|default|only|cannot|validate|display|show|export|create|edit|delete|save|submit|filter|search|sort|paginate|login|approve|upload|download|select|allow|deny|redirect|load|refresh/i;
+
+function normalizePrdRequirement(value: string): string {
+  return value
+    .toLocaleLowerCase()
+    .replace(/[\s`*_#>~，,。.!！？；;：:（）()\[\]{}「」『』“”"']/g, '');
+}
+
+function stripMarkdownPrefix(value: string): string {
+  return value
+    .replace(/^[-*+]\s+/, '')
+    .replace(/^\d+[.)、]\s+/, '')
+    .replace(/^>\s?/, '')
+    .replace(/\*\*/g, '')
+    .trim();
+}
+
+function splitPrdLine(value: string): string[] {
+  return value
+    .split(/(?<=[。！？；])\s*|(?<=[.!?;])\s+(?=[A-Z])/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function toPrdSourceExcerpt(section: string | undefined, content: string): string {
+  return section ? `${section} - ${content}` : content;
+}
+
+function extractPrdRequirementClauses(text: string): PrdRequirementClause[] {
+  const seen = new Set<string>();
+  const clauses: PrdRequirementClause[] = [];
+  let section: string | undefined;
+
+  for (const rawLine of text.replace(/\r\n?/g, '\n').split('\n')) {
+    const line = rawLine.trim();
+    if (!line) {
+      continue;
+    }
+
+    const headingMatch = line.match(/^#{1,6}\s+(.+)$/);
+    if (headingMatch) {
+      section = stripMarkdownPrefix(headingMatch[1]!);
+      continue;
+    }
+
+    const content = stripMarkdownPrefix(line);
+    if (!content) {
+      continue;
+    }
+
+    if (/^[^。！？!?；;]{2,40}[：:]$/.test(content)) {
+      section = content.slice(0, -1).trim();
+      continue;
+    }
+
+    for (const sentence of splitPrdLine(content)) {
+      const candidate = sentence.replace(/^[\-–—]\s*/, '').replace(/[；;]\s*$/, '').trim();
+      if (candidate.length < 6 || !PRD_REQUIREMENT_SIGNAL.test(candidate)) {
+        continue;
+      }
+
+      const sourceExcerpt = toPrdSourceExcerpt(section, candidate);
+      const key = normalizePrdRequirement(sourceExcerpt);
+      if (!key || seen.has(key)) {
+        continue;
+      }
+
+      seen.add(key);
+      clauses.push({
+        content: candidate,
+        sourceExcerpt,
+        section,
+      });
+
+      if (clauses.length >= PRD_REQUIREMENT_LIMIT) {
+        return clauses;
+      }
+    }
+  }
+
+  return clauses;
+}
+
+function classifyPrdRequirementGroup(requirement: string, section?: string): string {
+  const text = `${section ?? ''} ${requirement}`.toLocaleLowerCase();
+  const has = (keywords: string[]) => keywords.some((keyword) => text.includes(keyword.toLocaleLowerCase()));
+
+  if (has(['登录', '账号', '密码', '权限', '角色', '管理员', '普通成员', 'login', 'auth', 'permission', 'role', 'admin'])) {
+    return '账号权限';
+  }
+  if (has(['图表', '趋势', '看板', 'dashboard', 'chart', '报表'])) {
+    return '图表看板';
+  }
+  if (has(['表格', '列表', '排序', '分页', 'table', 'grid', 'sort', 'paginate'])) {
+    return '表格列表';
+  }
+  if (has(['筛选', '过滤', '查询', '搜索', 'filter', 'search'])) {
+    return '查询筛选';
+  }
+  if (has(['导出', '下载', 'excel', 'csv', 'download', 'export'])) {
+    return '导出下载';
+  }
+  if (has(['审批', '审核', '流转', '驳回', 'approve', 'review', 'workflow'])) {
+    return '流程状态';
+  }
+  if (has(['新增', '创建', '编辑', '修改', '删除', '保存', '提交', 'create', 'edit', 'delete', 'save', 'submit'])) {
+    return '数据维护';
+  }
+  if (has(['告警', '异常', '错误', '提示', '校验', 'validation', 'alert', 'warning', 'error'])) {
+    return '异常校验';
+  }
+  return section || 'PRD 需求';
+}
+
+function inferPrdRequirementPriority(requirement: string): GeneratedTestPath['priority'] {
+  const text = requirement.toLocaleLowerCase();
+  if (['必须', '不得', '不能', '禁止', '仅', '权限', '登录', '安全', '审批', 'must', 'shall', 'only', 'cannot', 'permission', 'security', 'approval'].some((keyword) => text.includes(keyword))) {
+    return 'P0';
+  }
+  if (['异常', '错误', '失败', '无效', '边界', '取消', '空状态', '校验', 'error', 'invalid', 'edge', 'empty', 'cancel', 'validation'].some((keyword) => text.includes(keyword))) {
+    return 'P2';
+  }
+  return 'P1';
+}
+
+function shortenPrdRequirement(requirement: string, maxLength = 36): string {
+  const compact = requirement.replace(/\s+/g, ' ').trim();
+  return compact.length > maxLength ? `${compact.slice(0, maxLength).trimEnd()}...` : compact;
+}
+
+function createRequirementTestPath(clause: PrdRequirementClause, index: number): Omit<GeneratedTestPath, 'id'> {
+  const scope = clause.section || clause.content;
+  return {
+    title: clause.section
+      ? `${clause.section}：${shortenPrdRequirement(clause.content)}`
+      : shortenPrdRequirement(clause.content),
+    priority: inferPrdRequirementPriority(clause.content),
+    groupName: classifyPrdRequirementGroup(clause.content, clause.section),
+    rationale: `根据 PRD 原文“${clause.sourceExcerpt}”生成，可在写入用例前补充页面入口和测试数据。`,
+    sourceExcerpt: clause.sourceExcerpt,
+    steps: [
+      {
+        id: `draft-requirement-${index}-open`,
+        type: 'ai',
+        title: '进入对应功能页面',
+        body: `进入“${scope}”相关页面，准备需求所需的角色、数据和前置状态。`,
+      },
+      {
+        id: `draft-requirement-${index}-action`,
+        type: 'ai',
+        title: '执行需求操作',
+        body: `按 PRD 要求执行：${clause.content}`,
+      },
+      {
+        id: `draft-requirement-${index}-assert`,
+        type: 'aiAssert',
+        title: '断言需求结果',
+        body: `断言页面结果满足 PRD 原文：${clause.content}`,
+      },
+    ],
+  };
+}
+
+function createStablePrdPathId(documentId: string, path: Omit<GeneratedTestPath, 'id'>): string {
+  const source = `${documentId}:${normalizePrdRequirement(path.sourceExcerpt ?? path.title)}`;
+  let hash = 2166136261;
+  for (let index = 0; index < source.length; index += 1) {
+    hash ^= source.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `path-${(hash >>> 0).toString(36)}`;
+}
+
+function analyzePrdText(sourceText: string, documentName: string, documentId: string) {
   const text = sourceText.trim();
   if (!text || text.length < 20) {
     return {
@@ -1633,10 +2034,23 @@ function analyzePrdText(sourceText: string, documentName: string) {
   const addPath = (path: Omit<GeneratedTestPath, 'id'>) => {
     generatedPaths.push({
       ...path,
-      id: `path-${generatedPaths.length + 1}-${Date.now()}`,
+      id: createStablePrdPathId(documentId, path),
     });
     coverageAreas.push(path.groupName);
   };
+
+  const requirementClauses = extractPrdRequirementClauses(text);
+  for (const [index, clause] of requirementClauses.entries()) {
+    addPath(createRequirementTestPath(clause, index + 1));
+  }
+
+  if (generatedPaths.length) {
+    return {
+      summary: `已从 PRD 提取 ${generatedPaths.length} 条可追溯需求，并生成对应测试路径，覆盖 ${Array.from(new Set(coverageAreas)).join('、')}。`,
+      coverageAreas: Array.from(new Set(coverageAreas)),
+      generatedPaths,
+    };
+  }
 
   if (has(['登录', '账号', '密码', '权限', 'login', 'auth'])) {
     addPath({

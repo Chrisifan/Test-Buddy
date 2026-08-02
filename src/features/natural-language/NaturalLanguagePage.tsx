@@ -112,7 +112,7 @@ export function NaturalLanguagePage({
           t('nl.meta.environment', { environment: getEnvironmentLabel(targetEnvironment, t) }),
           t('nl.meta.session', { status: sessionStatus }),
         ].map((item) => (
-          <Badge className="rounded-[4px] px-3 py-1.5" key={item} variant="outline">
+          <Badge className="page-header-meta" key={item} variant="outline">
             {item}
           </Badge>
         ))}
@@ -216,7 +216,7 @@ export function NaturalLanguagePage({
           </div>
         </aside>
 
-        <section className="designer-panel is-muted nl-workspace-stage nl-browser-panel grid min-h-0 grid-rows-[minmax(0,1fr)_180px] gap-4 p-4">
+        <section className="designer-panel nl-browser-panel min-h-0">
           <div className="designer-browser-stage">
             <div className="designer-browser-bar">
               <span className="designer-browser-dot bg-red-300" />
@@ -227,22 +227,31 @@ export function NaturalLanguagePage({
               </div>
             </div>
             <div className="designer-browser-viewport">
-              <div className="w-full max-w-md rounded-[8px] border border-border bg-card p-8 shadow-sm">
-                <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-primary/10 text-primary">
-                  <SquareActivity className="h-6 w-6" />
+              <div className="nl-browser-empty-card w-full max-w-md rounded-[8px] border border-border bg-card p-5 shadow-sm">
+                <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-full bg-primary/10 text-primary">
+                  <SquareActivity className="h-5 w-5" />
                 </div>
-                <h3 className="mt-4 text-center text-xl font-bold">{t('nl.stage.title')}</h3>
+                <h3 className="mt-3 text-center text-lg font-bold">{t('nl.stage.title')}</h3>
                 <p className="mt-2 text-center text-sm leading-6 text-muted-foreground">
                   {t('nl.stage.description')}
                 </p>
-                <div className="mt-5 rounded-[4px] border-2 border-dashed border-primary/30 p-3 text-center text-xs font-semibold text-primary">
+                <div className="mt-4 rounded-[4px] border-2 border-dashed border-primary/30 px-3 py-2 text-center text-xs font-semibold text-primary">
                   {t('nl.stage.tools')}
                 </div>
               </div>
             </div>
           </div>
 
-          <div className="nl-evidence-grid grid gap-4 md:grid-cols-[minmax(0,1fr)_260px]">
+        </section>
+
+        <aside className="designer-panel nl-planner-panel min-h-0">
+          <header className="designer-panel-header">
+            <div className="flex items-center justify-between gap-3">
+              <h2 className="text-sm font-semibold">{t('nl.flow.title')}</h2>
+              <span className={`nl-planner-state ${sessionActive ? 'is-active' : ''}`}>{sessionStatus}</span>
+            </div>
+          </header>
+          <div className="nl-evidence-grid">
             <Surface className="p-4" variant="panel">
               <div className="flex items-center justify-between">
                 <p className="font-mono text-[11px] uppercase tracking-[0.08em] text-muted-foreground">{t('nl.flow.title')}</p>
@@ -266,7 +275,7 @@ export function NaturalLanguagePage({
               <p className="mt-3 truncate font-mono text-xs text-muted-foreground">MidScene {midsceneConfig.modelName || t('nl.model.unset')}</p>
             </Surface>
           </div>
-        </section>
+        </aside>
       </section>
       </PageBody>
     </PageShell>

@@ -19,6 +19,7 @@ import type {
   RecordingCapturedEvent,
   RecordingStepDraft,
   RecordingStepKind,
+  RunArtifact,
 } from '../../shared/studio.js';
 import { ArtifactManager } from './artifact-manager.js';
 
@@ -80,8 +81,16 @@ export interface BrowserObservationSnapshot {
   charts: AgentChartObservation[];
 }
 
+type PlaywrightContext = {
+  newPage: () => Promise<PlaywrightPage>;
+  tracing: {
+    start: (options?: { screenshots?: boolean; snapshots?: boolean; sources?: boolean }) => Promise<unknown>;
+    stop: (options?: { path?: string }) => Promise<unknown>;
+  };
+};
+
 type PlaywrightBrowser = {
-  newPage: (options?: Record<string, unknown>) => Promise<PlaywrightPage>;
+  newContext: (options?: Record<string, unknown>) => Promise<PlaywrightContext>;
   close: () => Promise<unknown>;
 };
 
@@ -91,9 +100,21 @@ type PlaywrightModule = {
   webkit?: { launch: (options?: Record<string, unknown>) => Promise<PlaywrightBrowser> };
 };
 
+function describeBrowserLaunchFailure(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/executable doesn't exist|playwright install/i.test(message)) {
+    return '未检测到 Playwright 浏览器内核。请安装 Chromium 后重新启动受控浏览器会话。';
+  }
+
+  return '浏览器启动失败，请检查浏览器运行环境后重试。';
+}
+
 export class BrowserRuntime {
   private browser: PlaywrightBrowser | null = null;
+  private context: PlaywrightContext | null = null;
   private page: PlaywrightPage | null = null;
+  private pendingTraceRunId: string | null = null;
+  private trace: { runId: string; path: string } | null = null;
   private recordingEnabled = true;
   private consoleMessages: string[] = [];
   private networkHints: string[] = [];
@@ -148,12 +169,16 @@ export class BrowserRuntime {
     }
 
     try {
+      const pendingTraceRunId = this.pendingTraceRunId;
       await this.close();
+      this.pendingTraceRunId = pendingTraceRunId;
       this.browser = await launcher.launch({ headless: request.environment.headless });
-      this.page = await this.browser.newPage({
+      this.context = await this.browser.newContext({
         locale: request.environment.locale,
         viewport: viewportFor(request.environment.viewport),
       });
+      await this.startPendingTrace();
+      this.page = await this.context.newPage();
       this.installObservationListeners(this.page);
       if (this.recordingEnabled) {
         await this.installRecorder(this.page);
@@ -174,7 +199,7 @@ export class BrowserRuntime {
     } catch (error) {
       return this.patchState({
         status: 'error',
-        message: `浏览器启动失败：${(error as Error).message}`,
+        message: describeBrowserLaunchFailure(error),
       });
     }
   }
@@ -1208,9 +1233,45 @@ export class BrowserRuntime {
     return results;
   }
 
+  async beginTrace(runId: string): Promise<boolean> {
+    if (this.trace || this.pendingTraceRunId) {
+      return false;
+    }
+
+    if (!this.context) {
+      this.pendingTraceRunId = runId;
+      return false;
+    }
+
+    return this.startTrace(runId);
+  }
+
+  async finishTrace(): Promise<RunArtifact | undefined> {
+    const trace = this.trace;
+    this.trace = null;
+    this.pendingTraceRunId = null;
+    if (!trace || !this.context) {
+      return undefined;
+    }
+
+    try {
+      await this.context.tracing.stop({ path: trace.path });
+      return {
+        id: `artifact-${trace.runId}-trace`,
+        type: 'trace',
+        label: 'Playwright Trace',
+        path: trace.path,
+      };
+    } catch {
+      return undefined;
+    }
+  }
+
   async close(): Promise<void> {
+    await this.finishTrace();
     await this.browser?.close();
     this.browser = null;
+    this.context = null;
     this.page = null;
   }
 
@@ -1230,6 +1291,29 @@ export class BrowserRuntime {
   private async captureScreenshotPath(sessionId: string): Promise<string> {
     await this.artifacts.ensureReady();
     return path.join(this.rootDir, 'studio-data', 'artifacts', `${sessionId}-${Date.now()}.png`);
+  }
+
+  private async startPendingTrace(): Promise<void> {
+    const runId = this.pendingTraceRunId;
+    this.pendingTraceRunId = null;
+    if (runId) {
+      await this.startTrace(runId);
+    }
+  }
+
+  private async startTrace(runId: string): Promise<boolean> {
+    if (!this.context || this.trace) {
+      return false;
+    }
+
+    try {
+      const tracePath = await this.artifacts.createTracePath(runId);
+      await this.context.tracing.start({ screenshots: true, snapshots: true, sources: true });
+      this.trace = { runId, path: tracePath };
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   private installObservationListeners(page: PlaywrightPage): void {

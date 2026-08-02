@@ -1,17 +1,21 @@
 import { useMemo, useState } from 'react';
 import type {
   GeneratedTestPath,
+  PrdAnalysisFallbackReason,
   PrdDocumentKind,
   ProjectDraft,
 } from '../../../shared/studio.js';
+import {
+  isRecordingLinkedToGeneratedPath,
+  isTestCaseLinkedToGeneratedPath,
+} from '../../../shared/studio.js';
 
-import { FileText, Plus, Sparkles, Upload } from 'lucide-react';
+import { FileText, Plus, Sparkles, Table2, Upload } from 'lucide-react';
 
-import { ActionListItem, EvidenceCard, MetricTile, PageHeader, Surface, PageBody, PageShell } from '../../components/workbench.js';
+import { EvidenceCard, MetricTile, PageHeader, ProjectRequiredState, Surface, PageBody, PageShell } from '../../components/workbench.js';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Textarea } from '@/components/ui/textarea';
 import { extractPdfText } from '@/lib/pdfText';
 import { useI18n } from '../../i18n/index.js';
@@ -25,6 +29,10 @@ export function DocumentAnalysisPage({
   onCreateCaseFromPath,
   onCreateRecordingFromPath,
   onCreateAllCasesFromDocument,
+  onAnalyzeDocument,
+  semanticAnalyzingDocumentId,
+  semanticAnalysisError,
+  onOpenProjects,
 }: {
   project?: ProjectDraft;
   selectedDocumentId: string;
@@ -39,11 +47,13 @@ export function DocumentAnalysisPage({
   onCreateCaseFromPath: (documentId: string, pathId: string) => void;
   onCreateRecordingFromPath: (documentId: string, pathId: string) => void;
   onCreateAllCasesFromDocument: (documentId: string) => void;
+  onAnalyzeDocument: (documentId: string) => void;
+  semanticAnalyzingDocumentId: string | null;
+  semanticAnalysisError: string | null;
+  onOpenProjects?: () => void;
 }) {
   const { t } = useI18n();
-  const [draftName, setDraftName] = useState(() => t('documents.intake.defaultName'));
-  const [draftText, setDraftText] = useState(() => t('documents.intake.samplePrd'));
-  const [intakeMessage, setIntakeMessage] = useState(() => t('documents.intake.supportedFiles'));
+  const [isCoverageMatrixOpen, setIsCoverageMatrixOpen] = useState(false);
   const documents = project?.documents ?? [];
   const selectedDocument =
     documents.find((document) => document.id === selectedDocumentId) ?? documents[0];
@@ -51,21 +61,39 @@ export function DocumentAnalysisPage({
     () => documents.reduce((total, document) => total + document.generatedPaths.length, 0),
     [documents],
   );
-  const coveredPathTitles = useMemo(
-    () => new Set((project?.testCases ?? []).filter((testCase) => testCase.source === 'prd').map((testCase) => testCase.name)),
-    [project?.testCases],
-  );
-  const recordingPathTitles = useMemo(
-    () =>
-      new Set(
-        (project?.recordings ?? [])
-          .filter((recording) => recording.tags.includes('PRD'))
-          .map((recording) => recording.name.replace(/ 回放草稿$/, '')),
-      ),
-    [project?.recordings],
-  );
-  const selectedCoveredCount =
-    selectedDocument?.generatedPaths.filter((path) => coveredPathTitles.has(path.title)).length ?? 0;
+  const selectedPathCoverage = useMemo(() => {
+    const cases = project?.testCases ?? [];
+    const recordings = project?.recordings ?? [];
+    return new Map(
+      (selectedDocument?.generatedPaths ?? []).map((path) => [
+        path.id,
+        {
+          caseCreated: cases.some((testCase) => isTestCaseLinkedToGeneratedPath(testCase, selectedDocument!.id, path)),
+          recordingCreated: recordings.some((recording) => isRecordingLinkedToGeneratedPath(recording, selectedDocument!.id, path)),
+        },
+      ]),
+    );
+  }, [project?.recordings, project?.testCases, selectedDocument]);
+  const selectedCoveredCount = Array.from(selectedPathCoverage.values()).filter((coverage) => coverage.caseCreated).length;
+  const selectedRecordingCount = Array.from(selectedPathCoverage.values()).filter((coverage) => coverage.recordingCreated).length;
+  const coverageMatrix = useMemo(() => {
+    const cases = project?.testCases ?? [];
+    const recordings = project?.recordings ?? [];
+    return documents.flatMap((document) =>
+      document.generatedPaths.map((path) => ({
+        document,
+        path,
+        caseCreated: cases.some((testCase) => isTestCaseLinkedToGeneratedPath(testCase, document.id, path)),
+        recordingCreated: recordings.some((recording) => isRecordingLinkedToGeneratedPath(recording, document.id, path)),
+      })),
+    );
+  }, [documents, project?.recordings, project?.testCases]);
+  const coveredMatrixCount = coverageMatrix.filter((row) => row.caseCreated).length;
+  const selectedFallbackReason = selectedDocument?.analysisMetadata?.fallbackReason;
+  const selectedFallbackMessage = selectedFallbackReason
+    ? analysisFallbackMessage(selectedFallbackReason, t)
+    : null;
+  const isSemanticAnalyzing = semanticAnalyzingDocumentId === selectedDocument?.id;
 
   async function handleFileChange(file?: File) {
     if (!file) {
@@ -82,18 +110,9 @@ export function DocumentAnalysisPage({
       sourceText = extracted.length >= 20
         ? extracted
         : t('documents.intake.pdfNoText');
-      setIntakeMessage(
-        extracted.length >= 20
-          ? t('documents.intake.pdfSuccess', { name: file.name, count: extracted.length })
-          : t('documents.intake.pdfComplex', { name: file.name }),
-      );
     } else {
       sourceText = await file.text();
-      setIntakeMessage(t('documents.intake.readSuccess', { name: file.name, count: sourceText.length }));
     }
-
-    setDraftName(file.name);
-    setDraftText(sourceText);
 
     onCreateDocument({
       name: file.name,
@@ -103,35 +122,60 @@ export function DocumentAnalysisPage({
     });
   }
 
+  if (!project) {
+    return (
+      <PageShell>
+        <PageHeader title={t('documents.header.title')} />
+        <PageBody className="flex min-h-0">
+          <ProjectRequiredState
+            actionLabel={t('app.nav.projects')}
+            description={t('project.select.description')}
+            onOpenProjects={onOpenProjects}
+            title={t('project.select.title')}
+          />
+        </PageBody>
+      </PageShell>
+    );
+  }
+
   return (
-    <PageShell>
+    <PageShell className="figma-document-page">
       <PageHeader
+        action={
+          <>
+            <label className="document-upload-action">
+              <Upload className="h-3.5 w-3.5" />
+              {t('documents.upload.eyebrow')}
+              <input
+                accept=".txt,.md,.markdown,.pdf"
+                className="sr-only"
+                onChange={(event) => void handleFileChange(event.target.files?.[0])}
+                type="file"
+              />
+            </label>
+            <Button onClick={() => setIsCoverageMatrixOpen(true)} size="sm" type="button" variant="outline">
+              <Table2 className="h-3.5 w-3.5" />
+              {t('documents.action.coverageMatrix')}
+            </Button>
+          </>
+        }
         meta={[
           t('documents.meta.documents', { count: documents.length }),
           t('documents.meta.paths', { count: generatedCount }),
-          t('documents.meta.coverage', { count: selectedCoveredCount }),
         ].map((item) => (
-          <Badge className="rounded-[4px] px-3 py-1.5" key={item} variant="outline">
+          <Badge className="page-header-meta" key={item} variant="outline">
             {item}
           </Badge>
         ))}
         title={t('documents.header.title')}
       />
 
-      <PageBody>
+      <PageBody className="figma-document-body">
       <section className="document-studio" aria-label={t('documents.aria.workbench')}>
-        <div className="document-asset-area">
-          <Surface className="document-summary-strip" variant="subtle">
-            <div className="document-summary-metrics">
-              <span><span>{t('documents.stats.total')}</span> <b>{documents.length}</b></span>
-              <span><span>{t('documents.stats.analyzed')}</span> <b className="text-emerald-600">{documents.filter((document) => document.generatedPaths.length).length}</b></span>
-              <span><span>{t('documents.stats.paths')}</span> <b className="text-primary">{generatedCount}</b></span>
-            </div>
-            <div className="flex gap-2">
-              <Button size="sm" type="button" variant="outline">{t('documents.action.filter')}</Button>
-              <Button size="sm" type="button" variant="outline">{t('documents.action.latest')}</Button>
-            </div>
-          </Surface>
+        <aside className="document-asset-area" aria-label={t('documents.header.title')}>
+          <header className="document-library-header">
+            <span>{t('documents.library.recent')}</span>
+          </header>
 
           <div className="document-asset-grid">
             {documents.map((document) => (
@@ -155,55 +199,84 @@ export function DocumentAnalysisPage({
                 </footer>
               </button>
             ))}
-            {!documents.length ? <EvidenceCard title={t('documents.empty.title')} description={t('documents.empty.description')} /> : null}
-          </div>
-        </div>
-
-        <aside className="document-side-panel">
-          <Surface className="document-intake" variant="plain">
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <p>{t('documents.upload.eyebrow')}</p>
-                <h2>{t('documents.upload.title')}</h2>
-                <span>{intakeMessage}</span>
+            {!documents.length ? (
+              <div className="document-library-empty">
+                <FileText aria-hidden="true" className="h-5 w-5" />
+                <p>{t('documents.empty.title')}</p>
               </div>
-              <Sparkles className="h-5 w-5 text-primary" />
-            </div>
-            <Input aria-label={t('documents.upload.name')} onChange={(event) => setDraftName(event.target.value)} value={draftName} />
-            <Textarea className="min-h-[160px] leading-7" onChange={(event) => setDraftText(event.target.value)} value={draftText} />
-            <div className="flex flex-wrap justify-between gap-2">
-              <label className="inline-flex h-10 cursor-pointer items-center justify-center gap-2 rounded-[4px] tech-subtle px-4 text-sm transition hover:bg-accent">
-                <Upload className="h-4 w-4" />
-                {t('documents.upload.file')}
-                <input accept=".txt,.md,.markdown,.pdf" className="sr-only" onChange={(event) => void handleFileChange(event.target.files?.[0])} type="file" />
-              </label>
-              <Button
-                onClick={() => {
-                  setIntakeMessage(t('documents.intake.analyzed', { name: draftName, count: draftText.length }));
-                  onCreateDocument({
-                    name: draftName,
-                    kind: draftName.toLowerCase().endsWith('.md') ? 'markdown' : 'text',
-                    size: draftText.length,
-                    sourceText: draftText,
-                  });
-                }}
-                type="button"
-              >
-                <Sparkles className="h-4 w-4" />
-                {t('documents.upload.analyze')}
-              </Button>
-            </div>
-          </Surface>
+            ) : null}
+          </div>
+        </aside>
+
+        <section className={`document-side-panel ${selectedDocument ? '' : 'is-empty'}`}>
+          {selectedDocument ? (
+            <header className="document-workspace-header">
+              <div className="min-w-0">
+                <h2>{selectedDocument.name}</h2>
+                <p>{`${selectedDocument.kind.toUpperCase()} · ${t('documents.card.chars', { count: selectedDocument.size })}`}</p>
+              </div>
+              <div className="flex shrink-0 gap-2">
+                <Badge variant="outline">
+                  {selectedDocument.analysisMetadata?.source === 'model'
+                    ? t('documents.analysis.model')
+                    : t('documents.analysis.rule')}
+                </Badge>
+                <Button
+                  disabled={isSemanticAnalyzing}
+                  onClick={() => onAnalyzeDocument(selectedDocument.id)}
+                  size="sm"
+                  type="button"
+                >
+                  <Sparkles className="h-3.5 w-3.5" />
+                  {isSemanticAnalyzing
+                    ? t('documents.analysis.analyzing')
+                    : t('documents.analysis.reanalyze')}
+                </Button>
+              </div>
+            </header>
+          ) : null}
+
+          {selectedDocument && (semanticAnalysisError || selectedFallbackMessage) ? (
+            <p
+              aria-live="polite"
+              className="text-xs leading-5 text-muted-foreground"
+              role={semanticAnalysisError ? 'alert' : undefined}
+            >
+              {semanticAnalysisError ?? selectedFallbackMessage}
+            </p>
+          ) : null}
 
           {selectedDocument ? (
-            <Surface className="document-inspector" variant="plain">
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <p className="font-mono text-[11px] uppercase tracking-[0.08em] text-primary">{t('documents.selected.eyebrow')}</p>
-                  <h2 className="mt-2 truncate text-xl font-semibold tracking-[-0.03em]">{selectedDocument.name}</h2>
+            <Surface className="document-source-pane" variant="plain">
+              <header className="document-pane-header">
+                <span>{t('documents.selected.eyebrow')}</span>
+                <span>{t('documents.metric.coverageAreas')} {selectedDocument.coverageAreas.length}</span>
+              </header>
+              <Textarea
+                aria-label={`${selectedDocument.name} source`}
+                className="document-source-editor"
+                disabled={isSemanticAnalyzing}
+                onChange={(event) => onUpdateDocument(selectedDocument.id, event.target.value)}
+                value={selectedDocument.sourceText}
+              />
+            </Surface>
+          ) : (
+            <section className="document-workspace-empty">
+              <FileText aria-hidden="true" className="h-7 w-7" />
+              <h2>{t('documents.empty.title')}</h2>
+              <p>{t('documents.empty.description')}</p>
+            </section>
+          )}
+
+          {selectedDocument ? (
+            <aside className="document-path-pane" aria-label={t('documents.selected.pathCount', { count: selectedDocument.generatedPaths.length })}>
+              <header className="document-pane-header">
+                <span>{t('documents.selected.pathCount', { count: selectedDocument.generatedPaths.length })}</span>
+                <div className="flex flex-wrap justify-end gap-1.5">
+                  <Badge variant="outline">{selectedCoveredCount} {t('documents.metric.written')}</Badge>
+                  <Badge variant="outline">{selectedRecordingCount} {t('documents.metric.recordings')}</Badge>
                 </div>
-                <Badge variant="outline">{t('documents.selected.pathCount', { count: selectedDocument.generatedPaths.length })}</Badge>
-              </div>
+              </header>
               <div className="grid gap-3 md:grid-cols-3">
                 <MetricTile label={t('documents.metric.coverageAreas')} value={`${selectedDocument.coverageAreas.length}`} />
                 <MetricTile label={t('documents.metric.paths')} value={`${selectedDocument.generatedPaths.length}`} tone="primary" />
@@ -212,12 +285,12 @@ export function DocumentAnalysisPage({
               <div className="grid gap-2">
                 {selectedDocument.generatedPaths.map((path) => (
                   <GeneratedPathCard
-                    covered={coveredPathTitles.has(path.title)}
+                    covered={selectedPathCoverage.get(path.id)?.caseCreated ?? false}
                     key={path.id}
                     onCreateCase={() => onCreateCaseFromPath(selectedDocument.id, path.id)}
                     onCreateRecording={() => onCreateRecordingFromPath(selectedDocument.id, path.id)}
                     path={path}
-                    recordingCreated={recordingPathTitles.has(path.title)}
+                    recordingCreated={selectedPathCoverage.get(path.id)?.recordingCreated ?? false}
                   />
                 ))}
                 {!selectedDocument.generatedPaths.length ? (
@@ -225,20 +298,98 @@ export function DocumentAnalysisPage({
                 ) : null}
               </div>
               <Button
-                disabled={!selectedDocument.generatedPaths.some((path) => !coveredPathTitles.has(path.title))}
+                disabled={!selectedDocument.generatedPaths.some((path) => !selectedPathCoverage.get(path.id)?.caseCreated)}
                 onClick={() => onCreateAllCasesFromDocument(selectedDocument.id)}
                 type="button"
                 variant="outline"
               >
                 {t('documents.path.writeAll')}
               </Button>
-            </Surface>
+            </aside>
           ) : null}
-        </aside>
+        </section>
       </section>
       </PageBody>
+      <Dialog onOpenChange={setIsCoverageMatrixOpen} open={isCoverageMatrixOpen}>
+        <DialogContent
+          aria-describedby={undefined}
+          className="max-h-[min(680px,calc(100vh-32px))] w-[min(920px,calc(100vw-32px))] gap-0 overflow-hidden p-0 sm:max-w-[920px]"
+          showCloseButton
+        >
+          <DialogHeader className="flex h-[52px] shrink-0 flex-row items-center justify-between border-b border-border px-4 py-0 pr-14 text-left">
+            <DialogTitle className="text-base font-semibold">{t('documents.matrix.title')}</DialogTitle>
+            <div className="flex items-center gap-2">
+              <Badge variant="outline">{t('documents.matrix.paths', { count: coverageMatrix.length })}</Badge>
+              <Badge variant="outline">{t('documents.matrix.covered', { count: coveredMatrixCount })}</Badge>
+            </div>
+          </DialogHeader>
+          <div className="min-h-0 overflow-auto p-4">
+            {coverageMatrix.length ? (
+              <table className="w-full min-w-[680px] border-collapse text-left text-xs">
+                <thead className="sticky top-0 z-10 bg-card text-muted-foreground">
+                  <tr className="border-b border-border">
+                    <th className="px-2 py-2 font-medium">{t('documents.matrix.document')}</th>
+                    <th className="px-2 py-2 font-medium">{t('documents.matrix.path')}</th>
+                    <th className="px-2 py-2 font-medium">{t('documents.matrix.case')}</th>
+                    <th className="px-2 py-2 font-medium">{t('documents.matrix.recording')}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {coverageMatrix.map((row) => (
+                    <tr className="border-b border-border/70 last:border-b-0" key={`${row.document.id}-${row.path.id}`}>
+                      <td className="max-w-44 truncate px-2 py-2.5 font-medium text-foreground" title={row.document.name}>
+                        {row.document.name}
+                      </td>
+                      <td className="max-w-[360px] px-2 py-2.5">
+                        <p className="truncate font-medium text-foreground" title={row.path.title}>{row.path.title}</p>
+                        {row.path.sourceExcerpt ? (
+                          <p className="mt-1 line-clamp-1 text-muted-foreground" title={row.path.sourceExcerpt}>{row.path.sourceExcerpt}</p>
+                        ) : null}
+                      </td>
+                      <td className="px-2 py-2.5">
+                        <Badge variant="outline">
+                          {row.caseCreated ? t('documents.matrix.written') : t('documents.matrix.unwritten')}
+                        </Badge>
+                      </td>
+                      <td className="px-2 py-2.5">
+                        <Badge variant="outline">
+                          {row.recordingCreated ? t('documents.matrix.recorded') : t('documents.matrix.unrecorded')}
+                        </Badge>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : (
+              <EvidenceCard title={t('documents.matrix.emptyTitle')} description={t('documents.matrix.emptyDescription')} />
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
     </PageShell>
   );
+}
+
+function analysisFallbackMessage(
+  reason: PrdAnalysisFallbackReason,
+  t: ReturnType<typeof useI18n>['t'],
+): string {
+  if (reason === 'modelDisabled') {
+    return t('documents.analysis.fallback.disabled');
+  }
+  if (reason === 'modelNotConfigured') {
+    return t('documents.analysis.fallback.notConfigured');
+  }
+  if (reason === 'noRulePaths') {
+    return t('documents.analysis.fallback.noRulePaths');
+  }
+  if (reason === 'requestFailed') {
+    return t('documents.analysis.fallback.requestFailed');
+  }
+  if (reason === 'invalidResponse') {
+    return t('documents.analysis.fallback.invalidResponse');
+  }
+  return t('documents.analysis.fallback.desktopUnavailable');
 }
 
 function GeneratedPathCard({
@@ -270,6 +421,12 @@ function GeneratedPathCard({
           </div>
           <h3 className="mt-3 text-base font-semibold tracking-[-0.03em]">{path.title}</h3>
           <p className="mt-2 text-sm leading-6 text-muted-foreground">{path.rationale}</p>
+          {path.sourceExcerpt ? (
+            <p className="document-path-source">
+              <span>{t('documents.path.sourceExcerpt')}</span>
+              {path.sourceExcerpt}
+            </p>
+          ) : null}
         </div>
         <div className="flex shrink-0 flex-wrap justify-end gap-2">
           {covered ? (

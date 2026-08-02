@@ -7,8 +7,8 @@ describe('i18n', () => {
     const zh = createTranslator('zh-CN');
     const en = createTranslator('en-US');
 
-    expect(zh('settings.title')).toBe('项目设置');
-    expect(en('settings.title')).toBe('Project Settings');
+    expect(zh('settings.title')).toBe('应用设置');
+    expect(en('settings.title')).toBe('Application Settings');
     expect(en('settings.midscene.requiredHint')).toContain('Model service URL');
     expect(zh('settings.unknown.key')).toBe('settings.unknown.key');
   });

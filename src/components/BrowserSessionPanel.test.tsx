@@ -1,11 +1,11 @@
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
-import { createInitialStudioState } from '../../shared/studio.js';
+import { createDemoStudioState } from '../../shared/studio.js';
 import { I18nProvider } from '../i18n/index.js';
 import { BrowserSessionPanel } from './BrowserSessionPanel.js';
 
-const state = createInitialStudioState();
+const state = createDemoStudioState();
 const project = state.projects[0];
 const environment = project.environments[0];
 

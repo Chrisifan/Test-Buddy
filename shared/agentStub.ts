@@ -30,6 +30,7 @@ export interface AgentStubRequest {
   targetEnvironment: string;
   projectId?: string;
   testCaseId?: string;
+  documentId?: string;
   targetUrl?: string;
   browserSession?: AgentBrowserSessionSnapshot;
   browserActionMessage?: string;
@@ -79,6 +80,7 @@ export interface WorkflowAgentRunRequest {
   runId?: string;
   projectId?: string;
   environmentId?: string;
+  documentId?: string;
 }
 
 export interface TestCaseAgentRunRequest {
@@ -122,6 +124,7 @@ export interface PlannedAgentStepExecution {
     recoveryStrategy?: AgentRecoveryStrategy;
   }>;
   selectorFallbackAttempts?: AgentSelectorFallbackAttempt[];
+  metrics?: AgentExecutionMetrics;
 }
 
 export interface PlannedAgentReplanningRecord {
@@ -130,6 +133,7 @@ export interface PlannedAgentReplanningRecord {
   revisedPlan: AgentPlanDraft;
   executions: PlannedAgentStepExecution[];
   failedStepIndex: number;
+  planningMetrics?: AgentExecutionMetrics;
 }
 
 export interface PlannedAgentRunRequest {
@@ -140,10 +144,12 @@ export interface PlannedAgentRunRequest {
   targetUrl?: string;
   projectId?: string;
   testCaseId?: string;
+  documentId?: string;
   plannedPlan: AgentPlanDraft;
   planner: AgentPlanProvenance;
   executions: PlannedAgentStepExecution[];
   replanningHistory?: PlannedAgentReplanningRecord[];
+  planningMetrics?: AgentExecutionMetrics;
   executionMetrics?: AgentExecutionMetrics;
   modelAssignments?: AgentModelAssignment[];
 }
@@ -197,6 +203,7 @@ export function createStubAgentRun(request: AgentStubRequest): AgentRunResult {
     page: 'nl',
     ...(request.projectId ? { projectId: request.projectId } : {}),
     ...(request.testCaseId ? { testCaseId: request.testCaseId } : {}),
+    ...(request.documentId ? { documentId: request.documentId } : {}),
     ...(request.targetUrl ? { targetUrl: request.targetUrl } : {}),
   });
   const primaryAction = request.primaryAction ?? modeToAction(request.mode);
@@ -345,6 +352,7 @@ export function createStubAgentRun(request: AgentStubRequest): AgentRunResult {
       stepId: prepareStep.id,
       message: request.browserActionMessage ?? 'Agent 已准备浏览器执行上下文。',
       status: 'running',
+      ...(request.executionMetrics ? { metrics: request.executionMetrics } : {}),
       createdAt: now,
     },
     observationEvent,
@@ -446,6 +454,7 @@ export function createPlannedAgentRun(request: PlannedAgentRunRequest): AgentRun
     ...(request.targetUrl ? { targetUrl: request.targetUrl } : {}),
     ...(request.projectId ? { projectId: request.projectId } : {}),
     ...(request.testCaseId ? { testCaseId: request.testCaseId } : {}),
+    ...(request.documentId ? { documentId: request.documentId } : {}),
   });
   const prepareStep: AgentStep = {
     id: `${runId}-step-prepare`,
@@ -518,6 +527,7 @@ export function createPlannedAgentRun(request: PlannedAgentRunRequest): AgentRun
         .join('；'),
       status: 'running',
       plan: initialPlan,
+      ...(request.planningMetrics ? { metrics: request.planningMetrics } : {}),
       createdAt: now,
     },
   ];
@@ -601,6 +611,7 @@ export function createPlannedAgentRun(request: PlannedAgentRunRequest): AgentRun
         message: execution.browserActionMessage ?? execution.summary,
         status: execution.status === 'failed' ? 'failed' : 'running',
         ...(execution.browserSession ? { browserSession: execution.browserSession } : {}),
+        ...(execution.metrics ? { metrics: execution.metrics } : {}),
         createdAt: now,
       });
 
@@ -732,6 +743,7 @@ export function createPlannedAgentRun(request: PlannedAgentRunRequest): AgentRun
       status: 'neutral',
       stepId: triggerStep.id,
       planRevision,
+      ...(record.planningMetrics ? { metrics: record.planningMetrics } : {}),
       createdAt: now,
     });
   });
@@ -873,6 +885,7 @@ export function createWorkflowAgentRun(request: WorkflowAgentRunRequest): AgentR
     testCaseId: request.workflow.id,
     ...(request.projectId ? { projectId: request.projectId } : {}),
     ...(request.environmentId ? { environmentId: request.environmentId } : {}),
+    ...(request.documentId ? { documentId: request.documentId } : {}),
   });
   const planSteps: AgentStep[] = request.workflow.steps.map((step, index) => {
     const stepRun = request.stepRuns[index];
@@ -1047,6 +1060,7 @@ export function createTestCaseAgentRun(request: TestCaseAgentRunRequest): AgentR
     groupId: request.testCase.groupId,
     ...(request.projectId ? { projectId: request.projectId } : {}),
     ...(request.environmentId ? { environmentId: request.environmentId } : {}),
+    ...(request.testCase.prdPath?.documentId ? { documentId: request.testCase.prdPath.documentId } : {}),
   });
   const planSteps: AgentStep[] = request.testCase.steps.map((step, index) => {
     const stepRun = request.stepRuns[index];

@@ -7,7 +7,9 @@ import {
   type BrowserNavigateRequest,
   type BrowserSessionRequest,
   type ChatCommandRequest,
+  type MidsceneConfig,
   type ProjectDraft,
+  type PrdSemanticAnalysisRequest,
   type RecordingCapturedEvent,
   type RuntimeInfo,
   type RuntimeProfile,
@@ -29,10 +31,12 @@ import { OpenAICompatibleAgentVerifier } from './runtime/agent-verifier.js';
 import { BrowserRuntime } from './runtime/browser-runtime.js';
 import { CredentialStore } from './runtime/credential-store.js';
 import { MidsceneSemanticActionRuntime } from './runtime/semantic-action-runtime.js';
+import { testMidsceneConnection } from './runtime/midscene-connection.js';
 import { electronNativeImageAdapter } from './runtime/electron-native-image-adapter.js';
 import { RecordingRunner } from './runtime/recording-runner.js';
 import { TestRunner } from './runtime/test-runner.js';
 import { PixelVisualDiffService } from './runtime/visual-diff.js';
+import { PrdSemanticAnalysisRuntime } from './runtime/prd-semantic-analyzer.js';
 import { StudioStore } from './studioStore.js';
 import { StudioRuntime } from './studioRuntime.js';
 
@@ -47,6 +51,7 @@ let browserRuntime: BrowserRuntime | null = null;
 let testRunner: TestRunner | null = null;
 let recordingRunner: RecordingRunner | null = null;
 let artifactManager: ArtifactManager | null = null;
+let prdSemanticAnalysisRuntime: PrdSemanticAnalysisRuntime | null = null;
 
 function loadApplicationIcon() {
   const icon = nativeImage.createFromPath(path.join(app.getAppPath(), 'resources', 'icons', 'testbuddy.png'));
@@ -99,6 +104,14 @@ function getArtifactManagerOrThrow(): ArtifactManager {
   }
 
   return artifactManager;
+}
+
+function getPrdSemanticAnalysisRuntimeOrThrow(): PrdSemanticAnalysisRuntime {
+  if (!prdSemanticAnalysisRuntime) {
+    prdSemanticAnalysisRuntime = new PrdSemanticAnalysisRuntime();
+  }
+
+  return prdSemanticAnalysisRuntime;
 }
 
 function resolveTestCaseRuntimeProfile(request: RunTestCaseRequest): RuntimeProfile {
@@ -171,6 +184,9 @@ function registerIpcHandlers(): void {
     });
     return project;
   });
+  ipcMain.handle('studio:analyze-prd-document', async (_event, request: PrdSemanticAnalysisRequest) =>
+    getPrdSemanticAnalysisRuntimeOrThrow().analyze(request),
+  );
   ipcMain.handle('studio:save-credential', async (_event, request: SaveCredentialRequest) =>
     getCredentialStoreOrThrow().save(request),
   );
@@ -179,6 +195,9 @@ function registerIpcHandlers(): void {
     persistence: 'file',
     storagePath: getStoreOrThrow().storagePath,
   }));
+  ipcMain.handle('runtime:test-midscene-connection', async (_event, config: MidsceneConfig) =>
+    testMidsceneConnection(config),
+  );
   ipcMain.handle('runtime:start-browser-session', async (_event, request: BrowserSessionRequest) =>
     getBrowserRuntimeOrThrow().start(request),
   );
@@ -190,6 +209,7 @@ function registerIpcHandlers(): void {
   );
   ipcMain.handle('runtime:run-test-case', async (_event, request: RunTestCaseRequest) => {
     const recordingId = getExclusiveRecordingReplayId(request.testCase);
+    const documentId = request.testCase.prdPath?.documentId;
     const recording = recordingId
       ? request.project.recordings.find((item) => item.id === recordingId)
       : undefined;
@@ -199,6 +219,7 @@ function registerIpcHandlers(): void {
           environment: request.environment,
           recording,
           testCaseId: request.testCase.id,
+          ...(documentId ? { documentId } : {}),
         })
       : isAgentRunnableTestCase(request.testCase)
       ? await getRuntimeOrThrow().runWorkflow({
@@ -210,6 +231,7 @@ function registerIpcHandlers(): void {
           ...(request.browserSession ? { browserSession: request.browserSession } : {}),
           project: request.project,
           environment: request.environment,
+          ...(documentId ? { documentId } : {}),
         })
       : await getTestRunnerOrThrow().run(request);
     const state = await getStoreOrThrow().load();
@@ -225,6 +247,7 @@ function registerIpcHandlers(): void {
           summary: result.detail.summary,
           projectId: result.detail.projectId,
           testCaseId: result.detail.testCaseId,
+          ...(result.detail.documentId ? { documentId: result.detail.documentId } : {}),
           environmentId: result.detail.environmentId,
           environmentName: request.environment.name,
           startedAt: result.detail.startedAt,
@@ -250,6 +273,7 @@ function registerIpcHandlers(): void {
           summary: result.detail.summary,
           projectId: result.detail.projectId,
           testCaseId: result.detail.testCaseId,
+          ...(result.detail.documentId ? { documentId: result.detail.documentId } : {}),
           environmentId: result.detail.environmentId,
           environmentName: request.environment.name,
           startedAt: result.detail.startedAt,
@@ -295,6 +319,21 @@ function registerIpcHandlers(): void {
 
     await getArtifactManagerOrThrow().exportArtifact(artifactPath, result.filePath);
     return true;
+  });
+  ipcMain.handle('runtime:attach-manual-evidence', async (event) => {
+    const options: Electron.OpenDialogOptions = {
+      title: '附加人工检查证据',
+      properties: ['openFile'],
+    };
+    const owner = BrowserWindow.fromWebContents(event.sender) ?? mainWindow;
+    const result = owner
+      ? await dialog.showOpenDialog(owner, options)
+      : await dialog.showOpenDialog(options);
+    if (result.canceled || !result.filePaths[0]) {
+      return null;
+    }
+
+    return getArtifactManagerOrThrow().importManualEvidence(result.filePaths[0]);
   });
   ipcMain.handle('runtime:start-session', async (_event, request: SessionStartRequest) =>
     getRuntimeOrThrow().startSession(request),
