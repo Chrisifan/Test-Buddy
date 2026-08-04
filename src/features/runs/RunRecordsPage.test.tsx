@@ -269,6 +269,11 @@ describe('RunRecordsPage', () => {
       evidenceSummary: '页面仍显示旧数据。',
       failureAnalysis: '刷新后的数据接口或页面稳定等待不足。',
       suggestedFixes: ['增加订单列表的数据就绪等待', '检查 /api/orders 响应'],
+      recoveryPlan: {
+        failedStepId: project.testCases[0]!.steps[0]!.id,
+        strategy: 'waitForDataReady',
+        reason: '刷新后的数据接口或页面稳定等待不足。',
+      },
       modelName: 'reporter-large',
     };
     const detail: RunDetail = {
@@ -311,6 +316,7 @@ describe('RunRecordsPage', () => {
 
     expect(screen.getByText('刷新后的数据接口或页面稳定等待不足。')).toBeInTheDocument();
     expect(screen.getByText('增加订单列表的数据就绪等待')).toBeInTheDocument();
+    expect(screen.getByText('受控恢复计划')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: '创建修复草稿' }));
 
@@ -1010,5 +1016,23 @@ describe('RunRecordsPage', () => {
 
     expect(screen.getByRole('heading', { level: 1, name: 'Run Records' })).toBeInTheDocument();
     expect(screen.getByText('Runs')).toBeInTheDocument();
+  });
+
+  it('shows project coverage risk even when no run is selected', () => {
+    const state = createDemoStudioState();
+    const project = state.projects[0]!;
+
+    render(
+      <RunRecordsPage
+        onSelectRun={vi.fn()}
+        project={project}
+        recentRuns={[]}
+        runDetails={[]}
+        selectedRunId=""
+      />,
+    );
+
+    expect(screen.getByRole('heading', { name: '跨运行覆盖风险' })).toBeInTheDocument();
+    expect(screen.getAllByText(/从未运行/).length).toBe(project.testCases.length);
   });
 });

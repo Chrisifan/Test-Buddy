@@ -975,11 +975,34 @@ export class BrowserRuntime {
                 .filter((state): state is { label: string; value: string } => Boolean(state))
                 .slice(0, 8)
             : [];
-          const paginationRoot = tableScope?.querySelector('[data-pagination], [role="navigation"][aria-label*="page" i], [role="navigation"][aria-label*="分页"]');
+          const paginationRoot = tableScope?.querySelector(
+            [
+              '[data-pagination]',
+              '[role="navigation"][aria-label*="page" i]',
+              '[role="navigation"][aria-label*="分页"]',
+              '[aria-label*="pagination" i]',
+              '[aria-label*="分页"]',
+              '.ag-paging-panel',
+              '[class*="TablePagination"]',
+              '.ant-pagination',
+              '.el-pagination',
+            ].join(', '),
+          );
           const paginationText = cleanText(paginationRoot?.textContent);
           const currentPageNode = paginationRoot?.querySelector('[aria-current="page"]');
-          const currentPageMatch = paginationText.match(/(?:page\s*)?(\d+)\s*(?:of|\/|共)\s*\d+/i);
-          const totalPagesMatch = paginationText.match(/(?:of|\/|共)\s*(\d+)\s*(?:pages?|页)?/i);
+          const rangePaginationMatch = paginationText.match(/(\d+)\s*(?:to|-|–|~|至)\s*(\d+)\s*(?:of|\/|共)\s*(\d+)/i);
+          const rangeStart = rangePaginationMatch?.[1] ? Number.parseInt(rangePaginationMatch[1], 10) : Number.NaN;
+          const rangeEnd = rangePaginationMatch?.[2] ? Number.parseInt(rangePaginationMatch[2], 10) : Number.NaN;
+          const rangeTotal = rangePaginationMatch?.[3] ? Number.parseInt(rangePaginationMatch[3], 10) : Number.NaN;
+          // A terminal range can contain fewer rows than the configured page size, so only a non-terminal range is definitive.
+          const rangePageSize =
+            Number.isFinite(rangeStart) && Number.isFinite(rangeEnd) && Number.isFinite(rangeTotal) && rangeEnd >= rangeStart && rangeEnd < rangeTotal
+              ? rangeEnd - rangeStart + 1
+              : undefined;
+          const rangeCurrentPage = rangePageSize && Number.isFinite(rangeStart) ? Math.floor((rangeStart - 1) / rangePageSize) + 1 : undefined;
+          const rangeTotalPages = rangePageSize && Number.isFinite(rangeTotal) ? Math.ceil(rangeTotal / rangePageSize) : undefined;
+          const currentPageMatch = rangePaginationMatch ? undefined : paginationText.match(/(?:page\s*)?(\d+)\s*(?:of|\/|共)\s*\d+/i);
+          const totalPagesMatch = rangePaginationMatch ? undefined : paginationText.match(/(?:of|\/|共)\s*(\d+)\s*(?:pages?|页)?/i);
           const pagination = {
             currentPage: firstPositiveNumber(
               table.getAttribute('data-current-page'),
@@ -987,20 +1010,24 @@ export class BrowserRuntime {
               currentPageNode?.getAttribute('data-page'),
               currentPageNode?.textContent,
               currentPageMatch?.[1],
+              rangeCurrentPage ? String(rangeCurrentPage) : undefined,
             ),
             totalPages: firstPositiveNumber(
               table.getAttribute('data-total-pages'),
               paginationRoot?.getAttribute('data-total-pages'),
               totalPagesMatch?.[1],
+              rangeTotalPages ? String(rangeTotalPages) : undefined,
             ),
             totalItems: firstPositiveNumber(
               table.getAttribute('data-total-items'),
               table.getAttribute('aria-rowcount'),
               paginationRoot?.getAttribute('data-total-items'),
+              Number.isFinite(rangeTotal) ? String(rangeTotal) : undefined,
             ),
             pageSize: firstPositiveNumber(
               table.getAttribute('data-page-size'),
               paginationRoot?.getAttribute('data-page-size'),
+              rangePageSize ? String(rangePageSize) : undefined,
             ),
           };
           const aggregates = (isNativeTable ? Array.from(table.querySelectorAll('tfoot tr')) : [])
@@ -1046,55 +1073,96 @@ export class BrowserRuntime {
             sampleRows,
           };
         });
-      const chartContainers = Array.from(
-        document.querySelectorAll('[data-chart], [role="img"], canvas, svg, img[alt*="图"], img[alt*="chart" i]'),
-      )
-        .filter((element, index, elements) => {
-          if (element.matches('canvas, svg, img')) {
-            return !elements.some((candidate) => candidate !== element && candidate.hasAttribute('data-chart') && candidate.contains(element));
-          }
-          return true;
-        })
-        .slice(0, 8);
+      const chartRootSelector = '[data-chart], .echarts-for-react, .recharts-wrapper, .highcharts-container, .apexcharts-canvas';
+      const chartRoots = Array.from(document.querySelectorAll(chartRootSelector)).filter(
+        (element, index, roots) => !roots.some((root, rootIndex) => rootIndex !== index && root.contains(element)),
+      );
+      const directChartVisuals = Array.from(
+        document.querySelectorAll('[role="img"], canvas, svg[aria-label], svg[data-chart], img[alt*="图"], img[alt*="chart" i]'),
+      ).filter((element) => !chartRoots.some((root) => root !== element && root.contains(element)));
+      const chartContainers = Array.from(new Set([...chartRoots, ...directChartVisuals])).slice(0, 8);
+      const tooltipSelector = [
+        '[role="tooltip"]',
+        '[data-chart-tooltip]',
+        '[data-tooltip]',
+        '.chart-tooltip',
+        '.echarts-tooltip',
+        '.recharts-tooltip-wrapper',
+        '.highcharts-tooltip',
+        '.apexcharts-tooltip',
+      ].join(', ');
+      const tooltipIsVisible = (candidate: Element) => {
+        const style = window.getComputedStyle(candidate);
+        return (
+          !candidate.hasAttribute('hidden') &&
+          candidate.getAttribute('aria-hidden') !== 'true' &&
+          candidate.getAttribute('data-state') !== 'closed' &&
+          candidate.getAttribute('data-visible') !== 'false' &&
+          style.display !== 'none' &&
+          style.visibility !== 'hidden' &&
+          style.opacity !== '0'
+        );
+      };
+      const visibleTooltips = Array.from(document.querySelectorAll(tooltipSelector)).filter(tooltipIsVisible);
       const charts = chartContainers.map((element, index) => {
         const canvas = element.matches('canvas') ? element : element.querySelector('canvas');
         const svg = element.matches('svg') ? element : element.querySelector('svg');
         const image = element.matches('img') ? element : element.querySelector('img');
         const visual = canvas ?? svg ?? image ?? element;
         const kind = canvas ? 'canvas' : svg ? 'svg' : image ? 'image' : 'container';
+        const chartScope =
+          element.closest('[data-chart], [data-chart-container], [data-testid*="chart" i], section, article, [role="region"]') ?? element;
         const title =
           cleanText(element.getAttribute('aria-label')) ||
+          cleanText(chartScope.getAttribute('aria-label')) ||
           cleanText(element.querySelector('h1,h2,h3,[data-chart-title]')?.textContent) ||
+          cleanText(chartScope.querySelector('h1,h2,h3,[data-chart-title]')?.textContent) ||
           cleanText(image?.getAttribute('alt')) ||
           cleanText(element.getAttribute('data-testid')) ||
           cleanText(element.id);
-        const legends = Array.from(element.querySelectorAll('[data-legend], .legend, [class*="legend"]'))
+        const legendSelector = [
+          '[data-legend]',
+          '.recharts-legend-item-text',
+          '.highcharts-legend-item text',
+          '.apexcharts-legend-text',
+          '.echarts-legend-item',
+          '.legend',
+          '[class*="legend"]',
+        ].join(', ');
+        const legends = Array.from(chartScope.querySelectorAll(legendSelector))
+          .filter(
+            (legend, legendIndex, candidates) =>
+              !candidates.some((candidate, candidateIndex) => candidateIndex !== legendIndex && legend.contains(candidate)),
+          )
           .map((legend) => cleanText(legend.textContent || legend.getAttribute('aria-label')))
           .filter(Boolean)
+          .filter((legend, legendIndex, values) => values.indexOf(legend) === legendIndex)
           .slice(0, 6);
-        const chartKey =
-          cleanText(element.getAttribute('id')) ||
-          cleanText(element.getAttribute('data-chart')) ||
-          cleanText(element.getAttribute('data-testid'));
-        const tooltipIds = (element.getAttribute('aria-describedby') ?? '').split(/\s+/).filter(Boolean);
-        const tooltipCandidates = Array.from(
-          document.querySelectorAll('[role="tooltip"], [data-chart-tooltip], [data-tooltip], .chart-tooltip'),
-        ).filter((tooltip) => {
-          const tooltipFor = tooltip.getAttribute('data-chart-for') || tooltip.getAttribute('data-tooltip-for');
+        const chartKeys = [element, chartScope]
+          .flatMap((candidate) => [candidate.getAttribute('id'), candidate.getAttribute('data-chart'), candidate.getAttribute('data-testid')])
+          .map((value) => cleanText(value))
+          .filter(Boolean);
+        const tooltipIds = [element, chartScope]
+          .flatMap((candidate) => (candidate.getAttribute('aria-describedby') ?? '').split(/\s+/))
+          .filter(Boolean);
+        const tooltipCandidates = visibleTooltips.filter((tooltip) => {
+          const tooltipFor =
+            tooltip.getAttribute('data-chart-for') ||
+            tooltip.getAttribute('data-tooltip-for') ||
+            tooltip.getAttribute('data-for') ||
+            tooltip.getAttribute('data-owner');
+          const isThirdPartyTooltip = tooltip.matches(
+            '.echarts-tooltip, .recharts-tooltip-wrapper, .highcharts-tooltip, .apexcharts-tooltip',
+          );
           return (
             element.contains(tooltip) ||
+            chartScope.contains(tooltip) ||
             tooltipIds.includes(tooltip.id) ||
-            Boolean(chartKey && tooltipFor === chartKey)
+            Boolean(tooltipFor && chartKeys.includes(tooltipFor)) ||
+            (chartContainers.length === 1 && isThirdPartyTooltip)
           );
         });
         const tooltip = tooltipCandidates
-          .filter(
-            (candidate) =>
-              !candidate.hasAttribute('hidden') &&
-              candidate.getAttribute('aria-hidden') !== 'true' &&
-              candidate.getAttribute('data-state') !== 'closed' &&
-              candidate.getAttribute('data-visible') !== 'false',
-          )
           .map((candidate) => cleanText(candidate.getAttribute('data-tooltip') || candidate.textContent))
           .filter(Boolean)
           .slice(0, 3)

@@ -562,7 +562,6 @@ describe('StudioRuntime agent observation', () => {
             action: 'select',
             title: '选择报表周期',
             instruction: '在报表周期中选择近 30 天',
-            target: '报表周期',
             value: '近 30 天',
           },
         ],
@@ -1223,13 +1222,14 @@ describe('StudioRuntime agent observation', () => {
     );
     expect(response.agentRun.status).toBe('failed');
     expect(response.agentRun.summary).toContain('Reporter 判断失败集中在图表刷新未完成。');
-    expect(response.agentRun.reporter).toEqual({
+    expect(response.agentRun.reporter).toEqual(expect.objectContaining({
       summary: 'Reporter 判断失败集中在图表刷新未完成。',
       evidenceSummary: '断言失败证据：页面仍显示加载中。',
       failureAnalysis: '图表接口或前端渲染可能未在等待窗口内完成。',
       suggestedFixes: ['增加图表稳定等待', '检查 /api/chart 响应耗时'],
+      recoveryPlan: expect.objectContaining({ strategy: 'observe', reason: '图表未刷新完成。' }),
       modelName: 'reporter-large',
-    });
+    }));
     expect(response.agentRun.artifacts).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -1264,6 +1264,7 @@ describe('StudioRuntime agent observation', () => {
       updatedAt: '2026-07-03T08:00:00.000Z',
     };
     const clickOrder: string[] = [];
+    const input = vi.fn(async () => currentState);
     const click = vi.fn(async ({ selector }: { selector: string }) => {
       clickOrder.push(selector);
       if (selector === '#missing-login-button') {
@@ -1280,6 +1281,13 @@ describe('StudioRuntime agent observation', () => {
           summary: '点击登录按钮进入工作台。',
           risks: [],
           steps: [
+            {
+              action: 'input',
+              title: '填写账号',
+              instruction: '在账号输入框输入 qa-user',
+              selector: '#account',
+              value: 'qa-user',
+            },
             {
               action: 'click',
               title: '提交登录',
@@ -1308,6 +1316,13 @@ describe('StudioRuntime agent observation', () => {
           risks: ['已基于失败步骤完成一次重规划'],
           steps: [
             {
+              action: 'input',
+              title: '填写账号',
+              instruction: '在账号输入框输入 qa-user',
+              selector: '#account',
+              value: 'qa-user',
+            },
+            {
               action: 'click',
               title: '提交登录',
               instruction: '点击登录按钮',
@@ -1334,7 +1349,7 @@ describe('StudioRuntime agent observation', () => {
         start: vi.fn(),
         navigate: vi.fn(),
         click,
-        input: vi.fn(),
+        input,
         capture: vi.fn(async () => currentState),
         captureObservation: vi.fn().mockResolvedValue({
           textSummary: '登录页仍显示表单',
@@ -1383,11 +1398,28 @@ describe('StudioRuntime agent observation', () => {
           failureCategory: 'selector',
           recoveryStrategy: 'replaceSelector',
         }),
+        completedSteps: [
+          expect.objectContaining({
+            stepIndex: 1,
+            action: 'input',
+            title: '填写账号',
+            currentUrl: 'https://example.test/login',
+          }),
+        ],
       }),
     );
+    expect(input).toHaveBeenCalledOnce();
+    expect(input).toHaveBeenCalledWith({ selector: '#account', value: 'qa-user' });
     expect(clickOrder).toEqual(['#missing-login-button', '#login-button']);
     expect(response.agentRun.status).toBe('passed');
     expect(response.agentRun.plan.title).toBe('登录工作台修正版');
+    expect(response.agentRun.plan.steps).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ title: '填写账号' })]),
+    );
+    expect(response.agentRun.plan.risks).toContain('已跳过 1 个与已完成步骤完全相同的动作。');
+    expect(response.agentRun.events.find((event) => event.type === 'agent:plan-revised')?.planRevision).toEqual(
+      expect.objectContaining({ completedStepCount: 1 }),
+    );
     expect(response.agentRun.metrics).toEqual(
       expect.objectContaining({ calls: 2, totalTokens: 40, replanningCycles: 1 }),
     );
@@ -1570,7 +1602,7 @@ describe('StudioRuntime agent observation', () => {
     const click = vi.fn(async ({ selector }: { selector: string }) => {
       clickOrder.push(selector);
       if (selector === '#submit-order') {
-        throw new Error('browser entered an indeterminate state');
+        throw new Error('browser entered an indeterminate runtime error state');
       }
       currentState = { ...currentState, currentUrl: 'https://example.test/orders/confirmed', pageTitle: 'Confirmed' };
       return currentState;
@@ -1705,6 +1737,7 @@ describe('StudioRuntime agent observation', () => {
       updatedAt: '2026-07-03T08:00:00.000Z',
     };
     const clickOrder: string[] = [];
+    const input = vi.fn(async () => currentState);
     const click = vi.fn(async ({ selector }: { selector: string }) => {
       clickOrder.push(selector);
       if (selector !== '#login-button') {
@@ -1721,6 +1754,13 @@ describe('StudioRuntime agent observation', () => {
           summary: '点击登录按钮进入工作台。',
           risks: [],
           steps: [
+            {
+              action: 'input',
+              title: '填写账号',
+              instruction: '在账号输入框输入 qa-user',
+              selector: '#account',
+              value: 'qa-user',
+            },
             {
               action: 'click',
               title: '提交登录',
@@ -1748,6 +1788,13 @@ describe('StudioRuntime agent observation', () => {
           summary: '第一次重规划仍然选择了不可用 selector。',
           risks: ['第一次重规划'],
           steps: [
+            {
+              action: 'input',
+              title: '填写账号',
+              instruction: '在账号输入框输入 qa-user',
+              selector: '#account',
+              value: 'qa-user',
+            },
             {
               action: 'click',
               title: '提交登录',
@@ -1777,6 +1824,13 @@ describe('StudioRuntime agent observation', () => {
           risks: ['第二次重规划'],
           steps: [
             {
+              action: 'input',
+              title: '填写账号',
+              instruction: '在账号输入框输入 qa-user',
+              selector: '#account',
+              value: 'qa-user',
+            },
+            {
               action: 'click',
               title: '提交登录',
               instruction: '点击登录按钮',
@@ -1804,7 +1858,7 @@ describe('StudioRuntime agent observation', () => {
         start: vi.fn(),
         navigate: vi.fn(),
         click,
-        input: vi.fn(),
+        input,
         capture: vi.fn(async () => currentState),
         captureObservation: vi.fn().mockResolvedValue({
           textSummary: '登录页仍显示表单',
@@ -1845,6 +1899,17 @@ describe('StudioRuntime agent observation', () => {
     });
 
     expect(createPlan).toHaveBeenCalledTimes(3);
+    expect(input).toHaveBeenCalledOnce();
+    expect(createPlan.mock.calls[1]?.[0]).toEqual(
+      expect.objectContaining({
+        completedSteps: [expect.objectContaining({ stepIndex: 1, action: 'input', selector: '#account' })],
+      }),
+    );
+    expect(createPlan.mock.calls[2]?.[0]).toEqual(
+      expect.objectContaining({
+        completedSteps: [expect.objectContaining({ stepIndex: 1, action: 'input', selector: '#account' })],
+      }),
+    );
     expect(clickOrder).toEqual([
       '#missing-login-button',
       '#still-missing-login-button',
@@ -1852,6 +1917,9 @@ describe('StudioRuntime agent observation', () => {
     ]);
     expect(response.agentRun.status).toBe('passed');
     expect(response.agentRun.plan.title).toBe('登录工作台修正版 B');
+    expect(response.agentRun.plan.steps).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ action: 'input', selector: '#account' })]),
+    );
     const revisions = response.agentRun.events.filter((event) => event.type === 'agent:plan-revised');
     expect(revisions.map((event) => event.planRevision?.cycle)).toEqual([1, 2]);
     expect(new Set(revisions.map((event) => event.stepId)).size).toBe(2);
@@ -1974,6 +2042,123 @@ describe('StudioRuntime agent observation', () => {
           type: 'agent:step-retried',
           status: 'running',
           message: expect.stringContaining('第 1 次重试'),
+          retryAttempt: expect.objectContaining({
+            failureCategory: 'runtime',
+            recoveryStrategy: 'retryAfterWait',
+          }),
+        }),
+      ]),
+    );
+    expect(response.agentRun.metrics).toEqual(expect.objectContaining({ retryAttempts: 1, dynamicWaitAttempts: 1 }));
+  });
+
+  it('waits for network idle before retrying a transient Planner scroll runtime failure', async () => {
+    let currentState: BrowserSessionState = {
+      id: 'session-ready',
+      status: 'ready',
+      currentUrl: 'https://example.test/start',
+      pageTitle: 'Start',
+      message: 'ready',
+      updatedAt: '2026-07-03T08:00:00.000Z',
+    };
+    const actionOrder: string[] = [];
+    const scroll = vi.fn(async () => {
+      actionOrder.push('scroll');
+      if (scroll.mock.calls.length === 1) {
+        throw new Error('browser runtime error while revealing the next section');
+      }
+      return currentState;
+    });
+    const waitForNetworkIdle = vi.fn(async ({ timeoutMs }: { timeoutMs?: number }) => {
+      actionOrder.push(`waitForNetworkIdle:${timeoutMs}`);
+      return currentState;
+    });
+    const createPlan = vi.fn().mockResolvedValue({
+      plan: {
+        title: '查看下一段内容',
+        summary: '滚动到下一段内容。',
+        risks: [],
+        steps: [
+          {
+            action: 'scroll',
+            title: '查看下一段内容',
+            instruction: '向下滚动当前页面',
+          },
+        ],
+      },
+      modelName: 'planner-large',
+      metrics: {
+        durationMs: 20,
+        modelTimeCostMs: 20,
+        calls: 1,
+        promptTokens: 10,
+        completionTokens: 10,
+        totalTokens: 20,
+        cachedInputTokens: 0,
+        byIntent: { planner: { calls: 1, promptTokens: 10, completionTokens: 10, totalTokens: 20 } },
+        byModel: { 'planner-large': { calls: 1, promptTokens: 10, completionTokens: 10, totalTokens: 20 } },
+      },
+    });
+    const runtime = new StudioRuntime(
+      vi.fn(),
+      {
+        start: vi.fn(),
+        navigate: vi.fn(),
+        click: vi.fn(),
+        input: vi.fn(),
+        scroll,
+        waitForNetworkIdle,
+        capture: vi.fn(async () => currentState),
+        getState: () => currentState,
+      },
+      undefined,
+      { createPlan },
+    );
+    const agentModelConfig: AgentModelConfig = {
+      ...defaultAgentModelConfig,
+      planner: {
+        ...defaultAgentModelConfig.planner,
+        provider: 'openaiCompatible',
+        modelBaseUrl: 'https://planner.example.test/v1',
+        modelApiKey: 'planner-secret',
+        modelName: 'planner-large',
+      },
+    };
+
+    const response = await runtime.sendChatCommand({
+      mode: 'ai',
+      prompt: '查看下一段内容',
+      targetEnvironment: 'staging',
+      deepThink: true,
+      deepLocate: true,
+      midsceneConfig,
+      agentModelConfig,
+      runtimeProfile: {
+        browser: 'chromium',
+        baseUrl: 'https://example.test',
+        viewport: 'desktop',
+        locale: 'zh-CN',
+        headless: false,
+      },
+    });
+
+    expect(createPlan).toHaveBeenCalledTimes(1);
+    expect(scroll).toHaveBeenCalledTimes(2);
+    expect(waitForNetworkIdle).toHaveBeenCalledWith({ timeoutMs: 1500 });
+    expect(actionOrder).toEqual([
+      'scroll',
+      'waitForNetworkIdle:1500',
+      'scroll',
+    ]);
+    expect(response.agentRun.status).toBe('passed');
+    expect(response.agentRun.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'agent:dynamic-wait',
+          dynamicWait: expect.objectContaining({ strategy: 'networkIdle', timeoutMs: 1500 }),
+        }),
+        expect.objectContaining({
+          type: 'agent:step-retried',
           retryAttempt: expect.objectContaining({
             failureCategory: 'runtime',
             recoveryStrategy: 'retryAfterWait',
@@ -2212,6 +2397,140 @@ describe('StudioRuntime agent observation', () => {
     expect(response.agentRun.metrics).toEqual(expect.objectContaining({ retryAttempts: 1, dynamicWaitAttempts: 1 }));
   });
 
+  it('waits for an explicit API response before retrying a network-failed Planner action', async () => {
+    const currentState: BrowserSessionState = {
+      id: 'session-orders',
+      status: 'ready',
+      currentUrl: 'https://example.test/orders',
+      pageTitle: 'Orders',
+      message: 'ready',
+      updatedAt: '2026-07-03T08:00:00.000Z',
+    };
+    const actionOrder: string[] = [];
+    const click = vi.fn(async ({ selector }: { selector: string }) => {
+      actionOrder.push(`click:${selector}`);
+      if (actionOrder.filter((action) => action.startsWith('click:')).length === 1) {
+        throw new Error('HTTP 502 response while loading order details');
+      }
+      return currentState;
+    });
+    const waitForResponse = vi.fn(async ({ urlPattern, timeoutMs }: { urlPattern: string; timeoutMs?: number }) => {
+      actionOrder.push(`waitForResponse:${urlPattern}:${timeoutMs}`);
+      return currentState;
+    });
+    const waitForDataReady = vi.fn(async ({ timeoutMs }: { timeoutMs?: number }) => {
+      actionOrder.push(`waitForDataReady:${timeoutMs}`);
+      return currentState;
+    });
+    const waitForNetworkIdle = vi.fn(async ({ timeoutMs }: { timeoutMs?: number }) => {
+      actionOrder.push(`waitForNetworkIdle:${timeoutMs}`);
+      return currentState;
+    });
+    const createPlan = vi.fn().mockResolvedValue({
+      plan: {
+        title: '打开订单详情',
+        summary: '订单接口返回后打开详情。',
+        risks: [],
+        steps: [
+          {
+            action: 'click',
+            title: '打开订单详情',
+            instruction: '等待订单接口 /api/orders 返回后，点击订单详情按钮',
+            target: '/api/orders',
+            selector: '#order-detail',
+          },
+        ],
+      },
+      modelName: 'planner-large',
+      metrics: {
+        durationMs: 20,
+        modelTimeCostMs: 20,
+        calls: 1,
+        promptTokens: 10,
+        completionTokens: 10,
+        totalTokens: 20,
+        cachedInputTokens: 0,
+        byIntent: { planner: { calls: 1, promptTokens: 10, completionTokens: 10, totalTokens: 20 } },
+        byModel: { 'planner-large': { calls: 1, promptTokens: 10, completionTokens: 10, totalTokens: 20 } },
+      },
+    });
+    const runtime = new StudioRuntime(
+      vi.fn(),
+      {
+        start: vi.fn(),
+        navigate: vi.fn(),
+        click,
+        input: vi.fn(),
+        waitForResponse,
+        waitForDataReady,
+        waitForNetworkIdle,
+        capture: vi.fn(async () => currentState),
+        getState: () => currentState,
+      },
+      undefined,
+      { createPlan },
+    );
+    const agentModelConfig: AgentModelConfig = {
+      ...defaultAgentModelConfig,
+      planner: {
+        ...defaultAgentModelConfig.planner,
+        provider: 'openaiCompatible',
+        modelBaseUrl: 'https://planner.example.test/v1',
+        modelApiKey: 'planner-secret',
+        modelName: 'planner-large',
+      },
+    };
+
+    const response = await runtime.sendChatCommand({
+      mode: 'ai',
+      prompt: '订单接口返回后打开订单详情',
+      targetEnvironment: 'staging',
+      deepThink: true,
+      deepLocate: true,
+      midsceneConfig,
+      agentModelConfig,
+      runtimeProfile: {
+        browser: 'chromium',
+        baseUrl: 'https://example.test',
+        viewport: 'desktop',
+        locale: 'zh-CN',
+        headless: false,
+      },
+    });
+
+    expect(createPlan).toHaveBeenCalledTimes(1);
+    expect(waitForResponse).toHaveBeenCalledWith({ urlPattern: '/api/orders', timeoutMs: 1500 });
+    expect(waitForDataReady).not.toHaveBeenCalled();
+    expect(waitForNetworkIdle).not.toHaveBeenCalled();
+    expect(actionOrder).toEqual([
+      'click:#order-detail',
+      'waitForResponse:/api/orders:1500',
+      'click:#order-detail',
+    ]);
+    expect(response.agentRun.status).toBe('passed');
+    expect(response.agentRun.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'agent:dynamic-wait',
+          dynamicWait: expect.objectContaining({
+            strategy: 'response',
+            urlPattern: '/api/orders',
+            timeoutMs: 1500,
+          }),
+        }),
+        expect.objectContaining({
+          type: 'agent:step-retried',
+          retryAttempt: expect.objectContaining({
+            failureCategory: 'network',
+            recoveryStrategy: 'waitForReadiness',
+          }),
+        }),
+      ]),
+    );
+    expect(response.agentRun.events).not.toEqual(expect.arrayContaining([expect.objectContaining({ type: 'agent:plan-revised' })]));
+    expect(response.agentRun.metrics).toEqual(expect.objectContaining({ retryAttempts: 1, dynamicWaitAttempts: 1 }));
+  });
+
   it('uses wait-for-readiness recovery before retrying a timed out Planner wait step', async () => {
     const currentState: BrowserSessionState = {
       id: 'session-ready',
@@ -2320,7 +2639,7 @@ describe('StudioRuntime agent observation', () => {
     expect(response.agentRun.metrics).toEqual(expect.objectContaining({ retryAttempts: 1, dynamicWaitAttempts: 1 }));
   });
 
-  it('waits for table data before retrying a step that timed out during data loading', async () => {
+  it('waits for table data instead of a generic response when network recovery has no stable endpoint', async () => {
     const currentState: BrowserSessionState = {
       id: 'session-ready',
       status: 'ready',
@@ -2333,12 +2652,16 @@ describe('StudioRuntime agent observation', () => {
     const click = vi.fn(async ({ selector }: { selector: string }) => {
       actionOrder.push(`click:${selector}`);
       if (actionOrder.filter((action) => action.startsWith('click:')).length === 1) {
-        throw new Error('Timeout 10000ms exceeded while waiting for orders table data');
+        throw new Error('Network request failed while waiting for orders table data');
       }
       return currentState;
     });
     const waitForDataReady = vi.fn(async ({ timeoutMs }: { timeoutMs?: number }) => {
       actionOrder.push(`waitForDataReady:${timeoutMs}`);
+      return currentState;
+    });
+    const waitForResponse = vi.fn(async ({ urlPattern, timeoutMs }: { urlPattern: string; timeoutMs?: number }) => {
+      actionOrder.push(`waitForResponse:${urlPattern}:${timeoutMs}`);
       return currentState;
     });
     const waitForNetworkIdle = vi.fn(async ({ timeoutMs }: { timeoutMs?: number }) => {
@@ -2380,6 +2703,7 @@ describe('StudioRuntime agent observation', () => {
         click,
         input: vi.fn(),
         waitForDataReady,
+        waitForResponse,
         waitForNetworkIdle,
         capture: vi.fn(async () => currentState),
         getState: () => currentState,
@@ -2416,6 +2740,7 @@ describe('StudioRuntime agent observation', () => {
     });
 
     expect(waitForDataReady).toHaveBeenCalledWith({ timeoutMs: 1500 });
+    expect(waitForResponse).not.toHaveBeenCalled();
     expect(waitForNetworkIdle).not.toHaveBeenCalled();
     expect(actionOrder).toEqual(['click:#order-detail', 'waitForDataReady:1500', 'click:#order-detail']);
     expect(response.agentRun.status).toBe('passed');
@@ -2432,7 +2757,7 @@ describe('StudioRuntime agent observation', () => {
     );
   });
 
-  it('replans after data readiness fails instead of retrying a stale action or selector fallback', async () => {
+  it('keeps a failed response wait target before replanning instead of retrying a stale action', async () => {
     const currentState: BrowserSessionState = {
       id: 'session-ready',
       status: 'ready',
@@ -2444,24 +2769,25 @@ describe('StudioRuntime agent observation', () => {
     const actionOrder: string[] = [];
     const click = vi.fn(async ({ selector }: { selector: string }) => {
       actionOrder.push(`click:${selector}`);
-      throw new Error('Timeout 10000ms exceeded while waiting for orders table data');
+        throw new Error('Network request failed while loading order details');
     });
-    const waitForDataReady = vi.fn(async ({ timeoutMs }: { timeoutMs?: number }) => {
-      actionOrder.push(`waitForDataReady:${timeoutMs}`);
-      throw new Error('orders table is still loading');
+    const waitForResponse = vi.fn(async ({ urlPattern, timeoutMs }: { urlPattern: string; timeoutMs?: number }) => {
+      actionOrder.push(`waitForResponse:${urlPattern}:${timeoutMs}`);
+      throw new Error('orders API is still unavailable');
     });
     const createPlan = vi
       .fn()
       .mockResolvedValueOnce({
         plan: {
           title: '查看订单详情',
-          summary: '等待订单表格加载后打开详情。',
+        summary: '等待订单接口返回后打开详情。',
           risks: [],
           steps: [
             {
               action: 'click',
               title: '打开订单详情',
-              instruction: '等待订单表格数据加载完成后，点击订单详情按钮',
+            instruction: '等待订单接口 /api/orders 返回后，点击订单详情按钮',
+            target: '/api/orders',
               selector: '#order-detail',
             },
           ],
@@ -2506,7 +2832,7 @@ describe('StudioRuntime agent observation', () => {
         navigate: vi.fn(),
         click,
         input: vi.fn(),
-        waitForDataReady,
+        waitForResponse,
         capture: vi.fn(async () => currentState),
         captureObservation: vi.fn().mockResolvedValue({
           textSummary: '订单页仍在加载。',
@@ -2531,7 +2857,7 @@ describe('StudioRuntime agent observation', () => {
 
     const response = await runtime.sendChatCommand({
       mode: 'ai',
-      prompt: '等待订单表格加载完成后打开详情',
+      prompt: '等待订单接口返回后打开详情',
       targetEnvironment: 'staging',
       deepThink: true,
       deepLocate: true,
@@ -2547,11 +2873,21 @@ describe('StudioRuntime agent observation', () => {
     });
 
     expect(createPlan).toHaveBeenCalledTimes(2);
-    expect(actionOrder).toEqual(['click:#order-detail', 'waitForDataReady:1500']);
+    expect(actionOrder).toEqual(['click:#order-detail', 'waitForResponse:/api/orders:1500']);
     expect(response.agentRun.status).toBe('passed');
     expect(response.agentRun.events).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ type: 'agent:dynamic-wait', status: 'failed' }),
+        expect.objectContaining({
+          type: 'agent:dynamic-wait',
+          status: 'failed',
+          message: expect.stringContaining('等待接口响应 /api/orders 1500ms'),
+          dynamicWait: expect.objectContaining({
+            strategy: 'response',
+            urlPattern: '/api/orders',
+            timeoutMs: 1500,
+            failureReason: 'orders API is still unavailable',
+          }),
+        }),
         expect.objectContaining({ type: 'agent:plan-revised' }),
       ]),
     );

@@ -1,5 +1,13 @@
 import { useMemo, useState, type ReactNode } from 'react';
-import type { ProjectDraft, RunArtifact, RunDetail, RunSummary, RunTone } from '../../../shared/studio.js';
+import {
+  canCreateReporterFixDraft,
+  deriveRunCoverageRisk,
+  type ProjectDraft,
+  type RunArtifact,
+  type RunDetail,
+  type RunSummary,
+  type RunTone,
+} from '../../../shared/studio.js';
 import type { AgentArtifact, AgentExecutionMetrics, AgentReporterSummary, AgentRunEvent, AgentRunResult } from '../../../shared/agent.js';
 
 import {
@@ -24,6 +32,7 @@ import {
   PackageOpen,
   Paperclip,
   RefreshCcw,
+  ShieldAlert,
   Table2,
   TerminalSquare,
   TrendingDown,
@@ -365,6 +374,7 @@ export function RunRecordsPage({
     ? project?.testCases.find((testCase) => testCase.id === selectedRun.testCaseId)
     : undefined;
   const reporterFixDraft = selectedAgentRun?.reporter;
+  const canCreateRecoveryDraft = canCreateReporterFixDraft(reporterFixDraftSource, reporterFixDraft);
   const selectedEvidenceEvent = selectedAgentRun?.events.find((event) => event.id === selectedEvidenceEventId)
     ?? selectedAgentRun?.events.find((event) => event.observation || event.verification || event.artifact || event.browserSession);
   const linkedEvidenceArtifacts = selectedAgentRun && selectedEvidenceEvent
@@ -465,6 +475,10 @@ export function RunRecordsPage({
       failureTrend: getFailureTrend(visibleRuns),
     };
   }, [project, runDetails, runStats.failed, runStats.passed, runStats.running, runStats.total, t, visibleRuns]);
+  const coverageRisk = useMemo(
+    () => (project ? deriveRunCoverageRisk(project, recentRuns) : undefined),
+    [project, recentRuns],
+  );
 
   return (
     <PageShell>
@@ -595,6 +609,56 @@ export function RunRecordsPage({
             <MetricTile label={t('runs.metric.failed')} value={`${runStats.failed}`} tone={runStats.failed ? 'failed' : 'neutral'} />
             <MetricTile label={t('runs.metric.health')} value={runAnalytics.healthLabel} tone={runStats.failed ? 'failed' : 'passed'} />
           </div>
+          {project && coverageRisk ? (
+            <Surface aria-label={t('runs.coverage.title')} className="mt-5 p-4" variant="subtle">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <p className="inline-flex items-center gap-2 text-xs font-medium text-primary">
+                    <ShieldAlert className="h-3.5 w-3.5" />
+                    {t('runs.coverage.eyebrow')}
+                  </p>
+                  <h3 className="mt-1 text-sm font-semibold">{t('runs.coverage.title')}</h3>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Badge variant="outline">
+                    {t('runs.coverage.verified', { verified: coverageRisk.verified, total: coverageRisk.total })}
+                  </Badge>
+                  <Badge variant="outline">{t('runs.coverage.atRisk', { count: coverageRisk.risks.length })}</Badge>
+                </div>
+              </div>
+              {coverageRisk.risks.length ? (
+                <div className="mt-3 grid gap-2">
+                  {coverageRisk.risks.map((risk) => {
+                    const testCase = project.testCases.find((item) => item.id === risk.testCaseId);
+                    const group = project.groups.find((item) => item.id === risk.groupId);
+                    const environment = project.environments.find((item) => item.id === risk.environmentId);
+                    const statusLabel = risk.latestRun
+                      ? t(`common.status.${risk.latestRun.status}`)
+                      : t('runs.coverage.neverExecuted');
+                    return (
+                      <div className="flex min-w-0 items-center justify-between gap-3 border-t border-border/70 pt-2 first:border-t-0 first:pt-0" key={`${risk.testCaseId}-${risk.environmentId}`}>
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-medium text-foreground">{testCase?.name ?? risk.testCaseId}</p>
+                          <p className="truncate text-xs text-muted-foreground">
+                            {t('runs.coverage.scope', {
+                              group: group?.name ?? t('runs.value.ungrouped'),
+                              environment: environment?.name ?? t('runs.value.environmentMissing'),
+                            })}
+                          </p>
+                        </div>
+                        <div className="flex shrink-0 items-center gap-2">
+                          <span className="text-xs text-muted-foreground">{t('runs.coverage.latest', { status: statusLabel })}</span>
+                          <StatusPill tone={risk.status === 'neverExecuted' ? 'neutral' : risk.status} />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <p className="mt-3 text-sm text-muted-foreground">{t('runs.coverage.empty')}</p>
+              )}
+            </Surface>
+          ) : null}
           {selectedRun ? (
             <div className="mt-5 grid gap-5">
               <div className="grid gap-3 md:grid-cols-4">
@@ -883,7 +947,7 @@ export function RunRecordsPage({
                           </p>
                           <h4 className="mt-1 text-sm font-semibold">{t('runs.reporter.title')}</h4>
                         </div>
-                        {onCreateReporterFixDraft && reporterFixDraftSource && reporterFixDraft.suggestedFixes.length ? (
+                        {onCreateReporterFixDraft && canCreateRecoveryDraft ? (
                           <button
                             aria-label={t('runs.reporter.createFixDraft')}
                             className="inline-flex h-8 items-center gap-1.5 rounded-[4px] border border-border px-2.5 text-xs font-medium text-foreground transition-colors hover:bg-accent"
@@ -897,6 +961,29 @@ export function RunRecordsPage({
                         ) : null}
                       </div>
                       <p className="mt-3 text-sm leading-6 text-muted-foreground">{reporterFixDraft.failureAnalysis}</p>
+                      {reporterFixDraft.recoveryPlan ? (
+                        <div className="mt-3 grid gap-1.5 border-t border-border/70 pt-3 text-xs leading-5 text-muted-foreground">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="font-medium text-foreground">{t('runs.reporter.recoveryPlan')}</span>
+                            <Badge variant="outline">
+                              {t(`runs.reporter.recovery.${reporterFixDraft.recoveryPlan.strategy}`)}
+                            </Badge>
+                          </div>
+                          <p>{t('runs.reporter.recoverySource')}</p>
+                          <p>{t('runs.reporter.recoveryReason', { reason: reporterFixDraft.recoveryPlan.reason })}</p>
+                          {reporterFixDraft.recoveryPlan.selector || reporterFixDraft.recoveryPlan.urlPattern ? (
+                            <p>
+                              {t('runs.reporter.recoveryTarget', {
+                                target: reporterFixDraft.recoveryPlan.selector ?? reporterFixDraft.recoveryPlan.urlPattern ?? '',
+                              })}
+                            </p>
+                          ) : null}
+                        </div>
+                      ) : (
+                        <p className="mt-3 border-t border-border/70 pt-3 text-xs leading-5 text-muted-foreground">
+                          {t('runs.reporter.recoveryUnavailable')}
+                        </p>
+                      )}
                       {reporterFixDraft.suggestedFixes.length ? (
                         <ul className="mt-3 grid gap-1.5 border-t border-border/70 pt-3 text-sm leading-6 text-foreground">
                           {reporterFixDraft.suggestedFixes.map((fix, index) => (

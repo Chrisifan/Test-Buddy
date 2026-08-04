@@ -329,7 +329,8 @@ fill #password with 123456
 - 明确 selector 的 `click`、`input`、`select` 首次失败后，会在同 selector 重试前按 `selector visible -> network idle -> timeout` 的顺序做一次动态等待；如果当前浏览器 runtime 不支持 selector readiness，会尝试 `networkidle`，再不支持才回退为 500ms 页面稳定等待。等待结果会写入 `agent:dynamic-wait` 事件和 `metrics.dynamicWaitAttempts`，selector 等待会额外记录目标 selector，network idle 等待会记录 `strategy: networkIdle`。
 - 首次失败尝试会写入 `agent:step-retried` 结构化事件，实际重试次数写入 `metrics.retryAttempts`；断言和语义模型动作不会进入这条盲重试路径。
 - 确定性浏览器步骤失败会生成结构化 `failureCategory`，当前覆盖 selector、timeout、navigation、network、assertion、runtime 和 unknown；该分类会映射为 `recoveryStrategy`，当前覆盖 replaceSelector、waitForReadiness、replanNavigation、stopAndReport、retryAfterWait 和 replanFromCurrentState。分类和策略会写入 retry attempt、验证结果和 Planner 重规划的 previousFailure。
-- `waitForReadiness` 已开始直接驱动恢复路径：timeout/network 类失败在同计划重试前，若失败上下文明确涉及 table/list/grid/data/chart 等数据加载语义则优先等待页面数据就绪；其他情况等待页面网络空闲，减少数据仍在加载时的盲重试。就绪等待失败时会跳过原操作重试和 selector fallback，直接交给 Planner 基于当前页面状态重规划。
+- `waitForReadiness` 已开始直接驱动恢复路径：网络失败且计划步骤明确给出 URL 或 `/api/...` 路径时，先等待该接口的下一次成功响应；没有稳定接口信息时，timeout/network 类失败若上下文明确涉及 table/list/grid/data/chart 等数据加载语义则优先等待页面数据就绪，其他情况等待页面网络空闲，减少数据仍在加载时的盲重试。动态等待无论成功或失败都会保留实际 strategy、超时、selector 或接口模式；就绪等待失败时会跳过原操作重试和 selector fallback，直接交给 Planner 基于当前页面状态重规划。
+- `retryAfterWait` 已开始直接驱动恢复路径：滚动、观察等可安全重试的确定性运行时异常会先等待页面网络空闲，浏览器不支持该能力时才回退为短暂稳定等待；导航异常仍保守地走 `replanNavigation`，不重复访问可能不可达的地址。
 - `replanNavigation` 已开始直接驱动恢复路径：导航失败会跳过同 URL 重试，直接进入 Planner 重规划，避免把不可达地址重复执行两次。
 - `replaceSelector` 已开始直接驱动恢复路径：明确 selector 找不到时跳过同 selector 重试，优先从 Observer 可交互元素中尝试受控 selector fallback；没有可靠候选时再进入 Planner 重规划。
 - `replanFromCurrentState` 已开始直接驱动恢复路径：浏览器报告未知或不确定状态时跳过同计划重试，携带当前页面观察直接请求 Planner 从当前状态继续；页面仍在加载、渲染等可识别瞬时异常仍保持动态等待重试。
@@ -337,6 +338,7 @@ fill #password with 123456
 - selector fallback 候选必须与原 selector、步骤标题、步骤指令或目标文案存在词元重合，并且动作类型要兼容；尝试结果会写入 `agent:selector-fallback` 事件和 `metrics.selectorFallbackAttempts`。
 - 重规划成功后从修正版计划重新执行；Planner 层会读取 `replanningCycleLimit`，在配置上限内允许多轮重规划，并在 metrics 中记录 `replanningCycleLimit` 和实际 `replanningCycles`；达到上限或重规划失败时保留当前失败结果。
 - 每次成功重规划都会保留旧计划截至失败步骤的完整执行证据，并生成结构化 `agent:plan-revised` 事件关联前后计划、触发步骤、失败分类和恢复策略；恢复成功仍只按最终计划结果保持 `passed`。
+- 重规划请求会跨所有恢复轮次累积携带已通过步骤的动作、证据和对应页面 URL，Planner 只生成当前状态之后的后续步骤；执行器会剔除与任一已完成步骤完全相同的有副作用动作，`agent:plan-revised` 会记录累计保留的前置步骤数，避免已完成的输入或点击在后续修订中被重复执行。
 - 重规划历史覆盖动态等待、重试、selector fallback、观察、验证、浏览器状态、截图和报告产物；截图和报告按路径跨轮次去重，选择重规划事件可查看同一步骤的关联证据，Reporter 在失败或等待态运行中接收结构化重规划上下文。
 - 真实 Playwright 会话已改为 BrowserContext。自然语言 Agent、Workflow 与录制回放在运行开始时启用 tracing，运行结束时将 Trace `.zip` 归档到 `studio-data/artifacts`；Trace 会同步追加为 `AgentRunResult` 和运行记录 artifact，并产生 `agent:artifact-created` 事件。stub 或浏览器启动失败时不生成伪造 Trace。
 - 断言失败不会被自动重规划吞掉，仍交给 Verifier / Report 链路明确呈现。
@@ -350,9 +352,8 @@ fill #password with 123456
 
 还没有做到：
 
-- 跨步骤恢复策略。
 - 更细粒度的恢复策略编排，例如让更多 recoveryStrategy 直接决定是否跳过同计划重试、是否优先等待数据就绪、是否进入 selector fallback 或 Planner 重规划。
-- 以真实模型验收复杂跨段落条件的语义分析质量，并让覆盖矩阵支持更完整的跨文档缺口治理流程。
+- 以真实模型验收复杂跨段落条件的语义分析质量，并让覆盖矩阵支持更完整的跨文档缺口治理，例如筛选、批量处理和缺口分派。
 - 把 Reporter 结果导出为完整报告文件和跨运行分析。
 
 ### 5.2 Midscene 官方 SDK adapter 已装配，待真实模型验收
@@ -456,7 +457,7 @@ fill #password with 123456
 - 表格列合计断言基于表头定位列，并对 `AgentObservation.tables.sampleRows` 中可解析的数值单元格求和。
 - 表格排序断言优先基于 `AgentObservation.tables.sortStates` 做列名与方向严格匹配；没有排序状态时，会基于表头和样例行推断升序/降序。
 - 表格筛选断言基于表格范围内具有 `data-filter` 的控件状态；筛选名称和当前值必须严格匹配。
-- 表格分页断言基于 `data-current-page`、`data-total-pages`、`data-total-items`、`data-page-size`、`aria-rowcount` 或明确分页导航的当前页/页数文本；没有可识别元数据时不会推断状态。
+- 表格分页断言基于 `data-current-page`、`data-total-pages`、`data-total-items`、`data-page-size`、`aria-rowcount` 或明确分页导航的当前页/页数文本；AG Grid、MUI、Ant Design、Element Plus 已知分页根节点中的非末页范围文本（例如 `1 to 10 of 36`）也会被严格归一为当前页、每页条数、总条数和总页数。末页不足一页的范围只保留可确定的总条数，不把剩余条数猜作 page size。没有可识别元数据时不会推断状态。
 - 表格聚合值断言基于 `tfoot` 中按表头或 `data-aggregate` 标记采集的值；它与仅对样例行求和的列合计断言保持区分。
 - 图表断言基于 `AgentObservation.charts` 中的标题、类型、尺寸和图例做基础 contains 判断。
 - 多图表页面可将图表标题写为 `图表「标题」`、`chart "Title"` 或 `chart 'Title'` 来限定断言目标；标题与观察到的图表标题严格匹配，未指定时保留对全部图表的原有判断。
@@ -464,7 +465,7 @@ fill #password with 123456
 - 图表渲染断言基于 `AgentObservation.charts.rendered` 做可见尺寸状态判断。
 - 图表标题断言基于 `AgentObservation.charts.title` 做严格相等比较。
 - 图表图例断言基于 `AgentObservation.charts.legends` 做列表包含判断。
-- 图表提示断言基于图表内部、`aria-describedby` 关联或以图表标识显式关联的可见 tooltip；隐藏或关闭的提示不会作为证据。
+- 图表提示断言基于图表内部、`aria-describedby` 关联或以图表标识显式关联的可见 tooltip；对于当前页面只观察到一个图表时，也可采集唯一可见的 ECharts、Recharts、Highcharts 或 ApexCharts tooltip。隐藏、关闭或无法可靠归属的提示不会作为证据。
 - 图表数据区域断言基于显式 `data-point` / `data-chart-value` 数值点的系列、标签和值做严格包含判断。
 - 图表系列存在断言会严格匹配显式数据点或系列趋势中的系列名；可与带引号的图表标题组合，避免其他图表的同名系列误判通过。
 - 图表数据点断言会同时匹配同一个显式数据点的标签和值；例如“二月为 180”不会因为另一数据点值为 `180` 而通过。
@@ -478,7 +479,7 @@ fill #password with 123456
 
 还没有真实支持：
 
-- 从 Canvas/SVG 像素或任意第三方图表组件读取 tooltip、数据点和视觉趋势。
+- 从 Canvas/SVG 像素或无法可靠关联的第三方图表组件读取 tooltip、数据点和视觉趋势。
 - 视觉对比。
 
 ### 5.4 Reporter 已有独立模型路由
@@ -496,14 +497,13 @@ fill #password with 123456
 - 运行记录中的报告使用主进程受控 IPC 打开或导出：只有 `studio-data/artifacts` 下的应用管理产物可调用系统打开或复制到用户选择的位置，渲染进程不再直接构造任意 `file://` 报告链接。
 - Reporter 调用失败时保留原 Agent Run，不阻断主执行链路。
 - 运行记录可沿同一事件步骤查看关联观察、验证、浏览器状态、截图预览及 artifact，并对关联报告执行打开或导出。
-- Reporter 的结构化摘要、失败归因和建议会随 Agent Run 持久化；运行记录可从仍存在的原用例显式创建独立修复草稿。草稿会复制原用例、重建步骤 ID、追加去重后的建议 AI 步骤，并切换到用例编辑器，不会改写原用例或自动执行。
+- Reporter 的结构化摘要、失败归因和建议会随 Agent Run 持久化；运行记录可从仍存在的原用例显式创建独立修复草稿。恢复计划不解析 Reporter 自由文本，而是仅根据已记录的失败分类、恢复策略和动态等待证据确定性生成；允许的草稿步骤只有等待接口响应、等待 selector、等待数据就绪、等待网络空闲或观察。草稿会复制原用例、重建步骤 ID，并在原失败步骤之前插入一条受控 `ai` 等待/观察步骤；自由文本建议只保留在草稿说明，不能转成点击、输入、选择或导航动作。用户必须在编辑器审阅并主动运行，原用例不会被改写。
 - 运行智能分析会在当前筛选范围内按失败原因聚类并展示最多 3 个高频模式；仅归并空白和末尾标点差异，避免把不同故障原因猜测为同类。
 - 运行智能分析会在至少 4 条具有有效开始时间的样本中对比早期和近期失败率；相差不足 15 个百分点显示稳定，样本不足时不输出趋势结论。
 
 还没有完成：
 
-- 跨运行覆盖风险总结。
-- 把 Reporter 建议转成可执行重试策略。
+- 将更多真实页面证据扩展为可验证的受控恢复目标；不把 Reporter 自由文本转成可执行重试策略。
 
 ### 5.5 Observer 已有轻量观察快照
 
@@ -520,8 +520,8 @@ fill #password with 123456
 - 表格标题、行列数、表头和样例行。
 - 表格排序列与排序方向。
 - 表格范围内 `data-filter` 控件的筛选状态、ARIA/data 属性或分页导航给出的分页状态，以及 `tfoot` 聚合值。
-- 图表标题、类型、尺寸和图例。
-- 图表关联的可见 tooltip、显式数据点和由显式数值点得到的趋势。
+- 图表标题、类型、尺寸和图例；同时识别 ECharts、Recharts、Highcharts、ApexCharts 的公开图表根节点并避免子 Canvas/SVG 重复计数。
+- 图表关联的可见 tooltip、单图页面唯一可归属的库 tooltip、显式数据点和由显式数值点得到的趋势。
 
 当前这些数据会进入 `AgentObservation`：
 
@@ -538,7 +538,7 @@ fill #password with 123456
 还需要补：
 
 - 更完整的 DOM 结构摘要。
-- Canvas/SVG 内部数据、任意第三方图表 tooltip 和像素级视觉趋势读取。
+- Canvas/SVG 内部数据、多个图表之间无法可靠归属的第三方 tooltip 和像素级视觉趋势读取。
 - 仅依赖框架私有 class 名、且未提供原生、ARIA 或 `data-*` 结构钩子的第三方数据网格读取。
 
 ### 5.5 Report 已能展示 Agent 证据
@@ -650,13 +650,21 @@ MVP 支持的动作：
 ### 仍然距离较远的部分
 
 - 真实模型与业务页面的稳定性验收。
-- Planner 跨步骤恢复策略，以及 Verifier / Reporter 独立模型路由。
+- Verifier / Reporter 独立模型路由的真实模型验收。
 - 更完整的 verifier。
 - 失败归因。
-- PRD 模型语义复核在真实复杂文档上的质量验收，以及覆盖矩阵驱动的缺口治理。
+- PRD 模型语义复核在真实复杂文档上的质量验收，以及覆盖矩阵驱动的批量缺口治理。
 - 图表和表格高级断言。
 - 运行报告体系。
 - 稳定性工程。
+
+### 已完成的工程化执行入口
+
+- `pnpm build:electron && pnpm cli -- run --data-dir <数据根目录> --project-id <项目ID> --case-id <用例ID>` 可以在不启动 Electron 窗口的情况下执行已保存的项目资产。
+- CLI 只接受稳定 ID；可重复 `--case-id` 批量执行，并可选用 `--environment-id` 统一覆盖选中用例的环境。
+- CLI 与桌面端共用 TestRunner、RecordingRunner、StudioRuntime、BrowserRuntime 和 artifact 归档；执行结果会写回 `studio-data/state.json`，录制视觉比较继续生成差异图。
+- CLI 标准输出 JSON，并默认将 JUnit XML 写入 `studio-data/artifacts`；`--junit` 与 `--json` 可指定报告落盘位置。
+- 无 Midscene 配置时，录制回放仍可执行；需要模型的 Agent 用例会输出明确失败并以非零退出码结束，不会降级为伪通过。
 
 ### 已完成的无密钥业务页基线
 
@@ -678,14 +686,14 @@ MVP 支持的动作：
    - 核验模型错误、耗时、usage、报告和截图证据是否完整且与供应商账单口径一致。
 
 2. Agent 动态重规划与角色模型路由。
-   - 已完成 selector readiness 动态等待、特定接口响应等待、图表稳定判断、数据就绪判断、失败分类、恢复策略建议、`waitForReadiness` 策略驱动数据就绪或网络空闲等待、`replanNavigation` 与 `replanFromCurrentState` 策略驱动重规划、`replaceSelector` 策略驱动 selector fallback、500ms 回退等待、Planner 条件化 wait、单次确定性重试、受控 selector fallback、语义 `select`、配置上限内多轮 Planner 重规划和跨轮次证据历史，后续让更多恢复策略直接驱动路径选择。
+   - 已完成 selector readiness 动态等待、特定接口响应等待、图表稳定判断、数据就绪判断、失败分类、恢复策略建议、`waitForReadiness` 策略驱动数据就绪或网络空闲等待、`replanNavigation` 与 `replanFromCurrentState` 策略驱动重规划、`replaceSelector` 策略驱动 selector fallback、500ms 回退等待、Planner 条件化 wait、单次确定性动作重试、受控 selector fallback、语义 `select`、携带已完成前缀的跨步骤连续重规划、配置上限内多轮 Planner 重规划和跨轮次证据历史，后续让更多恢复策略直接驱动路径选择。
    - Verifier 使用独立模型做复杂语义断言和失败归因。
    - Reporter 使用独立模型生成结构化报告和修复建议。
    - Executor 继续默认复用 Midscene，也允许切换独立执行模型策略。
 
 3. 表格与图表专项 Verifier。
    - 扩展无结构钩子的第三方数据网格读取，以及更多跨框架筛选、分页和聚合值信号。
-   - 扩展 Canvas/SVG 与第三方图表库的 tooltip、数据区域和视觉趋势读取。
+   - 扩展 Canvas/SVG 与第三方图表库的结构化数据区域和视觉趋势读取；当前仅采集可可靠归属的 tooltip，不从像素或未标注文本猜测数据点。
    - 将结构化观察转换为可判定的 verification evidence。
 
 4. 录制回放视觉比较。
@@ -698,8 +706,9 @@ MVP 支持的动作：
    - Markdown 标题、列表与正文中的可验收条款会被去重并最多生成 8 条路径；每条路径保留原文摘录、覆盖域、保守优先级和可编辑的“进入、执行、断言”步骤。
    - 已完成路径写入正式用例或录制草稿，并以 `documentId + pathId` 显示稳定覆盖状态；资产改名、同名条款或重新分析未变更条款不会误判覆盖，历史资产保留名称回退兼容。PRD 来源会随执行进入 Agent Run、RunDetail 和运行列表。
    - 已接入 Planner 角色模型进行受限语义复核：模型仅能细化规则已抽取的候选路径，保留原文摘录与稳定 `pathId`；模型未配置、停用、请求失败或返回越界路径时自动保留规则结果并在文档页显示降级原因。
-   - 已提供项目级 PRD 覆盖矩阵，汇总全部文档路径与对应的用例、录制状态，优先使用 `documentId + pathId`，同时保留历史资产兼容匹配。
-   - 待以真实模型/复杂 PRD 验收跨段落条件关联质量，并补齐覆盖缺口治理流程。
+- 已提供项目级 PRD 覆盖矩阵，汇总全部文档路径与对应的用例、录制状态，优先使用 `documentId + pathId`，同时保留历史资产兼容匹配；未覆盖路径可直接写入用例或录制草稿，也可跨文档一次性写入全部缺口用例或录制草稿，并按缺用例、缺录制、完全未覆盖和治理状态筛选。
+- 矩阵内已提供本地缺口治理：以 `documentId + pathId + target` 记录用例/录制的延后或忽略决定，必须填写说明和更新时间；资产覆盖生成后显示已解决但不删除说明，文档或路径失效时会清理决策。应用没有登录或成员体系，因此不做分派、通知或外部协作同步。
+- 待以真实模型/复杂 PRD 验收跨段落条件关联质量；成员分派仅在未来具备成员体系后再评估。
 
 ## 9. 当前验收状态
 
@@ -714,7 +723,7 @@ git diff --check
 当前测试覆盖数量：
 
 ```text
-31 files / 205 tests passed
+37 files / 259 tests passed
 ```
 
 注意：

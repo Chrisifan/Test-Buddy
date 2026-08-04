@@ -4,6 +4,7 @@ import {
   type AgentPlanDraft,
   type AgentPlanProvenance,
   type AgentPlanRevision,
+  type AgentReporterSummary,
   type AgentArtifact,
   type AgentDynamicWaitAttempt,
   type AgentExecutionMetrics,
@@ -133,6 +134,7 @@ export interface PlannedAgentReplanningRecord {
   revisedPlan: AgentPlanDraft;
   executions: PlannedAgentStepExecution[];
   failedStepIndex: number;
+  completedStepCount?: number;
   planningMetrics?: AgentExecutionMetrics;
 }
 
@@ -568,12 +570,22 @@ export function createPlannedAgentRun(request: PlannedAgentRunRequest): AgentRun
         createdAt: now,
       });
       execution.dynamicWaitAttempts?.forEach((attempt, attemptIndex) => {
+        const waitTarget =
+          attempt.strategy === 'response' && attempt.urlPattern
+            ? `等待接口响应 ${attempt.urlPattern}`
+            : attempt.strategy === 'selector' && attempt.selector
+              ? `等待 selector ${attempt.selector} 可见`
+              : attempt.strategy === 'dataReady'
+                ? '等待页面数据就绪'
+                : attempt.strategy === 'networkIdle'
+                  ? '等待页面网络空闲'
+                  : '等待页面稳定';
         events.push({
           id: eventId(`dynamic-wait-${attemptIndex + 1}`),
           runId,
           type: 'agent:dynamic-wait',
           stepId: step.id,
-          message: `计划步骤「${step.title}」等待页面稳定 ${attempt.timeoutMs}ms；${attempt.summary}`,
+          message: `计划步骤「${step.title}」${waitTarget} ${attempt.timeoutMs}ms；${attempt.summary}`,
           status: attempt.status === 'failed' ? 'failed' : 'running',
           dynamicWait: attempt,
           createdAt: now,
@@ -731,6 +743,7 @@ export function createPlannedAgentRun(request: PlannedAgentRunRequest): AgentRun
       triggerStepId: triggerStep.id,
       triggerStepTitle: triggerStep.title,
       triggerStatus: triggerExecution.status,
+      ...(record.completedStepCount ? { completedStepCount: record.completedStepCount } : {}),
       ...(triggerExecution.failureReason ? { failureReason: triggerExecution.failureReason } : {}),
       ...(triggerExecution.failureCategory ? { failureCategory: triggerExecution.failureCategory } : {}),
       ...(triggerExecution.recoveryStrategy ? { recoveryStrategy: triggerExecution.recoveryStrategy } : {}),
@@ -866,6 +879,22 @@ function mergeModelAssignments(stepRuns: AgentRunResult[]): AgentModelAssignment
   return Array.from(assignmentsByRole.values());
 }
 
+function remapReporterRecoveryPlan(
+  reporter: AgentReporterSummary | undefined,
+  sourceStepId: string | undefined,
+): AgentReporterSummary | undefined {
+  if (!reporter || !sourceStepId) {
+    return reporter;
+  }
+
+  return {
+    ...reporter,
+    ...(reporter.recoveryPlan
+      ? { recoveryPlan: { ...reporter.recoveryPlan, failedStepId: sourceStepId } }
+      : {}),
+  };
+}
+
 function workflowStepAction(step: WorkflowAgentStepInput, stepRun: AgentRunResult | undefined): AgentStepAction {
   const executedStep = stepRun?.plan.steps.find((candidate) => candidate.sourceStepType === step.type);
   if (executedStep) {
@@ -950,9 +979,14 @@ export function createWorkflowAgentRun(request: WorkflowAgentRunRequest): AgentR
 
     stepRun.events
       .filter((event) =>
-        ['agent:browser-action', 'agent:observation-created', 'agent:assertion-result', 'agent:artifact-created'].includes(
-          event.type,
-        ),
+        [
+          'agent:browser-action',
+          'agent:observation-created',
+          'agent:assertion-result',
+          'agent:artifact-created',
+          'agent:dynamic-wait',
+          'agent:step-retried',
+        ].includes(event.type),
       )
       .forEach((event, eventIndex) => {
         events.push({
@@ -1003,6 +1037,11 @@ export function createWorkflowAgentRun(request: WorkflowAgentRunRequest): AgentR
   );
   const metrics = mergeExecutionMetrics(request.stepRuns);
   const modelAssignments = mergeModelAssignments(request.stepRuns);
+  const reporterRunIndex = request.stepRuns.findIndex((run) => run.status !== 'passed' && run.reporter);
+  const reporter = remapReporterRecoveryPlan(
+    reporterRunIndex >= 0 ? request.stepRuns[reporterRunIndex]?.reporter : undefined,
+    reporterRunIndex >= 0 ? request.workflow.steps[reporterRunIndex]?.id : undefined,
+  );
 
   return {
     runId,
@@ -1027,6 +1066,7 @@ export function createWorkflowAgentRun(request: WorkflowAgentRunRequest): AgentR
     ],
     ...(metrics ? { metrics } : {}),
     ...(modelAssignments.length ? { modelAssignments } : {}),
+    ...(reporter ? { reporter } : {}),
     startedAt: request.stepRuns[0]?.startedAt ?? now,
     endedAt: request.stepRuns.at(-1)?.endedAt ?? now,
     ...(failureReason ? { failureReason } : {}),
@@ -1122,9 +1162,14 @@ export function createTestCaseAgentRun(request: TestCaseAgentRunRequest): AgentR
 
     stepRun.events
       .filter((event) =>
-        ['agent:browser-action', 'agent:observation-created', 'agent:assertion-result', 'agent:artifact-created'].includes(
-          event.type,
-        ),
+        [
+          'agent:browser-action',
+          'agent:observation-created',
+          'agent:assertion-result',
+          'agent:artifact-created',
+          'agent:dynamic-wait',
+          'agent:step-retried',
+        ].includes(event.type),
       )
       .forEach((event, eventIndex) => {
         events.push({
@@ -1174,6 +1219,11 @@ export function createTestCaseAgentRun(request: TestCaseAgentRunRequest): AgentR
   );
   const metrics = mergeExecutionMetrics(executedRuns);
   const modelAssignments = mergeModelAssignments(executedRuns);
+  const reporterRunIndex = request.stepRuns.findIndex((run) => run?.status !== 'passed' && run?.reporter);
+  const reporter = remapReporterRecoveryPlan(
+    reporterRunIndex >= 0 ? request.stepRuns[reporterRunIndex]?.reporter : undefined,
+    reporterRunIndex >= 0 ? request.testCase.steps[reporterRunIndex]?.id : undefined,
+  );
 
   return {
     runId,
@@ -1198,6 +1248,7 @@ export function createTestCaseAgentRun(request: TestCaseAgentRunRequest): AgentR
     ],
     ...(metrics ? { metrics } : {}),
     ...(modelAssignments.length ? { modelAssignments } : {}),
+    ...(reporter ? { reporter } : {}),
     startedAt: executedRuns[0]?.startedAt ?? now,
     endedAt: executedRuns.at(-1)?.endedAt ?? now,
     ...(failureReason ? { failureReason } : {}),

@@ -60,6 +60,16 @@ describe('OpenAICompatibleAgentPlanner', () => {
       targetUrl: 'https://app.example.test',
       currentUrl: 'https://app.example.test/login',
       pageTitle: '登录',
+      completedSteps: [
+        {
+          stepIndex: 1,
+          action: 'input',
+          title: '填写用户名',
+          instruction: '在用户名输入框中输入测试账号',
+          evidence: '用户名已填写',
+          currentUrl: 'https://app.example.test/login',
+        },
+      ],
     });
 
     expect(fetchImpl).toHaveBeenCalledWith(
@@ -79,6 +89,18 @@ describe('OpenAICompatibleAgentPlanner', () => {
         temperature: 0.2,
       }),
     );
+    expect(JSON.parse(requestBody.messages[1].content)).toEqual(
+      expect.objectContaining({
+        completedSteps: [
+          expect.objectContaining({
+            stepIndex: 1,
+            action: 'input',
+            title: '填写用户名',
+          }),
+        ],
+      }),
+    );
+    expect(requestBody.messages[0].content).toContain('只输出从当前状态继续所需的后续步骤');
     expect(result.plan.steps).toHaveLength(2);
     expect(result.plan.steps[0]).toEqual(
       expect.objectContaining({

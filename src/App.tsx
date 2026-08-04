@@ -33,11 +33,13 @@ import {
   detachRecordingFromTestCases,
   findDefaultRecordingForCaseStep,
   getTestCaseRunBlocker,
+  isRecordingLinkedToGeneratedPath,
   isTestCaseLinkedToGeneratedPath,
   initialRunLog,
   insertTestStep,
   isMidsceneConfigured,
   moveTestStep,
+  prunePrdCoverageTriage,
   removeTestStep,
   testCaseToWorkflow,
   type AgentModelConfig,
@@ -51,6 +53,8 @@ import {
   type MidsceneConfig,
   type AppearanceConfig,
   type PrdDocumentKind,
+  type PrdCoverageTarget,
+  type PrdCoverageTriageDecisionStatus,
   type RecordingCapturedEvent,
   type ProjectDraft,
   type RuntimeInfo,
@@ -427,7 +431,7 @@ export function App() {
               environmentName: runContext?.environmentName ?? selectedEnvironment?.name,
               startedAt: new Date().toISOString(),
             },
-            ...current.filter((run) => run.id !== event.runId).slice(0, 9),
+            ...current.filter((run) => run.id !== event.runId),
           ]);
         }
       }
@@ -600,10 +604,17 @@ export function App() {
     setProjects((current) =>
       current.map((project) =>
         project.id === selectedProject.id
-          ? {
-              ...updater(project),
-              updatedAt: new Date().toISOString(),
-            }
+          ? (() => {
+              const updatedProject = updater(project);
+              return {
+                ...updatedProject,
+                prdCoverageTriage: prunePrdCoverageTriage(
+                  updatedProject.documents,
+                  updatedProject.prdCoverageTriage,
+                ),
+                updatedAt: new Date().toISOString(),
+              };
+            })()
           : project,
       ),
     );
@@ -1000,6 +1011,156 @@ export function App() {
     setSelectedGroupId(nextCases[0]?.groupId ?? selectedProject.groups[0]?.id ?? '');
     setSelectedTestCaseId(nextCases[0]?.id ?? selectedTestCaseId);
     switchPage('cases');
+  }
+
+  function handleCreateAllCasesFromMatrix() {
+    if (!selectedProject || !selectedEnvironment) {
+      return;
+    }
+
+    const pathsToCreate = selectedProject.documents.flatMap((document) =>
+      document.generatedPaths
+        .filter(
+          (path) =>
+            !selectedProject.testCases.some((testCase) => isTestCaseLinkedToGeneratedPath(testCase, document.id, path)),
+        )
+        .map((path) => ({ documentId: document.id, path })),
+    );
+    if (!pathsToCreate.length) {
+      return;
+    }
+
+    const generatedGroups = pathsToCreate
+      .map(({ path }) => path.groupName)
+      .filter(
+        (groupName, index, list) =>
+          list.indexOf(groupName) === index &&
+          !selectedProject.groups.some((group) => group.name === groupName),
+      )
+      .map((groupName, index) => ({
+        id: `group-prd-matrix-${Date.now()}-${index}`,
+        name: groupName,
+        description: t('app.generated.prdGroupDescription', { name: groupName }),
+        createdAt: new Date().toISOString(),
+      }));
+    const groupsByName = new Map(
+      [...selectedProject.groups, ...generatedGroups].map((group) => [group.name, group]),
+    );
+    const nextCases = pathsToCreate.map(({ documentId, path }, index) =>
+      createTestCaseFromGeneratedPath({
+        path,
+        documentId,
+        groupId: groupsByName.get(path.groupName)?.id ?? selectedProject.groups[0]?.id ?? '',
+        environmentId: selectedEnvironment.id,
+        url: selectedProject.defaultUrl,
+        seed: selectedProject.testCases.length + index + 1,
+      }),
+    );
+
+    updateSelectedProject((project) => ({
+      ...project,
+      groups: [...project.groups, ...generatedGroups],
+      testCases: [...nextCases, ...project.testCases],
+    }));
+    setSelectedGroupId(nextCases[0]?.groupId ?? selectedProject.groups[0]?.id ?? '');
+    setSelectedTestCaseId(nextCases[0]?.id ?? selectedTestCaseId);
+    switchPage('cases');
+  }
+
+  function handleCreateAllRecordingsFromMatrix() {
+    if (!selectedProject || !selectedEnvironment) {
+      return;
+    }
+
+    const pathsToCreate = selectedProject.documents.flatMap((document) =>
+      document.generatedPaths
+        .filter(
+          (path) =>
+            !selectedProject.recordings.some((recording) =>
+              isRecordingLinkedToGeneratedPath(recording, document.id, path),
+            ),
+        )
+        .map((path) => ({ documentId: document.id, path })),
+    );
+    if (!pathsToCreate.length) {
+      return;
+    }
+
+    const generatedGroups = pathsToCreate
+      .map(({ path }) => path.groupName)
+      .filter(
+        (groupName, index, list) =>
+          list.indexOf(groupName) === index &&
+          !selectedProject.groups.some((group) => group.name === groupName),
+      )
+      .map((groupName, index) => ({
+        id: `group-prd-matrix-recording-${Date.now()}-${index}`,
+        name: groupName,
+        description: t('app.generated.prdGroupDescription', { name: groupName }),
+        createdAt: new Date().toISOString(),
+      }));
+    const groupsByName = new Map(
+      [...selectedProject.groups, ...generatedGroups].map((group) => [group.name, group]),
+    );
+    const nextRecordings = pathsToCreate.map(({ documentId, path }, index) =>
+      createRecordingFromGeneratedPath({
+        path,
+        documentId,
+        groupId: groupsByName.get(path.groupName)?.id ?? selectedProject.groups[0]?.id ?? '',
+        environmentId: selectedEnvironment.id,
+        startUrl: selectedProject.defaultUrl,
+        seed: selectedProject.recordings.length + index + 1,
+      }),
+    );
+
+    updateSelectedProject((project) => ({
+      ...project,
+      groups: [...project.groups, ...generatedGroups],
+      recordings: [...nextRecordings, ...project.recordings],
+    }));
+    setSelectedGroupId(nextRecordings[0]?.groupId ?? selectedProject.groups[0]?.id ?? '');
+    setSelectedRecordingId(nextRecordings[0]?.id ?? selectedRecordingId);
+    switchPage('recording');
+  }
+
+  function handleUpdatePrdCoverageTriage(
+    documentId: string,
+    pathId: string,
+    target: PrdCoverageTarget,
+    status: PrdCoverageTriageDecisionStatus | undefined,
+    note: string,
+  ) {
+    if (!status) {
+      updateSelectedProject((project) => ({
+        ...project,
+        prdCoverageTriage: project.prdCoverageTriage.filter(
+          (decision) => !(decision.documentId === documentId && decision.pathId === pathId && decision.target === target),
+        ),
+      }));
+      return;
+    }
+
+    const normalizedNote = note.trim();
+    if (!normalizedNote) {
+      return;
+    }
+    const updatedAt = new Date().toISOString();
+    updateSelectedProject((project) => ({
+      ...project,
+      prdCoverageTriage: [
+        {
+          documentId,
+          pathId,
+          target,
+          status,
+          note: normalizedNote,
+          updatedAt,
+        },
+        ...project.prdCoverageTriage.filter(
+          (decision) => !(decision.documentId === documentId && decision.pathId === pathId && decision.target === target),
+        ),
+      ],
+    }));
   }
 
   function handleCreateGroup() {
@@ -1574,7 +1735,7 @@ export function App() {
           environmentName: environment.name,
           startedAt: result.agentRun.startedAt,
         },
-        ...current.filter((run) => run.id !== result.runId).slice(0, 11),
+        ...current.filter((run) => run.id !== result.runId),
       ]);
       setSelectedRunId(result.runId);
       switchPage('runs');
@@ -1828,7 +1989,7 @@ export function App() {
     };
 
     setRunDetails((current) => [detail, ...current.filter((run) => run.id !== detail.id)]);
-    setRecentRuns((current) => [summary, ...current.filter((run) => run.id !== summary.id)].slice(0, 12));
+    setRecentRuns((current) => [summary, ...current.filter((run) => run.id !== summary.id)]);
     setSelectedRunId(agentRun.runId);
     const observedSession = agentRun.events.find((event) => event.browserSession)?.browserSession;
     if (observedSession) {
@@ -1964,7 +2125,7 @@ export function App() {
           environmentName: selectedEnvironment?.name ?? targetEnvironment,
           startedAt: result.agentRun.startedAt,
         },
-        ...current.filter((run) => run.id !== result.runId).slice(0, 11),
+        ...current.filter((run) => run.id !== result.runId),
       ]);
       setSelectedRunId(result.runId);
       switchPage('runs');
@@ -2038,7 +2199,7 @@ export function App() {
           environmentName: environmentToRun.name,
           startedAt: result.detail.startedAt,
         },
-        ...current.filter((run) => run.id !== result.runId).slice(0, 11),
+        ...current.filter((run) => run.id !== result.runId),
       ]);
       setSelectedRunId(result.runId);
       setBrowserSession((current) => ({
@@ -2256,12 +2417,15 @@ export function App() {
           {activePage === 'documents' ? (
             <DocumentAnalysisPage
               onCreateAllCasesFromDocument={handleCreateAllCasesFromDocument}
+              onCreateAllCasesFromMatrix={handleCreateAllCasesFromMatrix}
+              onCreateAllRecordingsFromMatrix={handleCreateAllRecordingsFromMatrix}
               onCreateCaseFromPath={handleCreateCaseFromPath}
               onCreateDocument={handleCreateDocument}
               onCreateRecordingFromPath={handleCreateRecordingFromPath}
               onAnalyzeDocument={handleAnalyzeDocument}
               onOpenProjects={() => goToPage('projects')}
               onSelectDocument={setSelectedDocumentId}
+              onUpdateCoverageTriage={handleUpdatePrdCoverageTriage}
               onUpdateDocument={handleUpdateDocument}
               semanticAnalysisError={
                 semanticAnalysisError?.documentId === selectedDocumentId

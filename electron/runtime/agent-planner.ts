@@ -36,6 +36,18 @@ export interface AgentPlannerRequest {
     failureCategory?: AgentFailureCategory;
     recoveryStrategy?: AgentRecoveryStrategy;
   };
+  completedSteps?: Array<{
+    stepIndex: number;
+    action: AgentStepAction;
+    title: string;
+    instruction: string;
+    evidence: string;
+    selector?: string;
+    target?: string;
+    value?: string;
+    url?: string;
+    currentUrl?: string;
+  }>;
   observationSummary?: string;
   interactiveElements?: string[];
 }
@@ -156,6 +168,7 @@ function plannerSystemPrompt(): string {
     'Step.action 只能是 navigate、click、input、wait、scroll、select、assert、observe、extract。',
     '每个 Step 必须包含 action、title、instruction，可选 expected、selector、target、value、url、timeoutMs。',
     '有稳定 selector 时填写 selector；语义定位时填写 target；navigate 必须填写 url；input 必须填写 value。',
+    '当请求提供 completedSteps 时，其中步骤已经在当前页面成功完成。只输出从当前状态继续所需的后续步骤，不要重新输出或执行已完成步骤；如需确认状态，使用 observe 或 assert。',
     '最多 12 步。不要声称执行已经成功。',
   ].join('\n');
 }
@@ -192,6 +205,7 @@ export class OpenAICompatibleAgentPlanner implements AgentPlanner {
                 currentUrl: request.currentUrl ?? '',
                 pageTitle: request.pageTitle ?? '',
                 previousFailure: request.previousFailure,
+                completedSteps: request.completedSteps ?? [],
                 observationSummary: request.observationSummary ?? '',
                 interactiveElements: request.interactiveElements ?? [],
               }),

@@ -2,23 +2,39 @@ import { useMemo, useState } from 'react';
 import type {
   GeneratedTestPath,
   PrdAnalysisFallbackReason,
+  PrdCoverageTarget,
+  PrdCoverageTriageDecisionStatus,
+  PrdCoverageTriageStatus,
   PrdDocumentKind,
   ProjectDraft,
 } from '../../../shared/studio.js';
 import {
+  getPrdCoverageTriageKey,
+  getPrdCoverageTriageStatus,
   isRecordingLinkedToGeneratedPath,
   isTestCaseLinkedToGeneratedPath,
 } from '../../../shared/studio.js';
 
-import { FileText, Plus, Sparkles, Table2, Upload } from 'lucide-react';
+import { FileText, Filter, Plus, Sparkles, Table2, Undo2, Upload, Video } from 'lucide-react';
 
 import { EvidenceCard, MetricTile, PageHeader, ProjectRequiredState, Surface, PageBody, PageShell } from '../../components/workbench.js';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { extractPdfText } from '@/lib/pdfText';
 import { useI18n } from '../../i18n/index.js';
+
+type MatrixFilter = 'all' | 'caseMissing' | 'recordingMissing' | 'uncovered';
+type TriageFilter = 'all' | PrdCoverageTriageStatus;
+type TriageRequest = {
+  documentId: string;
+  pathId: string;
+  target: PrdCoverageTarget;
+  status: PrdCoverageTriageDecisionStatus;
+  note: string;
+};
 
 export function DocumentAnalysisPage({
   project,
@@ -29,7 +45,10 @@ export function DocumentAnalysisPage({
   onCreateCaseFromPath,
   onCreateRecordingFromPath,
   onCreateAllCasesFromDocument,
+  onCreateAllCasesFromMatrix,
+  onCreateAllRecordingsFromMatrix,
   onAnalyzeDocument,
+  onUpdateCoverageTriage = () => undefined,
   semanticAnalyzingDocumentId,
   semanticAnalysisError,
   onOpenProjects,
@@ -47,13 +66,25 @@ export function DocumentAnalysisPage({
   onCreateCaseFromPath: (documentId: string, pathId: string) => void;
   onCreateRecordingFromPath: (documentId: string, pathId: string) => void;
   onCreateAllCasesFromDocument: (documentId: string) => void;
+  onCreateAllCasesFromMatrix: () => void;
+  onCreateAllRecordingsFromMatrix: () => void;
   onAnalyzeDocument: (documentId: string) => void;
+  onUpdateCoverageTriage?: (
+    documentId: string,
+    pathId: string,
+    target: PrdCoverageTarget,
+    status: PrdCoverageTriageDecisionStatus | undefined,
+    note: string,
+  ) => void;
   semanticAnalyzingDocumentId: string | null;
   semanticAnalysisError: string | null;
   onOpenProjects?: () => void;
 }) {
   const { t } = useI18n();
   const [isCoverageMatrixOpen, setIsCoverageMatrixOpen] = useState(false);
+  const [matrixFilter, setMatrixFilter] = useState<MatrixFilter>('all');
+  const [triageFilter, setTriageFilter] = useState<TriageFilter>('all');
+  const [triageRequest, setTriageRequest] = useState<TriageRequest | null>(null);
   const documents = project?.documents ?? [];
   const selectedDocument =
     documents.find((document) => document.id === selectedDocumentId) ?? documents[0];
@@ -79,16 +110,70 @@ export function DocumentAnalysisPage({
   const coverageMatrix = useMemo(() => {
     const cases = project?.testCases ?? [];
     const recordings = project?.recordings ?? [];
-    return documents.flatMap((document) =>
-      document.generatedPaths.map((path) => ({
-        document,
-        path,
-        caseCreated: cases.some((testCase) => isTestCaseLinkedToGeneratedPath(testCase, document.id, path)),
-        recordingCreated: recordings.some((recording) => isRecordingLinkedToGeneratedPath(recording, document.id, path)),
-      })),
+    const decisions = new Map(
+      (project?.prdCoverageTriage ?? []).map((decision) => [
+        getPrdCoverageTriageKey(decision.documentId, decision.pathId, decision.target),
+        decision,
+      ]),
     );
-  }, [documents, project?.recordings, project?.testCases]);
+    return documents.flatMap((document) =>
+      document.generatedPaths.map((path) => {
+        const caseCreated = cases.some((testCase) => isTestCaseLinkedToGeneratedPath(testCase, document.id, path));
+        const recordingCreated = recordings.some((recording) => isRecordingLinkedToGeneratedPath(recording, document.id, path));
+        return {
+          document,
+          path,
+          caseCreated,
+          recordingCreated,
+          caseTriage: getPrdCoverageTriageStatus(
+            caseCreated,
+            decisions.get(getPrdCoverageTriageKey(document.id, path.id, 'case')),
+          ),
+          recordingTriage: getPrdCoverageTriageStatus(
+            recordingCreated,
+            decisions.get(getPrdCoverageTriageKey(document.id, path.id, 'recording')),
+          ),
+          caseDecision: decisions.get(getPrdCoverageTriageKey(document.id, path.id, 'case')),
+          recordingDecision: decisions.get(getPrdCoverageTriageKey(document.id, path.id, 'recording')),
+        };
+      }),
+    );
+  }, [documents, project?.prdCoverageTriage, project?.recordings, project?.testCases]);
   const coveredMatrixCount = coverageMatrix.filter((row) => row.caseCreated).length;
+  const uncoveredMatrixCaseCount = coverageMatrix.length - coveredMatrixCount;
+  const uncoveredMatrixRecordingCount = coverageMatrix.filter((row) => !row.recordingCreated).length;
+  const filteredCoverageMatrix = useMemo(
+    () =>
+      coverageMatrix.filter((row) => {
+        const coverageMatches = matrixFilter === 'caseMissing'
+          ? !row.caseCreated
+          : matrixFilter === 'recordingMissing'
+            ? !row.recordingCreated
+            : matrixFilter === 'uncovered'
+              ? !row.caseCreated && !row.recordingCreated
+              : true;
+        const triageMatches = triageFilter === 'all'
+          || row.caseTriage === triageFilter
+          || row.recordingTriage === triageFilter;
+        return coverageMatches && triageMatches;
+      }),
+    [coverageMatrix, matrixFilter, triageFilter],
+  );
+
+  function openTriageRequest(
+    row: (typeof coverageMatrix)[number],
+    target: PrdCoverageTarget,
+    status: PrdCoverageTriageDecisionStatus,
+  ) {
+    const decision = target === 'case' ? row.caseDecision : row.recordingDecision;
+    setTriageRequest({
+      documentId: row.document.id,
+      pathId: row.path.id,
+      target,
+      status,
+      note: decision?.note ?? '',
+    });
+  }
   const selectedFallbackReason = selectedDocument?.analysisMetadata?.fallbackReason;
   const selectedFallbackMessage = selectedFallbackReason
     ? analysisFallbackMessage(selectedFallbackReason, t)
@@ -321,48 +406,162 @@ export function DocumentAnalysisPage({
             <div className="flex items-center gap-2">
               <Badge variant="outline">{t('documents.matrix.paths', { count: coverageMatrix.length })}</Badge>
               <Badge variant="outline">{t('documents.matrix.covered', { count: coveredMatrixCount })}</Badge>
+              <Button
+                disabled={!uncoveredMatrixCaseCount}
+                onClick={onCreateAllCasesFromMatrix}
+                size="sm"
+                type="button"
+                variant="outline"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                {t('documents.matrix.writeAllCases', { count: uncoveredMatrixCaseCount })}
+              </Button>
+              <Button
+                disabled={!uncoveredMatrixRecordingCount}
+                onClick={onCreateAllRecordingsFromMatrix}
+                size="sm"
+                type="button"
+                variant="outline"
+              >
+                <Video className="h-3.5 w-3.5" />
+                {t('documents.matrix.createAllRecordings', { count: uncoveredMatrixRecordingCount })}
+              </Button>
             </div>
           </DialogHeader>
           <div className="min-h-0 overflow-auto p-4">
             {coverageMatrix.length ? (
-              <table className="w-full min-w-[680px] border-collapse text-left text-xs">
-                <thead className="sticky top-0 z-10 bg-card text-muted-foreground">
-                  <tr className="border-b border-border">
-                    <th className="px-2 py-2 font-medium">{t('documents.matrix.document')}</th>
-                    <th className="px-2 py-2 font-medium">{t('documents.matrix.path')}</th>
-                    <th className="px-2 py-2 font-medium">{t('documents.matrix.case')}</th>
-                    <th className="px-2 py-2 font-medium">{t('documents.matrix.recording')}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {coverageMatrix.map((row) => (
-                    <tr className="border-b border-border/70 last:border-b-0" key={`${row.document.id}-${row.path.id}`}>
-                      <td className="max-w-44 truncate px-2 py-2.5 font-medium text-foreground" title={row.document.name}>
-                        {row.document.name}
-                      </td>
-                      <td className="max-w-[360px] px-2 py-2.5">
-                        <p className="truncate font-medium text-foreground" title={row.path.title}>{row.path.title}</p>
-                        {row.path.sourceExcerpt ? (
-                          <p className="mt-1 line-clamp-1 text-muted-foreground" title={row.path.sourceExcerpt}>{row.path.sourceExcerpt}</p>
-                        ) : null}
-                      </td>
-                      <td className="px-2 py-2.5">
-                        <Badge variant="outline">
-                          {row.caseCreated ? t('documents.matrix.written') : t('documents.matrix.unwritten')}
-                        </Badge>
-                      </td>
-                      <td className="px-2 py-2.5">
-                        <Badge variant="outline">
-                          {row.recordingCreated ? t('documents.matrix.recorded') : t('documents.matrix.unrecorded')}
-                        </Badge>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <>
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <div className="flex flex-wrap gap-2">
+                    <Select onValueChange={(value) => setMatrixFilter(value as MatrixFilter)} value={matrixFilter}>
+                      <SelectTrigger aria-label={t('documents.matrix.filterLabel')} className="h-8 w-40 text-xs">
+                        <Filter className="mr-1 h-3.5 w-3.5 text-muted-foreground" />
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">{t('documents.matrix.filter.all')}</SelectItem>
+                        <SelectItem value="caseMissing">{t('documents.matrix.filter.caseMissing')}</SelectItem>
+                        <SelectItem value="recordingMissing">{t('documents.matrix.filter.recordingMissing')}</SelectItem>
+                        <SelectItem value="uncovered">{t('documents.matrix.filter.uncovered')}</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <Select onValueChange={(value) => setTriageFilter(value as TriageFilter)} value={triageFilter}>
+                      <SelectTrigger aria-label={t('documents.triage.filterLabel')} className="h-8 w-32 text-xs">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">{t('documents.triage.filter.all')}</SelectItem>
+                        <SelectItem value="pending">{t('documents.triage.status.pending')}</SelectItem>
+                        <SelectItem value="deferred">{t('documents.triage.status.deferred')}</SelectItem>
+                        <SelectItem value="ignored">{t('documents.triage.status.ignored')}</SelectItem>
+                        <SelectItem value="resolved">{t('documents.triage.status.resolved')}</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <Badge variant="outline">{t('documents.matrix.visible', { count: filteredCoverageMatrix.length })}</Badge>
+                </div>
+                {filteredCoverageMatrix.length ? (
+                  <table className="w-full min-w-[760px] border-collapse text-left text-xs">
+                    <thead className="sticky top-0 z-10 bg-card text-muted-foreground">
+                      <tr className="border-b border-border">
+                        <th className="px-2 py-2 font-medium">{t('documents.matrix.document')}</th>
+                        <th className="px-2 py-2 font-medium">{t('documents.matrix.path')}</th>
+                        <th className="px-2 py-2 font-medium">{t('documents.matrix.case')}</th>
+                        <th className="px-2 py-2 font-medium">{t('documents.matrix.recording')}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredCoverageMatrix.map((row) => (
+                        <tr className="border-b border-border/70 last:border-b-0" key={`${row.document.id}-${row.path.id}`}>
+                          <td className="max-w-44 truncate px-2 py-2.5 font-medium text-foreground" title={row.document.name}>
+                            {row.document.name}
+                          </td>
+                          <td className="max-w-[360px] px-2 py-2.5">
+                            <p className="truncate font-medium text-foreground" title={row.path.title}>{row.path.title}</p>
+                            {row.path.sourceExcerpt ? (
+                              <p className="mt-1 line-clamp-1 text-muted-foreground" title={row.path.sourceExcerpt}>{row.path.sourceExcerpt}</p>
+                            ) : null}
+                          </td>
+                          <td className="px-2 py-2.5">
+                            <TriageCell
+                              covered={row.caseCreated}
+                              onCreate={() => onCreateCaseFromPath(row.document.id, row.path.id)}
+                              onDefer={() => openTriageRequest(row, 'case', 'deferred')}
+                              onIgnore={() => openTriageRequest(row, 'case', 'ignored')}
+                              onRestore={() => onUpdateCoverageTriage(row.document.id, row.path.id, 'case', undefined, '')}
+                              note={row.caseDecision?.note}
+                              status={row.caseTriage}
+                              target="case"
+                            />
+                          </td>
+                          <td className="px-2 py-2.5">
+                            <TriageCell
+                              covered={row.recordingCreated}
+                              onCreate={() => onCreateRecordingFromPath(row.document.id, row.path.id)}
+                              onDefer={() => openTriageRequest(row, 'recording', 'deferred')}
+                              onIgnore={() => openTriageRequest(row, 'recording', 'ignored')}
+                              onRestore={() => onUpdateCoverageTriage(row.document.id, row.path.id, 'recording', undefined, '')}
+                              note={row.recordingDecision?.note}
+                              status={row.recordingTriage}
+                              target="recording"
+                            />
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                ) : (
+                  <EvidenceCard title={t('documents.matrix.emptyFilteredTitle')} description={t('documents.matrix.emptyFilteredDescription')} />
+                )}
+              </>
             ) : (
               <EvidenceCard title={t('documents.matrix.emptyTitle')} description={t('documents.matrix.emptyDescription')} />
             )}
+          </div>
+        </DialogContent>
+      </Dialog>
+      <Dialog
+        onOpenChange={(open) => {
+          if (!open) setTriageRequest(null);
+        }}
+        open={Boolean(triageRequest)}
+      >
+        <DialogContent className="w-[min(440px,calc(100vw-32px))] p-5 sm:max-w-[440px]">
+          <DialogHeader>
+            <DialogTitle className="text-base font-semibold">
+              {triageRequest?.status === 'deferred'
+                ? t('documents.triage.deferTitle')
+                : t('documents.triage.ignoreTitle')}
+            </DialogTitle>
+          </DialogHeader>
+          <Textarea
+            aria-label={t('documents.triage.noteLabel')}
+            autoFocus
+            onChange={(event) => setTriageRequest((current) => current ? { ...current, note: event.target.value } : current)}
+            placeholder={t('documents.triage.notePlaceholder')}
+            value={triageRequest?.note ?? ''}
+          />
+          <div className="flex justify-end gap-2">
+            <Button onClick={() => setTriageRequest(null)} type="button" variant="outline">
+              {t('common.close')}
+            </Button>
+            <Button
+              disabled={!triageRequest?.note.trim()}
+              onClick={() => {
+                if (!triageRequest) return;
+                onUpdateCoverageTriage(
+                  triageRequest.documentId,
+                  triageRequest.pathId,
+                  triageRequest.target,
+                  triageRequest.status,
+                  triageRequest.note,
+                );
+                setTriageRequest(null);
+              }}
+              type="button"
+            >
+              {t('documents.triage.save')}
+            </Button>
           </div>
         </DialogContent>
       </Dialog>
@@ -460,5 +659,59 @@ function GeneratedPathCard({
         ))}
       </div>
     </article>
+  );
+}
+
+function TriageCell({
+  covered,
+  note,
+  onCreate,
+  onDefer,
+  onIgnore,
+  onRestore,
+  status,
+  target,
+}: {
+  covered: boolean;
+  note?: string;
+  onCreate: () => void;
+  onDefer: () => void;
+  onIgnore: () => void;
+  onRestore: () => void;
+  status: PrdCoverageTriageStatus;
+  target: PrdCoverageTarget;
+}) {
+  const { t } = useI18n();
+  const createLabel = target === 'case' ? t('documents.path.createCase') : t('documents.path.createRecording');
+
+  return (
+    <div className="flex min-w-[180px] flex-wrap items-center gap-1.5">
+      <Badge title={note} variant="outline">{t(`documents.triage.status.${status}`)}</Badge>
+      {!covered ? (
+        <>
+          <Button onClick={onCreate} size="sm" type="button" variant="outline">
+            <Plus className="h-3.5 w-3.5" />
+            {createLabel}
+          </Button>
+          <Button onClick={onDefer} size="sm" type="button" variant="ghost">
+            {t('documents.triage.defer')}
+          </Button>
+          <Button onClick={onIgnore} size="sm" type="button" variant="ghost">
+            {t('documents.triage.ignore')}
+          </Button>
+          {status === 'deferred' || status === 'ignored' ? (
+            <button
+              aria-label={t('documents.triage.restore')}
+              className="inline-flex h-7 w-7 items-center justify-center rounded-[4px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              onClick={onRestore}
+              title={t('documents.triage.restore')}
+              type="button"
+            >
+              <Undo2 className="h-3.5 w-3.5" />
+            </button>
+          ) : null}
+        </>
+      ) : null}
+    </div>
   );
 }

@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   copyTestStep,
   createDemoStudioState,
+  deriveRunCoverageRisk,
   createPrdDocumentAsset,
   createRecordingFromGeneratedPath,
   createTestStep,
@@ -21,6 +22,7 @@ import {
   isAgentRunnableTestCase,
   moveTestStep,
   removeTestStep,
+  prunePrdCoverageTriage,
   updatePrdDocumentAnalysis,
 } from './studio.js';
 
@@ -155,6 +157,66 @@ describe('studio state hydration', () => {
 
     expect(hydrated.projects.map((project) => project.id)).toEqual(['project-user']);
     expect(hydrated.selectedProjectId).toBe('project-user');
+  });
+
+  it('prunes invalid PRD triage records while preserving valid local governance notes', () => {
+    const project = createEmptyProject(1);
+    const document = createPrdDocumentAsset({
+      name: 'member-management.md', kind: 'markdown', size: 120,
+      sourceText: '# 成员管理\n- 管理员必须能新增成员。',
+    });
+    const path = document.generatedPaths[0]!;
+    const triage = prunePrdCoverageTriage([document], [
+      { documentId: document.id, pathId: path.id, target: 'case', status: 'deferred', note: '等待接口稳定', updatedAt: '2026-08-04T00:00:00.000Z' },
+      { documentId: document.id, pathId: path.id, target: 'recording', status: 'ignored', note: ' ', updatedAt: '2026-08-04T00:00:00.000Z' },
+      { documentId: document.id, pathId: 'removed-path', target: 'case', status: 'ignored', note: '已移除', updatedAt: '2026-08-04T00:00:00.000Z' },
+    ]);
+
+    expect(triage).toEqual([
+      expect.objectContaining({ documentId: document.id, pathId: path.id, target: 'case', status: 'deferred' }),
+    ]);
+    expect(prunePrdCoverageTriage([{ ...document, generatedPaths: [] }], triage)).toEqual([]);
+    const hydrated = hydrateStudioState({
+      ...createInitialStudioState(),
+      projects: [{ ...project, documents: [document], prdCoverageTriage: [...triage, {
+        documentId: document.id,
+        pathId: 'stale-path',
+        target: 'recording',
+        status: 'ignored',
+        note: '已删除',
+        updatedAt: '2026-08-04T00:00:00.000Z',
+      }] }],
+      selectedProjectId: project.id,
+    });
+    expect(hydrated.projects[0]?.prdCoverageTriage).toEqual(triage);
+    expect(project.prdCoverageTriage).toEqual([]);
+  });
+
+  it('derives cross-run risk from complete project history without allowing running records to replace a terminal result', () => {
+    const demoProject = createDemoStudioState().projects[0]!;
+    const unrunCase = { ...demoProject.testCases[0]!, id: 'case-never-executed', name: '从未执行用例' };
+    const project = { ...demoProject, testCases: [...demoProject.testCases, unrunCase] };
+    const [verifiedCase, waitingCase, failedCase] = project.testCases;
+    const environmentId = project.environments[0]!.id;
+    const makeRun = (id: string, testCaseId: string, status: 'passed' | 'failed' | 'neutral' | 'running', startedAt?: string) => ({
+      id, name: id, status, duration: '00:00:01', summary: id, projectId: project.id, testCaseId, environmentId,
+      ...(startedAt ? { startedAt } : {}),
+    });
+    const risk = deriveRunCoverageRisk(project, [
+      makeRun('waiting-newest', waitingCase!.id, 'neutral'),
+      makeRun('waiting-old', waitingCase!.id, 'failed'),
+      makeRun('failed-terminal', failedCase!.id, 'failed', '2026-08-02T00:00:00.000Z'),
+      makeRun('failed-running', failedCase!.id, 'running', '2026-08-03T00:00:00.000Z'),
+      makeRun('verified-passed', verifiedCase!.id, 'passed', '2026-08-03T00:00:00.000Z'),
+      makeRun('verified-old-failed', verifiedCase!.id, 'failed', '2026-08-02T00:00:00.000Z'),
+    ]);
+
+    expect(risk).toMatchObject({ total: project.testCases.length, verified: 1 });
+    expect(risk.risks).toEqual(expect.arrayContaining([
+      expect.objectContaining({ testCaseId: waitingCase!.id, status: 'neutral' }),
+      expect.objectContaining({ testCaseId: failedCase!.id, status: 'failed', latestRun: expect.objectContaining({ id: 'failed-terminal' }) }),
+      expect.objectContaining({ testCaseId: unrunCase.id, status: 'neverExecuted' }),
+    ]));
   });
 
   it('resets persisted browser sessions because they cannot survive an app restart', () => {
@@ -336,7 +398,7 @@ describe('studio state hydration', () => {
     });
   });
 
-  it('creates an independent fix draft from distinct Reporter suggestions', () => {
+  it('creates a review-only recovery draft without turning Reporter text into browser actions', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-08-01T08:00:00.000Z'));
     const source = createDemoStudioState().projects[0]!.testCases[0]!;
@@ -346,6 +408,11 @@ describe('studio state hydration', () => {
       {
         failureAnalysis: '页面数据尚未稳定。',
         suggestedFixes: ['增加数据就绪等待', '增加数据就绪等待 ', '检查 /api/orders 响应'],
+        recoveryPlan: {
+          failedStepId: source.steps[0]!.id,
+          strategy: 'waitForDataReady',
+          reason: '页面数据尚未稳定。',
+        },
       },
       4,
     );
@@ -357,13 +424,36 @@ describe('studio state hydration', () => {
       notes: expect.stringContaining('页面数据尚未稳定。'),
     });
     expect(draft?.steps.map((step) => step.id)).not.toContain(source.steps[0]?.id);
-    expect(draft?.steps.slice(-2)).toEqual([
-      expect.objectContaining({ type: 'ai', title: '修复建议 1', body: '增加数据就绪等待' }),
-      expect.objectContaining({ type: 'ai', title: '修复建议 2', body: '检查 /api/orders 响应' }),
-    ]);
+    expect(draft?.steps).toHaveLength(source.steps.length + 1);
+    expect(draft?.steps[0]).toEqual(expect.objectContaining({
+      type: 'ai',
+      title: '受控恢复：等待数据就绪',
+      body: expect.stringContaining('不要点击、输入、选择或导航'),
+    }));
+    expect(draft?.steps.map((step) => step.body).join('\n')).not.toContain('检查 /api/orders 响应');
+    expect(draft?.notes).toContain('检查 /api/orders 响应');
     expect(source.source).not.toBe('reporter');
 
-    expect(createReporterFixDraft(source, { failureAnalysis: '无建议', suggestedFixes: [' ', ''] }, 5)).toBeUndefined();
+    const draftWithoutSuggestedFixes = createReporterFixDraft(
+      source,
+      {
+        failureAnalysis: '等待元素可见。',
+        suggestedFixes: [],
+        recoveryPlan: {
+          failedStepId: source.steps[0]!.id,
+          strategy: 'waitForSelector',
+          selector: '#orders-ready',
+          reason: '等待元素可见。',
+        },
+      },
+      5,
+    );
+    expect(draftWithoutSuggestedFixes?.steps[0]).toEqual(expect.objectContaining({
+      title: '受控恢复：等待元素就绪',
+      body: expect.stringContaining('#orders-ready'),
+    }));
+
+    expect(createReporterFixDraft(source, { failureAnalysis: '无恢复计划', suggestedFixes: ['增加等待'] }, 6)).toBeUndefined();
     vi.useRealTimers();
   });
 });

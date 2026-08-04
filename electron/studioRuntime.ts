@@ -26,8 +26,9 @@ import {
   isMidsceneConfigured,
   resolveAgentModelAssignments,
 } from '../shared/studio.js';
-import type {
-  AgentDomInspection,
+import {
+  deriveAgentRecoveryPlan,
+  type AgentDomInspection,
   AgentExecutionMetrics,
   AgentFailureCategory,
   AgentObservation,
@@ -53,6 +54,7 @@ import {
 import type {
   AgentPlanner,
   AgentPlannerModelConfig,
+  AgentPlannerRequest,
   AgentPlannerResult,
 } from './runtime/agent-planner.js';
 import type {
@@ -1758,6 +1760,9 @@ function canWaitBeforeRetry(
   if (recoveryStrategy === 'waitForReadiness') {
     return true;
   }
+  if (recoveryStrategy === 'retryAfterWait') {
+    return canRetryFailedStep(step);
+  }
   return (step.action === 'click' || step.action === 'input' || step.action === 'select') && Boolean(step.selector);
 }
 
@@ -1780,6 +1785,19 @@ function shouldWaitForDataReady(
   return /\b(?:table|tables|list|grid|data|dataset|rows?|chart)\b|表格|列表|数据|行数据|图表/i.test(context);
 }
 
+function responseUrlPatternForNetworkRecovery(
+  step: AgentPlanStepDraft,
+  failedExecution?: PlannedAgentStepExecution,
+): string | undefined {
+  if (
+    failedExecution?.recoveryStrategy !== 'waitForReadiness' ||
+    failedExecution.failureCategory !== 'network'
+  ) {
+    return undefined;
+  }
+  return extractResponseUrlPattern(step);
+}
+
 function canUseSelectorFallback(step: AgentPlanStepDraft): boolean {
   return (step.action === 'click' || step.action === 'input' || step.action === 'select') && Boolean(step.selector);
 }
@@ -1795,6 +1813,78 @@ function canReplanFailedStep(step: AgentPlanStepDraft): boolean {
   return ['navigate', 'click', 'input', 'wait', 'scroll', 'select', 'observe'].includes(step.action);
 }
 
+function completedActionIdentity(step: AgentPlanStepDraft): string | undefined {
+  if (step.action === 'navigate' && step.url) {
+    return `navigate:url:${step.url}`;
+  }
+  if (step.action === 'click') {
+    return step.selector ? `click:selector:${step.selector}` : step.target ? `click:target:${step.target}` : undefined;
+  }
+  if (step.action === 'input' || step.action === 'select') {
+    const target = step.selector ? `selector:${step.selector}` : step.target ? `target:${step.target}` : undefined;
+    return target && step.value !== undefined ? `${step.action}:${target}:value:${step.value}` : undefined;
+  }
+  return undefined;
+}
+
+function removeCompletedActionReplays(
+  plan: AgentPlanDraft,
+  completedSteps: AgentPlanStepDraft[],
+): { plan: AgentPlanDraft; skippedStepCount: number } {
+  const completedActions = new Set(completedSteps.map(completedActionIdentity).filter(Boolean));
+  if (!completedActions.size) {
+    return { plan, skippedStepCount: 0 };
+  }
+  const steps = plan.steps.filter((step) => {
+    const identity = completedActionIdentity(step);
+    return !identity || !completedActions.has(identity);
+  });
+  const skippedStepCount = plan.steps.length - steps.length;
+  return {
+    plan: skippedStepCount
+      ? {
+          ...plan,
+          steps,
+          risks: [...plan.risks, `已跳过 ${skippedStepCount} 个与已完成步骤完全相同的动作。`],
+        }
+      : plan,
+    skippedStepCount,
+  };
+}
+
+type CompletedPlannerStep = NonNullable<AgentPlannerRequest['completedSteps']>[number];
+
+function appendCompletedPlannerSteps(
+  previousSteps: CompletedPlannerStep[],
+  currentPlan: AgentPlanDraft,
+  executions: PlannedAgentStepExecution[],
+): CompletedPlannerStep[] {
+  const currentSteps = executions.flatMap((execution) => {
+    if (execution.status !== 'passed') {
+      return [];
+    }
+    const completedStep = currentPlan.steps[execution.stepIndex];
+    if (!completedStep) {
+      return [];
+    }
+    return [
+      {
+        stepIndex: 0,
+        action: completedStep.action,
+        title: completedStep.title,
+        instruction: completedStep.instruction,
+        evidence: execution.evidence,
+        ...(completedStep.selector ? { selector: completedStep.selector } : {}),
+        ...(completedStep.target ? { target: completedStep.target } : {}),
+        ...(completedStep.value !== undefined ? { value: completedStep.value } : {}),
+        ...(completedStep.url ? { url: completedStep.url } : {}),
+        ...(execution.browserSession?.currentUrl ? { currentUrl: execution.browserSession.currentUrl } : {}),
+      },
+    ];
+  });
+  return [...previousSteps, ...currentSteps].map((step, index) => ({ ...step, stepIndex: index + 1 }));
+}
+
 interface SelectorFallbackCandidate {
   selector: string;
   source: string;
@@ -1805,6 +1895,7 @@ const dynamicRetryWaitMs = 500;
 const dynamicRetrySelectorWaitMs = 1_000;
 const dynamicRetryNetworkIdleWaitMs = 1_500;
 const dynamicRetryDataReadyWaitMs = 1_500;
+const dynamicRetryResponseWaitMs = 1_500;
 const selectorFallbackStopWords = new Set([
   'a',
   'button',
@@ -2107,7 +2198,7 @@ function resolveExecutionIntent(request: ChatCommandRequest, plannedStep?: Agent
     return { scrollIntent: resolveScrollIntent(plannedStep) };
   }
   if (plannedStep.action === 'select') {
-    const parsed = extractInputIntent(instruction);
+    const parsed = extractSelectIntent(instruction);
     const value = plannedStep.value ?? parsed?.value;
     if (value === undefined) {
       return {};
@@ -2265,11 +2356,11 @@ function classifyFailureReason(
   if (/(?:assert|expect|断言|不包含|不等于|不匹配|未观察到)/i.test(text)) {
     return 'assertion';
   }
-  if (/(?:runtime|error|exception|failed|失败)/i.test(text)) {
-    return 'runtime';
-  }
   if (/(?:indeterminate|unknown|unexpected).*(?:state|状态)|(?:未知|不确定).*(?:状态|页面)/i.test(text)) {
     return 'unknown';
+  }
+  if (/(?:runtime|error|exception|failed|失败)/i.test(text)) {
+    return 'runtime';
   }
   return 'runtime';
 }
@@ -2473,33 +2564,61 @@ export class StudioRuntime {
       return undefined;
     }
 
+    let attemptedWait: Pick<AgentDynamicWaitAttempt, 'timeoutMs' | 'strategy' | 'selector' | 'urlPattern'> | undefined;
     try {
-      if (this.browserObserver?.waitForSelector && step.selector && failedExecution?.recoveryStrategy !== 'waitForReadiness') {
-        await this.browserObserver.waitForSelector({ selector: step.selector, timeoutMs: dynamicRetrySelectorWaitMs });
+      const responseUrlPattern = responseUrlPatternForNetworkRecovery(step, failedExecution);
+      if (this.browserObserver?.waitForResponse && responseUrlPattern) {
+        attemptedWait = {
+          timeoutMs: dynamicRetryResponseWaitMs,
+          strategy: 'response',
+          urlPattern: responseUrlPattern,
+        };
+        await this.browserObserver.waitForResponse({
+          urlPattern: responseUrlPattern,
+          timeoutMs: dynamicRetryResponseWaitMs,
+        });
         return {
+          ...attemptedWait,
+          status: 'passed',
+          summary: '按恢复策略等待指定接口响应完成。',
+          evidence: `已在重试「${step.title}」前等待接口响应：${responseUrlPattern}。`,
+        };
+      }
+      if (this.browserObserver?.waitForSelector && step.selector && failedExecution?.recoveryStrategy !== 'waitForReadiness') {
+        attemptedWait = {
           timeoutMs: dynamicRetrySelectorWaitMs,
           strategy: 'selector',
           selector: step.selector,
+        };
+        await this.browserObserver.waitForSelector({ selector: step.selector, timeoutMs: dynamicRetrySelectorWaitMs });
+        return {
+          ...attemptedWait,
           status: 'passed',
           summary: '目标 selector 已可见。',
           evidence: `已在重试「${step.title}」前等待 selector 可见：${step.selector}。`,
         };
       }
       if (this.browserObserver?.waitForDataReady && shouldWaitForDataReady(step, failedExecution)) {
-        await this.browserObserver.waitForDataReady({ timeoutMs: dynamicRetryDataReadyWaitMs });
-        return {
+        attemptedWait = {
           timeoutMs: dynamicRetryDataReadyWaitMs,
           strategy: 'dataReady',
+        };
+        await this.browserObserver.waitForDataReady({ timeoutMs: dynamicRetryDataReadyWaitMs });
+        return {
+          ...attemptedWait,
           status: 'passed',
           summary: '按恢复策略等待页面数据就绪完成。',
           evidence: `已在重试「${step.title}」前等待页面数据就绪 ${dynamicRetryDataReadyWaitMs}ms。`,
         };
       }
       if (this.browserObserver?.waitForNetworkIdle) {
-        await this.browserObserver.waitForNetworkIdle({ timeoutMs: dynamicRetryNetworkIdleWaitMs });
-        return {
+        attemptedWait = {
           timeoutMs: dynamicRetryNetworkIdleWaitMs,
           strategy: 'networkIdle',
+        };
+        await this.browserObserver.waitForNetworkIdle({ timeoutMs: dynamicRetryNetworkIdleWaitMs });
+        return {
+          ...attemptedWait,
           status: 'passed',
           summary:
             failedExecution?.recoveryStrategy === 'waitForReadiness'
@@ -2511,10 +2630,13 @@ export class StudioRuntime {
       if (!this.browserObserver?.wait) {
         return undefined;
       }
-      await this.browserObserver.wait({ timeoutMs: dynamicRetryWaitMs });
-      return {
+      attemptedWait = {
         timeoutMs: dynamicRetryWaitMs,
         strategy: 'timeout',
+      };
+      await this.browserObserver.wait({ timeoutMs: dynamicRetryWaitMs });
+      return {
+        ...attemptedWait,
         status: 'passed',
         summary: '页面稳定等待完成。',
         evidence: `已在重试「${step.title}」前等待 ${dynamicRetryWaitMs}ms。`,
@@ -2522,9 +2644,9 @@ export class StudioRuntime {
     } catch (error) {
       const failureReason = (error as Error).message || '未知错误';
       return {
-        timeoutMs: dynamicRetryWaitMs,
+        ...(attemptedWait ?? { timeoutMs: dynamicRetryWaitMs, strategy: 'timeout' as const }),
         status: 'failed',
-        summary: '页面稳定等待失败。',
+        summary: '重试前等待失败。',
         evidence: `Runtime error: ${failureReason}`,
         failureReason,
       };
@@ -2565,6 +2687,7 @@ export class StudioRuntime {
       let executionMetrics = withReplanningCycleLimit(planningAttempt.result.metrics, replanningCycleLimit);
       let plannedPlan = planningAttempt.result.plan;
       let replanningCycles = 0;
+      let completedSteps: CompletedPlannerStep[] = [];
       for (let stepIndex = 0; stepIndex < plannedPlan.steps.length; stepIndex += 1) {
         const step = plannedPlan.steps[stepIndex]!;
         const preparation = await this.prepareBrowserForAgent(request, step);
@@ -2614,12 +2737,15 @@ export class StudioRuntime {
           }
         }
         if (execution.status !== 'passed') {
+          const completedStepsForReplan = appendCompletedPlannerSteps(completedSteps, plannedPlan, executions);
           const revisedPlan = replanningCycles >= replanningCycleLimit || !canReplanFailedStep(step)
             ? undefined
-            : await this.createReplannedAgentPlan(request, plannedPlan, step, execution);
+            : await this.createReplannedAgentPlan(request, plannedPlan, step, execution, completedStepsForReplan);
           if (revisedPlan) {
             const previousPlan = plannedPlan;
             executions.push(execution);
+            completedSteps = completedStepsForReplan;
+            const completedStepCount = completedSteps.length;
             replanningCycles += 1;
             const nextPlan = {
               ...revisedPlan.plan,
@@ -2634,6 +2760,7 @@ export class StudioRuntime {
               revisedPlan: nextPlan,
               executions: [...executions],
               failedStepIndex: stepIndex,
+              ...(completedStepCount ? { completedStepCount } : {}),
               ...(revisedPlan.metrics ? { planningMetrics: revisedPlan.metrics } : {}),
             });
             plannedPlan = nextPlan;
@@ -2823,6 +2950,7 @@ export class StudioRuntime {
             createdAt: event.createdAt,
           }
         : undefined;
+      const recoveryPlan = deriveAgentRecoveryPlan(agentRun);
       return {
         ...agentRun,
         summary: `${result.summary}\n${agentRun.summary}`,
@@ -2834,6 +2962,7 @@ export class StudioRuntime {
           evidenceSummary: result.evidenceSummary,
           failureAnalysis: result.failureAnalysis,
           suggestedFixes: result.suggestedFixes,
+          ...(recoveryPlan ? { recoveryPlan } : {}),
           modelName: result.modelName,
         },
       };
@@ -2916,6 +3045,7 @@ export class StudioRuntime {
     currentPlan: AgentPlanDraft,
     failedStep: AgentPlanStepDraft,
     failedExecution: PlannedAgentStepExecution,
+    completedSteps: CompletedPlannerStep[],
   ): Promise<AgentPlannerResult | undefined> {
     const resolved = plannerConfigForRequest(request);
     if (!this.agentPlanner || !resolved.config) {
@@ -2925,7 +3055,7 @@ export class StudioRuntime {
     const current = this.browserObserver?.getState() ?? request.browserSession;
     const observation = await this.captureBrowserObservation();
     try {
-      return await this.agentPlanner.createPlan({
+      const result = await this.agentPlanner.createPlan({
         config: resolved.config,
         mode: request.mode,
         prompt: [
@@ -2947,11 +3077,14 @@ export class StudioRuntime {
           ...(failedExecution.failureCategory ? { failureCategory: failedExecution.failureCategory } : {}),
           ...(failedExecution.recoveryStrategy ? { recoveryStrategy: failedExecution.recoveryStrategy } : {}),
         },
+        ...(completedSteps.length ? { completedSteps } : {}),
         ...(observation?.domSummary || observation?.textSummary
           ? { observationSummary: [observation.domSummary, observation.textSummary].filter(Boolean).join('\n') }
           : {}),
         ...(observation?.interactiveElements?.length ? { interactiveElements: observation.interactiveElements } : {}),
       });
+      const continuation = removeCompletedActionReplays(result.plan, completedSteps);
+      return continuation.plan.steps.length ? { ...result, plan: continuation.plan } : undefined;
     } catch {
       return undefined;
     }

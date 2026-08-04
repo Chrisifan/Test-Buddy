@@ -37,9 +37,21 @@ export class StudioStore {
     }
   }
 
+  async loadExisting(): Promise<StudioState> {
+    try {
+      const content = await fs.readFile(this.statePath, 'utf8');
+      return JSON.parse(content) as StudioState;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        throw new Error(`未找到 TestBuddy 状态文件：${this.statePath}`);
+      }
+
+      throw error;
+    }
+  }
+
   async save(state: StudioState): Promise<void> {
     await this.ensureReady();
     await fs.writeFile(this.statePath, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
   }
 }
-

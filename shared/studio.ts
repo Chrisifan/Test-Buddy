@@ -1,4 +1,4 @@
-import type { AgentModelAssignment, AgentReporterSummary, AgentRunResult } from './agent.js';
+import type { AgentModelAssignment, AgentRecoveryPlan, AgentReporterSummary, AgentRunResult } from './agent.js';
 
 export type RunTone = 'running' | 'passed' | 'failed' | 'neutral';
 export type ChatRole = 'system' | 'user' | 'assistant';
@@ -196,6 +196,19 @@ export interface ProjectEnvironment {
   credentialId?: string;
 }
 
+export type PrdCoverageTarget = 'case' | 'recording';
+export type PrdCoverageTriageDecisionStatus = 'deferred' | 'ignored';
+export type PrdCoverageTriageStatus = 'pending' | PrdCoverageTriageDecisionStatus | 'resolved';
+
+export interface PrdCoverageTriageDecision {
+  documentId: string;
+  pathId: string;
+  target: PrdCoverageTarget;
+  status: PrdCoverageTriageDecisionStatus;
+  note: string;
+  updatedAt: string;
+}
+
 export interface ProjectDraft {
   id: string;
   name: string;
@@ -207,6 +220,7 @@ export interface ProjectDraft {
   testCases: TestCaseDraft[];
   recordings: RecordingAsset[];
   documents: PrdDocumentAsset[];
+  prdCoverageTriage: PrdCoverageTriageDecision[];
   credentialRefs: CredentialRef[];
   createdAt: string;
   updatedAt: string;
@@ -256,6 +270,22 @@ export interface RunDetail {
   agentRuns?: AgentRunResult[];
   manualEvidence?: ManualStepEvidence[];
   failureReason?: string;
+}
+
+export type RunCoverageRiskStatus = 'neverExecuted' | 'failed' | 'neutral';
+
+export interface RunCoverageRisk {
+  testCaseId: string;
+  groupId: string;
+  environmentId: string;
+  status: RunCoverageRiskStatus;
+  latestRun?: RunSummary;
+}
+
+export interface RunCoverageRiskSummary {
+  total: number;
+  verified: number;
+  risks: RunCoverageRisk[];
 }
 
 export interface BrowserSessionState {
@@ -932,6 +962,7 @@ export function createDemoProject(): ProjectDraft {
       },
     ],
     documents: [],
+    prdCoverageTriage: [],
     testCases: initialWorkflows.map((workflow) => workflowToTestCase(workflow)),
   };
 }
@@ -1137,6 +1168,61 @@ function normalizePrdPathReference(rawReference: unknown): PrdPathReference | un
   return documentId && pathId ? { documentId, pathId } : undefined;
 }
 
+export function getPrdCoverageTriageKey(
+  documentId: string,
+  pathId: string,
+  target: PrdCoverageTarget,
+): string {
+  return `${documentId}::${pathId}::${target}`;
+}
+
+export function getPrdCoverageTriageStatus(
+  covered: boolean,
+  decision: Pick<PrdCoverageTriageDecision, 'status'> | undefined,
+): PrdCoverageTriageStatus {
+  if (covered) {
+    return 'resolved';
+  }
+  return decision?.status ?? 'pending';
+}
+
+export function prunePrdCoverageTriage(
+  documents: PrdDocumentAsset[],
+  rawTriage: unknown,
+): PrdCoverageTriageDecision[] {
+  if (!Array.isArray(rawTriage)) {
+    return [];
+  }
+
+  const validPathsByDocument = new Map(
+    documents.map((document) => [document.id, new Set(document.generatedPaths.map((path) => path.id))]),
+  );
+  const deduplicated = new Map<string, PrdCoverageTriageDecision>();
+  rawTriage.forEach((rawDecision) => {
+    if (!rawDecision || typeof rawDecision !== 'object') {
+      return;
+    }
+    const decision = rawDecision as Partial<PrdCoverageTriageDecision>;
+    const documentId = typeof decision.documentId === 'string' ? decision.documentId.trim() : '';
+    const pathId = typeof decision.pathId === 'string' ? decision.pathId.trim() : '';
+    const target = decision.target === 'case' || decision.target === 'recording' ? decision.target : undefined;
+    const status = decision.status === 'deferred' || decision.status === 'ignored' ? decision.status : undefined;
+    const note = typeof decision.note === 'string' ? decision.note.trim() : '';
+    const updatedAt = typeof decision.updatedAt === 'string' ? decision.updatedAt.trim() : '';
+    if (!documentId || !pathId || !target || !status || !note || !updatedAt || !validPathsByDocument.get(documentId)?.has(pathId)) {
+      return;
+    }
+
+    const normalized = { documentId, pathId, target, status, note, updatedAt };
+    const key = getPrdCoverageTriageKey(documentId, pathId, target);
+    const prior = deduplicated.get(key);
+    if (!prior || normalized.updatedAt >= prior.updatedAt) {
+      deduplicated.set(key, normalized);
+    }
+  });
+  return Array.from(deduplicated.values());
+}
+
 function normalizeProjectDraft(rawProject: ProjectDraft): ProjectDraft {
   const fallback = createEmptyProject(1);
   const environments = Array.isArray(rawProject.environments) && rawProject.environments.length
@@ -1173,6 +1259,9 @@ function normalizeProjectDraft(rawProject: ProjectDraft): ProjectDraft {
           : [],
       }))
     : [];
+  const documents = Array.isArray(rawProject.documents)
+    ? rawProject.documents.map(normalizePrdDocument)
+    : [];
 
   return {
     ...fallback,
@@ -1182,9 +1271,8 @@ function normalizeProjectDraft(rawProject: ProjectDraft): ProjectDraft {
     groups,
     credentialRefs: Array.isArray(rawProject.credentialRefs) ? rawProject.credentialRefs : [],
     recordings,
-    documents: Array.isArray(rawProject.documents)
-      ? rawProject.documents.map(normalizePrdDocument)
-      : [],
+    documents,
+    prdCoverageTriage: prunePrdCoverageTriage(documents, rawProject.prdCoverageTriage),
     testCases: Array.isArray(rawProject.testCases)
       ? rawProject.testCases.map((testCase) => ({
           ...testCase,
@@ -1195,6 +1283,72 @@ function normalizeProjectDraft(rawProject: ProjectDraft): ProjectDraft {
           steps: Array.isArray(testCase.steps) ? testCase.steps : [],
         }))
       : fallback.testCases,
+  };
+}
+
+function isNewerTerminalRun(
+  candidate: { run: RunSummary; index: number },
+  current: { run: RunSummary; index: number } | undefined,
+): boolean {
+  if (!current) {
+    return true;
+  }
+  const candidateTime = candidate.run.startedAt ? Date.parse(candidate.run.startedAt) : Number.NaN;
+  const currentTime = current.run.startedAt ? Date.parse(current.run.startedAt) : Number.NaN;
+  if (Number.isFinite(candidateTime) && Number.isFinite(currentTime)) {
+    return candidateTime > currentTime;
+  }
+
+  // Older state did not always have timestamps. Its persisted history order is
+  // the only safe ordering signal, so never infer recency from IDs or titles.
+  return candidate.index < current.index;
+}
+
+/**
+ * Calculates project-level verification risk from the complete run history.
+ * It is intentionally derived, so filters and UI selection cannot change it.
+ */
+export function deriveRunCoverageRisk(
+  project: ProjectDraft,
+  runHistory: RunSummary[],
+): RunCoverageRiskSummary {
+  const latestTerminalByScope = new Map<string, { run: RunSummary; index: number }>();
+  runHistory.forEach((run, index) => {
+    if (run.projectId !== project.id || !run.testCaseId || !run.environmentId || run.status === 'running') {
+      return;
+    }
+    if (run.status !== 'passed' && run.status !== 'failed' && run.status !== 'neutral') {
+      return;
+    }
+    const key = `${run.testCaseId}::${run.environmentId}`;
+    const current = latestTerminalByScope.get(key);
+    const candidate = { run, index };
+    if (isNewerTerminalRun(candidate, current)) {
+      latestTerminalByScope.set(key, candidate);
+    }
+  });
+
+  let verified = 0;
+  const risks: RunCoverageRisk[] = [];
+  project.testCases.forEach((testCase) => {
+    const latest = latestTerminalByScope.get(`${testCase.id}::${testCase.environmentId}`)?.run;
+    if (latest?.status === 'passed') {
+      verified += 1;
+      return;
+    }
+    risks.push({
+      testCaseId: testCase.id,
+      groupId: testCase.groupId,
+      environmentId: testCase.environmentId,
+      status: latest?.status === 'failed' ? 'failed' : latest?.status === 'neutral' ? 'neutral' : 'neverExecuted',
+      ...(latest ? { latestRun: latest } : {}),
+    });
+  });
+
+  return {
+    total: project.testCases.length,
+    verified,
+    risks,
   };
 }
 
@@ -1264,6 +1418,7 @@ export function createEmptyProject(nextId: number): ProjectDraft {
     credentialRefs: [],
     recordings: [],
     documents: [],
+    prdCoverageTriage: [],
     environments: [
       {
         id: environmentId,
@@ -1672,9 +1827,17 @@ export function createManualStepAutomationReplacement(step: TestStepDraft): Test
 
 export function createReporterFixDraft(
   source: TestCaseDraft,
-  reporter: Pick<AgentReporterSummary, 'failureAnalysis' | 'suggestedFixes'>,
+  reporter: Pick<AgentReporterSummary, 'failureAnalysis' | 'suggestedFixes' | 'recoveryPlan'>,
   seed: number,
 ): TestCaseDraft | undefined {
+  const recoveryPlan = reporter.recoveryPlan;
+  const failedStepIndex = recoveryPlan
+    ? source.steps.findIndex((step) => step.id === recoveryPlan.failedStepId)
+    : -1;
+  if (!recoveryPlan || failedStepIndex < 0) {
+    return undefined;
+  }
+
   const seenFixes = new Set<string>();
   const suggestedFixes = reporter.suggestedFixes.flatMap((fix) => {
     const trimmed = fix.trim();
@@ -1686,15 +1849,21 @@ export function createReporterFixDraft(
     seenFixes.add(key);
     return [trimmed];
   }).slice(0, 5);
-  if (!suggestedFixes.length) {
-    return undefined;
-  }
-
   const draftId = `case-reporter-${Date.now()}-${seed}`;
+  const recoveryStep = createReporterRecoveryDraftStep(recoveryPlan, draftId);
   const notes = [
     source.notes.trim(),
     `基于 Reporter 失败归因：${reporter.failureAnalysis.trim()}`,
+    `受控恢复来源：${formatReporterRecoveryPlan(recoveryPlan)}`,
+    suggestedFixes.length
+      ? `Reporter 原始建议（仅供人工审阅，不会自动转为浏览器动作）：\n${suggestedFixes.map((fix) => `- ${fix}`).join('\n')}`
+      : '',
   ].filter(Boolean).join('\n\n');
+
+  const copiedSteps = source.steps.map((step, index) => ({
+    ...step,
+    id: `${draftId}-source-${index + 1}`,
+  }));
 
   return {
     ...source,
@@ -1703,16 +1872,64 @@ export function createReporterFixDraft(
     name: `${source.name} · 修复草稿`,
     lastEdited: '刚刚',
     notes,
-    steps: [
-      ...source.steps.map((step, index) => ({ ...step, id: `${draftId}-source-${index + 1}` })),
-      ...suggestedFixes.map((fix, index) => ({
-        id: `${draftId}-fix-${index + 1}`,
-        type: 'ai' as const,
-        title: `修复建议 ${index + 1}`,
-        body: fix,
-      })),
-    ],
+    steps: insertTestStep(copiedSteps, recoveryStep, failedStepIndex),
   };
+}
+
+export function canCreateReporterFixDraft(
+  source: TestCaseDraft | undefined,
+  reporter: Pick<AgentReporterSummary, 'recoveryPlan'> | undefined,
+): boolean {
+  return Boolean(
+    source
+    && reporter?.recoveryPlan
+    && source.steps.some((step) => step.id === reporter.recoveryPlan?.failedStepId),
+  );
+}
+
+function createReporterRecoveryDraftStep(
+  plan: AgentRecoveryPlan,
+  draftId: string,
+): TestStepDraft {
+  const actionGuard = '不要点击、输入、选择或导航。';
+  const content: Record<AgentRecoveryPlan['strategy'], { title: string; body: string }> = {
+    waitForResponse: {
+      title: '受控恢复：等待接口响应',
+      body: `等待接口响应匹配「${plan.urlPattern}」后，再观察页面状态。${actionGuard}`,
+    },
+    waitForSelector: {
+      title: '受控恢复：等待元素就绪',
+      body: `等待 selector「${plan.selector}」可见且稳定后，再观察页面状态。${actionGuard}`,
+    },
+    waitForDataReady: {
+      title: '受控恢复：等待数据就绪',
+      body: `等待页面数据就绪后，再观察页面状态。${actionGuard}`,
+    },
+    waitForNetworkIdle: {
+      title: '受控恢复：等待网络空闲',
+      body: `等待页面网络空闲后，再观察页面状态。${actionGuard}`,
+    },
+    observe: {
+      title: '受控恢复：观察页面状态',
+      body: `观察当前页面状态并记录证据。${actionGuard}`,
+    },
+  };
+  const recovery = content[plan.strategy];
+  return {
+    id: `${draftId}-recovery-${plan.failedStepId}`,
+    type: 'ai',
+    title: recovery.title,
+    body: recovery.body,
+  };
+}
+
+export function formatReporterRecoveryPlan(plan: AgentRecoveryPlan): string {
+  const target = plan.urlPattern
+    ? `接口 ${plan.urlPattern}`
+    : plan.selector
+      ? `selector ${plan.selector}`
+      : '无可靠页面目标';
+  return `${plan.strategy}（${target}）：${plan.reason}`;
 }
 
 export function insertTestStep(steps: TestStepDraft[], step: TestStepDraft, index: number): TestStepDraft[] {

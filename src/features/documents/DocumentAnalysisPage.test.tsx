@@ -18,6 +18,17 @@ function renderPage(
   currentProject = project,
   options: {
     onAnalyzeDocument?: (documentId: string) => void;
+    onCreateAllCasesFromMatrix?: () => void;
+    onCreateAllRecordingsFromMatrix?: () => void;
+    onCreateCaseFromPath?: (documentId: string, pathId: string) => void;
+    onCreateRecordingFromPath?: (documentId: string, pathId: string) => void;
+    onUpdateCoverageTriage?: (
+      documentId: string,
+      pathId: string,
+      target: 'case' | 'recording',
+      status: 'deferred' | 'ignored' | undefined,
+      note: string,
+    ) => void;
     semanticAnalyzingDocumentId?: string | null;
     semanticAnalysisError?: string | null;
   } = {},
@@ -26,11 +37,14 @@ function renderPage(
     <I18nProvider locale={locale}>
       <DocumentAnalysisPage
         onCreateAllCasesFromDocument={vi.fn()}
+        onCreateAllCasesFromMatrix={options.onCreateAllCasesFromMatrix ?? vi.fn()}
+        onCreateAllRecordingsFromMatrix={options.onCreateAllRecordingsFromMatrix ?? vi.fn()}
         onAnalyzeDocument={options.onAnalyzeDocument ?? vi.fn()}
-        onCreateCaseFromPath={vi.fn()}
+        onCreateCaseFromPath={options.onCreateCaseFromPath ?? vi.fn()}
         onCreateDocument={vi.fn()}
-        onCreateRecordingFromPath={vi.fn()}
+        onCreateRecordingFromPath={options.onCreateRecordingFromPath ?? vi.fn()}
         onSelectDocument={vi.fn()}
+        onUpdateCoverageTriage={options.onUpdateCoverageTriage}
         onUpdateDocument={vi.fn()}
         project={currentProject}
         semanticAnalysisError={options.semanticAnalysisError ?? null}
@@ -114,7 +128,151 @@ describe('DocumentAnalysisPage', () => {
     expect(screen.getByRole('dialog')).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'PRD 覆盖矩阵' })).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: '文档' })).toBeInTheDocument();
-    expect(screen.getAllByText('待写入').length).toBeGreaterThan(0);
+    expect(screen.getByRole('button', { name: '写入用例' })).toBeInTheDocument();
+  });
+
+  it('writes an uncovered path directly from the coverage matrix', () => {
+    const onCreateCaseFromPath = vi.fn();
+    const onCreateRecordingFromPath = vi.fn();
+    const document = createPrdDocumentAsset({
+      name: 'member-management.md',
+      kind: 'markdown',
+      size: 120,
+      sourceText: '# 成员管理\n- 管理员必须能新增成员，并在列表中展示邮箱与状态。',
+    });
+    const path = document.generatedPaths[0]!;
+    renderPage(
+      'zh-CN',
+      { ...project, documents: [document] },
+      { onCreateCaseFromPath, onCreateRecordingFromPath },
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: '覆盖矩阵' }));
+    fireEvent.click(screen.getByRole('button', { name: '写入用例' }));
+    fireEvent.click(screen.getByRole('button', { name: '写入录制' }));
+
+    expect(onCreateCaseFromPath).toHaveBeenCalledWith(document.id, path.id);
+    expect(onCreateRecordingFromPath).toHaveBeenCalledWith(document.id, path.id);
+  });
+
+  it('writes every uncovered case from the coverage matrix in one action', () => {
+    const onCreateAllCasesFromMatrix = vi.fn();
+    const document = createPrdDocumentAsset({
+      name: 'member-management.md',
+      kind: 'markdown',
+      size: 120,
+      sourceText: '# 成员管理\n- 管理员必须能新增成员。\n- 管理员必须能停用成员。',
+    });
+    renderPage('zh-CN', { ...project, documents: [document] }, { onCreateAllCasesFromMatrix });
+
+    fireEvent.click(screen.getByRole('button', { name: '覆盖矩阵' }));
+    fireEvent.click(screen.getByRole('button', { name: /写入全部缺口/ }));
+
+    expect(onCreateAllCasesFromMatrix).toHaveBeenCalledOnce();
+  });
+
+  it('creates every uncovered recording from the coverage matrix in one action', () => {
+    const onCreateAllRecordingsFromMatrix = vi.fn();
+    const document = createPrdDocumentAsset({
+      name: 'member-management.md',
+      kind: 'markdown',
+      size: 120,
+      sourceText: '# 成员管理\n- 管理员必须能新增成员。\n- 管理员必须能停用成员。',
+    });
+    renderPage('zh-CN', { ...project, documents: [document] }, { onCreateAllRecordingsFromMatrix });
+
+    fireEvent.click(screen.getByRole('button', { name: '覆盖矩阵' }));
+    fireEvent.click(screen.getByRole('button', { name: /创建全部录制/ }));
+
+    expect(onCreateAllRecordingsFromMatrix).toHaveBeenCalledOnce();
+  });
+
+  it('filters the matrix to paths missing test cases', () => {
+    const document = createPrdDocumentAsset({
+      name: 'member-management.md',
+      kind: 'markdown',
+      size: 120,
+      sourceText: '# 成员管理\n- 管理员必须能新增成员。',
+    });
+    const path = document.generatedPaths[0]!;
+    const existingCase = createTestCaseFromGeneratedPath({
+      documentId: document.id,
+      environmentId: project.environments[0]!.id,
+      groupId: project.groups[0]!.id,
+      path,
+      seed: 1,
+      url: project.defaultUrl,
+    });
+    renderPage('zh-CN', { ...project, documents: [document], testCases: [existingCase] });
+
+    fireEvent.click(screen.getByRole('button', { name: '覆盖矩阵' }));
+    fireEvent.click(screen.getByRole('combobox', { name: '覆盖筛选' }));
+    fireEvent.click(screen.getByRole('option', { name: '缺少用例' }));
+
+    expect(screen.getByText('没有匹配路径')).toBeInTheDocument();
+    expect(screen.getByText('显示 0')).toBeInTheDocument();
+  });
+
+  it('requires a local rationale before deferring a PRD coverage target', () => {
+    const onUpdateCoverageTriage = vi.fn();
+    const document = createPrdDocumentAsset({
+      name: 'member-management.md',
+      kind: 'markdown',
+      size: 120,
+      sourceText: '# 成员管理\n- 管理员必须能新增成员。',
+    });
+    const path = document.generatedPaths[0]!;
+    renderPage('zh-CN', { ...project, documents: [document] }, { onUpdateCoverageTriage });
+
+    fireEvent.click(screen.getByRole('button', { name: '覆盖矩阵' }));
+    fireEvent.click(screen.getAllByRole('button', { name: '延后' })[0]!);
+    expect(screen.getByRole('heading', { name: '延后覆盖项' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '保存治理决定' })).toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText('治理说明'), { target: { value: '等待结算接口联调完成' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存治理决定' }));
+    expect(onUpdateCoverageTriage).toHaveBeenCalledWith(
+      document.id,
+      path.id,
+      'case',
+      'deferred',
+      '等待结算接口联调完成',
+    );
+  });
+
+  it('shows a resolved triage state after a governed target gains coverage', () => {
+    const document = createPrdDocumentAsset({
+      name: 'member-management.md',
+      kind: 'markdown',
+      size: 120,
+      sourceText: '# 成员管理\n- 管理员必须能新增成员。',
+    });
+    const path = document.generatedPaths[0]!;
+    const generatedCase = createTestCaseFromGeneratedPath({
+      documentId: document.id,
+      environmentId: project.environments[0]!.id,
+      groupId: project.groups[0]!.id,
+      path,
+      seed: 1,
+      url: project.defaultUrl,
+    });
+    renderPage('zh-CN', {
+      ...project,
+      documents: [document],
+      testCases: [generatedCase],
+      prdCoverageTriage: [{
+        documentId: document.id,
+        pathId: path.id,
+        target: 'case',
+        status: 'deferred',
+        note: '原先等待接口联调',
+        updatedAt: '2026-08-04T00:00:00.000Z',
+      }],
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: '覆盖矩阵' }));
+    expect(screen.getByText('已解决')).toBeInTheDocument();
+    expect(screen.getByText('待处理')).toBeInTheDocument();
   });
 
   it('shows the model provenance and does not enable source editing while review is running', () => {
@@ -188,6 +346,8 @@ describe('DocumentAnalysisPage', () => {
       <I18nProvider locale="zh-CN">
         <DocumentAnalysisPage
           onCreateAllCasesFromDocument={vi.fn()}
+          onCreateAllCasesFromMatrix={vi.fn()}
+          onCreateAllRecordingsFromMatrix={vi.fn()}
           onAnalyzeDocument={vi.fn()}
           onCreateCaseFromPath={vi.fn()}
           onCreateDocument={vi.fn()}

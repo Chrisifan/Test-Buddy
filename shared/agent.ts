@@ -192,8 +192,9 @@ export interface AgentSelectorFallbackAttempt {
 
 export interface AgentDynamicWaitAttempt {
   timeoutMs: number;
-  strategy?: 'selector' | 'dataReady' | 'networkIdle' | 'timeout';
+  strategy?: 'selector' | 'response' | 'dataReady' | 'networkIdle' | 'timeout';
   selector?: string;
+  urlPattern?: string;
   status: AgentRunStatus;
   summary: string;
   evidence: string;
@@ -248,7 +249,27 @@ export interface AgentReporterSummary {
   evidenceSummary: string;
   failureAnalysis: string;
   suggestedFixes: string[];
+  /**
+   * A deterministic, review-only recovery proposal derived from recorded run
+   * evidence. Reporter free text is intentionally not converted into actions.
+   */
+  recoveryPlan?: AgentRecoveryPlan;
   modelName: string;
+}
+
+export type AgentRecoveryPlanStrategy =
+  | 'waitForResponse'
+  | 'waitForSelector'
+  | 'waitForDataReady'
+  | 'waitForNetworkIdle'
+  | 'observe';
+
+export interface AgentRecoveryPlan {
+  failedStepId: string;
+  strategy: AgentRecoveryPlanStrategy;
+  selector?: string;
+  urlPattern?: string;
+  reason: string;
 }
 
 export interface AgentBrowserSessionSnapshot {
@@ -265,6 +286,7 @@ export interface AgentPlanRevision {
   triggerStepId: string;
   triggerStepTitle: string;
   triggerStatus: AgentRunStatus;
+  completedStepCount?: number;
   failureReason?: string;
   failureCategory?: AgentFailureCategory;
   recoveryStrategy?: AgentRecoveryStrategy;
@@ -319,6 +341,90 @@ export interface AgentRunResult {
   startedAt: string;
   endedAt?: string;
   failureReason?: string;
+}
+
+function lastFailureEvent(events: AgentRunEvent[]): AgentRunEvent | undefined {
+  return [...events].reverse().find((event) => event.type === 'agent:step-failed' && event.stepId)
+    ?? [...events].reverse().find(
+      (event) => event.stepId && event.verification && event.verification.status !== 'passed',
+    );
+}
+
+/**
+ * Builds the only recovery instruction a Reporter draft may insert. The model
+ * never chooses this action: it is derived from the persisted execution trace.
+ */
+export function deriveAgentRecoveryPlan(
+  run: Pick<AgentRunResult, 'events' | 'plan'>,
+): AgentRecoveryPlan | undefined {
+  const failedEvent = lastFailureEvent(run.events);
+  const failedStepId = failedEvent?.stepId;
+  if (!failedStepId) {
+    return undefined;
+  }
+
+  const verification = failedEvent.verification
+    ?? [...run.events]
+      .reverse()
+      .find((event) => event.stepId === failedStepId && event.verification?.status !== 'passed')
+      ?.verification;
+  const dynamicWait = [...run.events]
+    .reverse()
+    .find((event) => event.stepId === failedStepId && event.dynamicWait)
+    ?.dynamicWait;
+  const planStep = run.plan.steps.find((step) => step.id === failedStepId);
+  const reason = verification?.failureReason?.trim()
+    || verification?.summary.trim()
+    || failedEvent.message.trim()
+    || '运行未获得可继续的终态证据。';
+
+  if (dynamicWait?.strategy === 'response' && dynamicWait.urlPattern?.trim()) {
+    return {
+      failedStepId,
+      strategy: 'waitForResponse',
+      urlPattern: dynamicWait.urlPattern.trim(),
+      reason,
+    };
+  }
+  if (dynamicWait?.strategy === 'selector' && dynamicWait.selector?.trim()) {
+    return {
+      failedStepId,
+      strategy: 'waitForSelector',
+      selector: dynamicWait.selector.trim(),
+      reason,
+    };
+  }
+  if (dynamicWait?.strategy === 'dataReady') {
+    return { failedStepId, strategy: 'waitForDataReady', reason };
+  }
+  if (dynamicWait?.strategy === 'networkIdle') {
+    return { failedStepId, strategy: 'waitForNetworkIdle', reason };
+  }
+  if (
+    planStep?.selector?.trim()
+    && (verification?.failureCategory === 'selector'
+      || verification?.recoveryStrategy === 'waitForReadiness'
+      || verification?.recoveryStrategy === 'retryAfterWait')
+  ) {
+    return {
+      failedStepId,
+      strategy: 'waitForSelector',
+      selector: planStep.selector.trim(),
+      reason,
+    };
+  }
+  if (
+    verification?.failureCategory === 'network'
+    || verification?.failureCategory === 'timeout'
+    || verification?.recoveryStrategy === 'waitForReadiness'
+    || verification?.recoveryStrategy === 'retryAfterWait'
+  ) {
+    return { failedStepId, strategy: 'waitForNetworkIdle', reason };
+  }
+
+  // No reliable selector or response target exists. Observation is the only
+  // safe draft step because it cannot mutate browser state.
+  return { failedStepId, strategy: 'observe', reason };
 }
 
 export interface AgentRunRequest {

@@ -10,47 +10,29 @@ import {
   type MidsceneConfig,
   type ProjectDraft,
   type PrdSemanticAnalysisRequest,
-  type RecordingCapturedEvent,
   type RuntimeInfo,
-  type RuntimeProfile,
-  type RunEventPayload,
   type RunRecordingRequest,
   type RunTestCaseRequest,
   type RunWorkflowRequest,
   type SaveCredentialRequest,
   type SessionStartRequest,
   type StudioState,
-  getExclusiveRecordingReplayId,
-  isAgentRunnableTestCase,
-  testCaseToWorkflow,
 } from '../shared/studio.js';
-import { ArtifactManager } from './runtime/artifact-manager.js';
-import { OpenAICompatibleAgentPlanner } from './runtime/agent-planner.js';
-import { OpenAICompatibleAgentReporter } from './runtime/agent-reporter.js';
-import { OpenAICompatibleAgentVerifier } from './runtime/agent-verifier.js';
-import { BrowserRuntime } from './runtime/browser-runtime.js';
 import { CredentialStore } from './runtime/credential-store.js';
-import { MidsceneSemanticActionRuntime } from './runtime/semantic-action-runtime.js';
 import { testMidsceneConnection } from './runtime/midscene-connection.js';
 import { electronNativeImageAdapter } from './runtime/electron-native-image-adapter.js';
-import { RecordingRunner } from './runtime/recording-runner.js';
-import { TestRunner } from './runtime/test-runner.js';
-import { PixelVisualDiffService } from './runtime/visual-diff.js';
 import { PrdSemanticAnalysisRuntime } from './runtime/prd-semantic-analyzer.js';
+import { appendRunToStudioState } from './runtime/run-history.js';
+import { createRuntimeBundle, type RuntimeBundle } from './runtime/runtime-bundle.js';
 import { StudioStore } from './studioStore.js';
-import { StudioRuntime } from './studioRuntime.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 let mainWindow: BrowserWindow | null = null;
 let studioStore: StudioStore | null = null;
-let studioRuntime: StudioRuntime | null = null;
 let credentialStore: CredentialStore | null = null;
-let browserRuntime: BrowserRuntime | null = null;
-let testRunner: TestRunner | null = null;
-let recordingRunner: RecordingRunner | null = null;
-let artifactManager: ArtifactManager | null = null;
+let runtimeBundle: RuntimeBundle | null = null;
 let prdSemanticAnalysisRuntime: PrdSemanticAnalysisRuntime | null = null;
 
 function loadApplicationIcon() {
@@ -74,36 +56,12 @@ function getCredentialStoreOrThrow(): CredentialStore {
   return credentialStore;
 }
 
-function getBrowserRuntimeOrThrow(): BrowserRuntime {
-  if (!browserRuntime) {
+function getRuntimeBundleOrThrow(): RuntimeBundle {
+  if (!runtimeBundle) {
     throw new Error('Browser runtime 尚未初始化。');
   }
 
-  return browserRuntime;
-}
-
-function getTestRunnerOrThrow(): TestRunner {
-  if (!testRunner) {
-    throw new Error('Test runner 尚未初始化。');
-  }
-
-  return testRunner;
-}
-
-function getRecordingRunnerOrThrow(): RecordingRunner {
-  if (!recordingRunner) {
-    throw new Error('Recording runner 尚未初始化。');
-  }
-
-  return recordingRunner;
-}
-
-function getArtifactManagerOrThrow(): ArtifactManager {
-  if (!artifactManager) {
-    throw new Error('Artifact manager 尚未初始化。');
-  }
-
-  return artifactManager;
+  return runtimeBundle;
 }
 
 function getPrdSemanticAnalysisRuntimeOrThrow(): PrdSemanticAnalysisRuntime {
@@ -112,16 +70,6 @@ function getPrdSemanticAnalysisRuntimeOrThrow(): PrdSemanticAnalysisRuntime {
   }
 
   return prdSemanticAnalysisRuntime;
-}
-
-function resolveTestCaseRuntimeProfile(request: RunTestCaseRequest): RuntimeProfile {
-  return request.runtimeProfile ?? {
-    browser: request.environment.browser,
-    baseUrl: request.environment.url,
-    viewport: request.environment.viewport,
-    locale: request.environment.locale,
-    headless: request.environment.headless,
-  };
 }
 
 function createWindow(): BrowserWindow {
@@ -151,12 +99,8 @@ function createWindow(): BrowserWindow {
   return window;
 }
 
-function getRuntimeOrThrow(): StudioRuntime {
-  if (!studioRuntime) {
-    throw new Error('Studio runtime 尚未初始化。');
-  }
-
-  return studioRuntime;
+function getRuntimeOrThrow() {
+  return getRuntimeBundleOrThrow().studioRuntime;
 }
 
 function registerIpcHandlers(): void {
@@ -199,89 +143,38 @@ function registerIpcHandlers(): void {
     testMidsceneConnection(config),
   );
   ipcMain.handle('runtime:start-browser-session', async (_event, request: BrowserSessionRequest) =>
-    getBrowserRuntimeOrThrow().start(request),
+    getRuntimeBundleOrThrow().browserRuntime.start(request),
   );
   ipcMain.handle('runtime:navigate-browser-session', async (_event, request: BrowserNavigateRequest) =>
-    getBrowserRuntimeOrThrow().navigate(request),
+    getRuntimeBundleOrThrow().browserRuntime.navigate(request),
   );
   ipcMain.handle('runtime:capture-browser-snapshot', async () =>
-    getBrowserRuntimeOrThrow().capture(),
+    getRuntimeBundleOrThrow().browserRuntime.capture(),
   );
   ipcMain.handle('runtime:run-test-case', async (_event, request: RunTestCaseRequest) => {
-    const recordingId = getExclusiveRecordingReplayId(request.testCase);
-    const documentId = request.testCase.prdPath?.documentId;
-    const recording = recordingId
-      ? request.project.recordings.find((item) => item.id === recordingId)
-      : undefined;
-    const result = recording
-      ? await getRecordingRunnerOrThrow().run({
-          project: request.project,
-          environment: request.environment,
-          recording,
-          testCaseId: request.testCase.id,
-          ...(documentId ? { documentId } : {}),
-        })
-      : isAgentRunnableTestCase(request.testCase)
-      ? await getRuntimeOrThrow().runWorkflow({
-          workflow: testCaseToWorkflow(request.testCase),
-          targetEnvironment: request.environment.name,
-          runtimeProfile: resolveTestCaseRuntimeProfile(request),
-          ...(request.midsceneConfig ? { midsceneConfig: request.midsceneConfig } : {}),
-          ...(request.agentModelConfig ? { agentModelConfig: request.agentModelConfig } : {}),
-          ...(request.browserSession ? { browserSession: request.browserSession } : {}),
-          project: request.project,
-          environment: request.environment,
-          ...(documentId ? { documentId } : {}),
-        })
-      : await getTestRunnerOrThrow().run(request);
+    const result = await getRuntimeBundleOrThrow().runTestCase(request);
     const state = await getStoreOrThrow().load();
-    await getStoreOrThrow().save({
-      ...state,
-      runDetails: [result.detail, ...state.runDetails.filter((run) => run.id !== result.runId)],
-      recentRuns: [
-        {
-          id: result.detail.id,
-          name: result.detail.title,
-          status: result.detail.status,
-          duration: result.detail.duration,
-          summary: result.detail.summary,
-          projectId: result.detail.projectId,
-          testCaseId: result.detail.testCaseId,
-          ...(result.detail.documentId ? { documentId: result.detail.documentId } : {}),
-          environmentId: result.detail.environmentId,
-          environmentName: request.environment.name,
-          startedAt: result.detail.startedAt,
-        },
-        ...state.recentRuns.filter((run) => run.id !== result.detail.id).slice(0, 9),
-      ],
-      browserSession: getBrowserRuntimeOrThrow().getState(),
-    });
+    await getStoreOrThrow().save(
+      appendRunToStudioState(
+        state,
+        result,
+        request.environment,
+        getRuntimeBundleOrThrow().browserRuntime.getState(),
+      ),
+    );
     return result;
   });
   ipcMain.handle('runtime:run-recording', async (_event, request: RunRecordingRequest) => {
-    const result = await getRecordingRunnerOrThrow().run(request);
+    const result = await getRuntimeBundleOrThrow().recordingRunner.run(request);
     const state = await getStoreOrThrow().load();
-    await getStoreOrThrow().save({
-      ...state,
-      runDetails: [result.detail, ...state.runDetails.filter((run) => run.id !== result.runId)],
-      recentRuns: [
-        {
-          id: result.detail.id,
-          name: result.detail.title,
-          status: result.detail.status,
-          duration: result.detail.duration,
-          summary: result.detail.summary,
-          projectId: result.detail.projectId,
-          testCaseId: result.detail.testCaseId,
-          ...(result.detail.documentId ? { documentId: result.detail.documentId } : {}),
-          environmentId: result.detail.environmentId,
-          environmentName: request.environment.name,
-          startedAt: result.detail.startedAt,
-        },
-        ...state.recentRuns.filter((run) => run.id !== result.detail.id).slice(0, 9),
-      ],
-      browserSession: getBrowserRuntimeOrThrow().getState(),
-    });
+    await getStoreOrThrow().save(
+      appendRunToStudioState(
+        state,
+        result,
+        request.environment,
+        getRuntimeBundleOrThrow().browserRuntime.getState(),
+      ),
+    );
     return result;
   });
   ipcMain.handle('runtime:load-run-detail', async (_event, runId: string) => {
@@ -291,7 +184,7 @@ function registerIpcHandlers(): void {
   ipcMain.handle('runtime:open-artifact', async (_event, artifactPath: string) => {
     if (
       typeof artifactPath !== 'string' ||
-      !getArtifactManagerOrThrow().isManagedArtifactPath(artifactPath)
+      !getRuntimeBundleOrThrow().artifactManager.isManagedArtifactPath(artifactPath)
     ) {
       throw new Error('只能打开应用生成的证据文件。');
     }
@@ -304,7 +197,7 @@ function registerIpcHandlers(): void {
   ipcMain.handle('runtime:export-artifact', async (_event, artifactPath: string): Promise<boolean> => {
     if (
       typeof artifactPath !== 'string' ||
-      !getArtifactManagerOrThrow().isManagedArtifactPath(artifactPath)
+      !getRuntimeBundleOrThrow().artifactManager.isManagedArtifactPath(artifactPath)
     ) {
       throw new Error('只能导出应用生成的证据文件。');
     }
@@ -317,7 +210,7 @@ function registerIpcHandlers(): void {
       return false;
     }
 
-    await getArtifactManagerOrThrow().exportArtifact(artifactPath, result.filePath);
+    await getRuntimeBundleOrThrow().artifactManager.exportArtifact(artifactPath, result.filePath);
     return true;
   });
   ipcMain.handle('runtime:attach-manual-evidence', async (event) => {
@@ -333,7 +226,7 @@ function registerIpcHandlers(): void {
       return null;
     }
 
-    return getArtifactManagerOrThrow().importManualEvidence(result.filePaths[0]);
+    return getRuntimeBundleOrThrow().artifactManager.importManualEvidence(result.filePaths[0]);
   });
   ipcMain.handle('runtime:start-session', async (_event, request: SessionStartRequest) =>
     getRuntimeOrThrow().startSession(request),
@@ -357,52 +250,21 @@ app.whenReady().then(async () => {
   await studioStore.ensureReady();
   credentialStore = new CredentialStore(rootDir);
   await credentialStore.ensureReady();
-  artifactManager = new ArtifactManager(rootDir);
-  await artifactManager.ensureReady();
-  browserRuntime = new BrowserRuntime(rootDir, artifactManager, (event: RecordingCapturedEvent) => {
-    for (const window of BrowserWindow.getAllWindows()) {
-      window.webContents.send('runtime:recording-event', event);
-    }
-  });
-  const semanticActionRuntime = new MidsceneSemanticActionRuntime(browserRuntime, undefined, {
-    reportDirectory: path.join(rootDir, 'studio-data', 'artifacts'),
-  });
-  studioRuntime = new StudioRuntime(
-    (event: RunEventPayload) => {
+  runtimeBundle = createRuntimeBundle({
+    rootDir,
+    visualDiffImageAdapter: electronNativeImageAdapter,
+    emitRunEvent: (event) => {
       for (const window of BrowserWindow.getAllWindows()) {
         window.webContents.send('runtime:run-event', event);
       }
     },
-    browserRuntime,
-    semanticActionRuntime,
-    new OpenAICompatibleAgentPlanner(),
-    new OpenAICompatibleAgentVerifier(),
-    new OpenAICompatibleAgentReporter(),
-    {
-      writeReporterReport: async ({ runId, markdown }) => {
-        const reportArtifacts = await getArtifactManagerOrThrow().createReporterReport(
-          runId,
-          'Reporter 失败分析',
-          markdown,
-        );
-        return {
-          markdownPath: reportArtifacts.markdown.path,
-          htmlPath: reportArtifacts.html.path,
-        };
-      },
+    emitRecordingEvent: (event) => {
+      for (const window of BrowserWindow.getAllWindows()) {
+        window.webContents.send('runtime:recording-event', event);
+      }
     },
-  );
-  const emitRunEvent = (event: RunEventPayload) => {
-    for (const window of BrowserWindow.getAllWindows()) {
-      window.webContents.send('runtime:run-event', event);
-    }
-  };
-  recordingRunner = new RecordingRunner(
-    browserRuntime,
-    emitRunEvent,
-    new PixelVisualDiffService(electronNativeImageAdapter),
-  );
-  testRunner = new TestRunner(artifactManager, browserRuntime, emitRunEvent, recordingRunner, getRuntimeOrThrow());
+  });
+  await runtimeBundle.ensureReady();
   registerIpcHandlers();
   mainWindow = createWindow();
 

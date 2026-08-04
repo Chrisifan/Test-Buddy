@@ -248,6 +248,92 @@ describe('BrowserRuntime page access', () => {
     ]);
   });
 
+  it('captures third-party grid pagination and a single chart library tooltip without custom data markers', async () => {
+    document.body.innerHTML = `
+      <main>
+        <section>
+          <div class="ag-root-wrapper">
+            <div role="grid" aria-label="订单列表" aria-rowcount="36">
+              <div role="row">
+                <span role="columnheader">订单号</span>
+                <span role="columnheader" aria-sort="descending">金额</span>
+              </div>
+              <div role="row"><span role="gridcell">ORD-001</span><span role="gridcell">120</span></div>
+              <div role="row"><span role="gridcell">ORD-002</span><span role="gridcell">80</span></div>
+            </div>
+            <div class="ag-paging-panel"><span class="ag-paging-row-summary-panel">1 to 10 of 36</span></div>
+          </div>
+        </section>
+        <section aria-label="销售趋势">
+          <h2>销售趋势</h2>
+          <div class="echarts-for-react" id="daily-sales">
+            <canvas width="640" height="240"></canvas>
+            <div class="echarts-legend">
+              <span class="echarts-legend-item">成交额</span>
+              <span class="echarts-legend-item">订单数</span>
+            </div>
+          </div>
+        </section>
+        <div class="echarts-tooltip"><div>二月</div><div>成交额：180</div></div>
+        <svg id="decorative-icon" width="20" height="20"><path d="M0 0h20v20H0z" /></svg>
+      </main>
+    `;
+    const runtime = new BrowserRuntime('/tmp/playtest-browser-runtime-test', new ArtifactManager('/tmp'));
+    const page = { evaluate: async (script: () => unknown) => script() };
+    (runtime as unknown as { page: typeof page }).page = page;
+
+    const observation = await runtime.captureObservation();
+
+    expect(observation.tables).toEqual([
+      {
+        index: 1,
+        caption: '订单列表',
+        rowCount: 2,
+        columnCount: 2,
+        headers: ['订单号', '金额'],
+        pagination: { currentPage: 1, totalPages: 4, totalItems: 36, pageSize: 10 },
+        sortStates: [{ column: '金额', direction: 'descending' }],
+        sampleRows: [
+          ['ORD-001', '120'],
+          ['ORD-002', '80'],
+        ],
+      },
+    ]);
+    expect(observation.charts).toEqual([
+      expect.objectContaining({
+        index: 1,
+        title: '销售趋势',
+        kind: 'canvas',
+        width: 640,
+        height: 240,
+        rendered: true,
+        legends: ['成交额', '订单数'],
+        tooltip: '二月成交额：180',
+      }),
+    ]);
+    expect(observation.domSummary).toContain('1 个表格');
+    expect(observation.domSummary).toContain('1 个图表');
+  });
+
+  it('does not infer a page size from a terminal third-party grid range', async () => {
+    document.body.innerHTML = `
+      <section>
+        <div role="grid" aria-label="订单列表" aria-rowcount="36">
+          <div role="row"><span role="columnheader">订单号</span></div>
+          <div role="row"><span role="gridcell">ORD-031</span></div>
+        </div>
+        <div class="ag-paging-panel">31 to 36 of 36</div>
+      </section>
+    `;
+    const runtime = new BrowserRuntime('/tmp/playtest-browser-runtime-test', new ArtifactManager('/tmp'));
+    const page = { evaluate: async (script: () => unknown) => script() };
+    (runtime as unknown as { page: typeof page }).page = page;
+
+    const observation = await runtime.captureObservation();
+
+    expect(observation.tables?.[0]?.pagination).toEqual({ totalItems: 36 });
+  });
+
   it('captures explicitly marked custom div data grids without relying on class names', async () => {
     document.body.innerHTML = `
       <section>

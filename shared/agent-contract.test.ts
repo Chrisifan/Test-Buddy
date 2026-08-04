@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { createAgentIntent, isTerminalAgentEvent, type AgentRunEvent } from './agent.js';
+import { createAgentIntent, deriveAgentRecoveryPlan, isTerminalAgentEvent, type AgentRunEvent } from './agent.js';
 import { createPlannedAgentRun, createStubAgentRun, createTestCaseAgentRun, createWorkflowAgentRun } from './agentStub.js';
 import { createRecordingAgentRun } from './recordingAgent.js';
 
@@ -39,6 +39,70 @@ describe('agent contract helpers', () => {
     expect(isTerminalAgentEvent(baseEvent)).toBe(false);
     expect(isTerminalAgentEvent({ ...baseEvent, type: 'agent:step-failed', status: 'failed' })).toBe(true);
     expect(isTerminalAgentEvent({ ...baseEvent, type: 'agent:run-finished', status: 'passed' })).toBe(true);
+  });
+
+  it('derives only wait or observe recovery plans from recorded evidence', () => {
+    const createFailedRun = () => {
+      const run = createStubAgentRun({
+        mode: 'aiAssert',
+        prompt: '验证订单列表刷新',
+        runtimeDescription: 'chromium / desktop',
+        targetEnvironment: 'Staging',
+        verificationStatus: 'failed',
+        verificationFailureReason: '订单列表尚未刷新。',
+      });
+      const assertionEvent = run.events.find((event) => event.type === 'agent:assertion-result')!;
+      assertionEvent.verification = {
+        ...assertionEvent.verification!,
+        failureCategory: 'network',
+        recoveryStrategy: 'waitForReadiness',
+      };
+      return { run, stepId: assertionEvent.stepId! };
+    };
+
+    const response = createFailedRun();
+    response.run.events.push({
+      id: 'wait-response', runId: response.run.runId, type: 'agent:dynamic-wait', stepId: response.stepId,
+      message: '等待订单接口', status: 'failed',
+      dynamicWait: { timeoutMs: 1_500, strategy: 'response', urlPattern: '/api/orders', status: 'failed', summary: '超时', evidence: 'timeout' },
+      createdAt: new Date().toISOString(),
+    });
+    expect(deriveAgentRecoveryPlan(response.run)).toMatchObject({
+      failedStepId: response.stepId, strategy: 'waitForResponse', urlPattern: '/api/orders',
+    });
+
+    const selector = createFailedRun();
+    selector.run.events.push({
+      id: 'wait-selector', runId: selector.run.runId, type: 'agent:dynamic-wait', stepId: selector.stepId,
+      message: '等待刷新状态', status: 'failed',
+      dynamicWait: { timeoutMs: 1_000, strategy: 'selector', selector: '#orders-ready', status: 'failed', summary: '超时', evidence: 'timeout' },
+      createdAt: new Date().toISOString(),
+    });
+    expect(deriveAgentRecoveryPlan(selector.run)).toMatchObject({ strategy: 'waitForSelector', selector: '#orders-ready' });
+
+    const dataReady = createFailedRun();
+    dataReady.run.events.push({
+      id: 'wait-data', runId: dataReady.run.runId, type: 'agent:dynamic-wait', stepId: dataReady.stepId,
+      message: '等待数据', status: 'failed',
+      dynamicWait: { timeoutMs: 1_500, strategy: 'dataReady', status: 'failed', summary: '超时', evidence: 'timeout' },
+      createdAt: new Date().toISOString(),
+    });
+    expect(deriveAgentRecoveryPlan(dataReady.run)?.strategy).toBe('waitForDataReady');
+
+    const networkIdle = createFailedRun();
+    networkIdle.run.events.push({
+      id: 'wait-network', runId: networkIdle.run.runId, type: 'agent:dynamic-wait', stepId: networkIdle.stepId,
+      message: '等待网络空闲', status: 'failed',
+      dynamicWait: { timeoutMs: 1_500, strategy: 'networkIdle', status: 'failed', summary: '超时', evidence: 'timeout' },
+      createdAt: new Date().toISOString(),
+    });
+    expect(deriveAgentRecoveryPlan(networkIdle.run)?.strategy).toBe('waitForNetworkIdle');
+
+    const noReliableTarget = createFailedRun();
+    const verification = noReliableTarget.run.events.find((event) => event.type === 'agent:assertion-result')!.verification!;
+    verification.failureCategory = 'assertion';
+    verification.recoveryStrategy = 'stopAndReport';
+    expect(deriveAgentRecoveryPlan(noReliableTarget.run)?.strategy).toBe('observe');
   });
 
   it('creates a structured stub run for natural language agent execution', () => {
