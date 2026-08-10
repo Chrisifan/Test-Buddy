@@ -6,6 +6,7 @@ import {
   type AgentPlanRevision,
   type AgentReporterSummary,
   type AgentArtifact,
+  type AgentAssertionReference,
   type AgentDynamicWaitAttempt,
   type AgentExecutionMetrics,
   type AgentFailureCategory,
@@ -154,6 +155,8 @@ export interface PlannedAgentRunRequest {
   plannedPlan: AgentPlanDraft;
   planner: AgentPlanProvenance;
   executions: PlannedAgentStepExecution[];
+  /** Present only for a user-confirmed, explicit Case assertion. */
+  assertion?: AgentAssertionReference;
   replanningHistory?: PlannedAgentReplanningRecord[];
   planningMetrics?: AgentExecutionMetrics;
   executionMetrics?: AgentExecutionMetrics;
@@ -715,6 +718,7 @@ export function createPlannedAgentRun(request: PlannedAgentRunRequest): AgentRun
           status: execution.status,
           summary: execution.summary,
           evidence: execution.evidence,
+          ...(request.assertion && step.action === 'assert' ? { assertion: request.assertion } : {}),
           ...(execution.failureReason ? { failureReason: execution.failureReason } : {}),
           ...(execution.failureCategory ? { failureCategory: execution.failureCategory } : {}),
           ...(execution.recoveryStrategy ? { recoveryStrategy: execution.recoveryStrategy } : {}),

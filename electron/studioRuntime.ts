@@ -15,13 +15,17 @@ import {
   type BrowserWaitForSelectorRequest,
   type ChatCommandRequest,
   type ChatCommandResponse,
+  type ProjectDraft,
+  type ProjectEnvironment,
   type RunEventPayload,
   type RunDetail,
   type RunArtifact,
   type RunWorkflowRequest,
   type RunWorkflowResponse,
   type RuntimeProfile,
+  type ExplicitTestAssertion,
   type SessionStartRequest,
+  type TestStepDraft,
   defaultMidsceneConfig,
   isMidsceneConfigured,
   resolveAgentModelAssignments,
@@ -77,6 +81,7 @@ import {
 } from './runtime/run-cancellation.js';
 
 interface BrowserObserver {
+  hasRealPage?: () => boolean;
   start: (request: BrowserSessionRequest) => Promise<BrowserSessionState>;
   navigate: (request: BrowserNavigateRequest) => Promise<BrowserSessionState>;
   click: (request: BrowserClickRequest) => Promise<BrowserSessionState>;
@@ -235,6 +240,32 @@ interface ReporterReportWriter {
   }>;
 }
 
+export interface RunDeterministicStepRequest {
+  /** Used only by the desktop runner to compose child-run evidence. */
+  runId?: string;
+  /** Parent case run. Child runs do not emit independent renderer events. */
+  parentRunId?: string;
+  /** Internal-only cancellation signal. It is never sent through renderer IPC. */
+  cancellationSignal?: AbortSignal;
+  sourceStep: TestStepDraft;
+  plannedStep: AgentPlanStepDraft;
+  assertion?: ExplicitTestAssertion;
+  testCaseId: string;
+  targetEnvironment: string;
+  runtimeProfile: RuntimeProfile;
+  project?: ProjectDraft;
+  environment?: ProjectEnvironment;
+  documentId?: string;
+  browserSession?: BrowserSessionState;
+}
+
+export interface RunDeterministicStepResponse {
+  runId: string;
+  title: string;
+  detail: RunDetail;
+  agentRun: AgentRunResult;
+}
+
 function nowLabel(): string {
   const now = new Date();
   return `${now.getHours().toString().padStart(2, '0')}:${now
@@ -301,6 +332,66 @@ function createWorkflowRunDetail(
           : {}),
       };
     }),
+    artifacts: agentRun.artifacts,
+    agentRun,
+    ...(agentRun.failureReason ? { failureReason: agentRun.failureReason } : {}),
+  };
+}
+
+function isSupportedDeterministicPlanStep(step: AgentPlanStepDraft, assertion?: ExplicitTestAssertion): boolean {
+  if (step.action === 'assert') {
+    return Boolean(assertion);
+  }
+  if (step.action === 'navigate') {
+    return Boolean(step.url?.trim());
+  }
+  if (step.action === 'click' || step.action === 'scroll') {
+    return Boolean(step.selector?.trim());
+  }
+  return step.action === 'wait' && (Boolean(step.selector?.trim()) || Boolean(step.timeoutMs && step.timeoutMs > 0));
+}
+
+function createDeterministicRunDetail(
+  request: RunDeterministicStepRequest,
+  agentRun: AgentRunResult,
+): RunDetail {
+  const elapsedMs = Math.max(0, Date.parse(agentRun.endedAt ?? agentRun.startedAt) - Date.parse(agentRun.startedAt));
+  const plannedStep = agentRun.plan.steps.find((step) => step.sourceStepType === request.sourceStep.type);
+  const sourceStepId = plannedStep?.id;
+  const failedEvent = agentRun.events.find(
+    (event) => event.type === 'agent:step-failed' && event.stepId === sourceStepId,
+  );
+  const assertionEvent = agentRun.events.find(
+    (event) => event.type === 'agent:assertion-result' && event.stepId === sourceStepId,
+  );
+  const observationEvent = agentRun.events.find(
+    (event) => event.type === 'agent:observation-created' && event.stepId === sourceStepId,
+  );
+  return {
+    id: agentRun.runId,
+    projectId: request.project?.id ?? '',
+    testCaseId: request.testCaseId,
+    ...(request.documentId ? { documentId: request.documentId } : {}),
+    environmentId: request.environment?.id ?? request.targetEnvironment,
+    title: request.sourceStep.title,
+    status: agentRun.status,
+    startedAt: agentRun.startedAt,
+    ...(agentRun.endedAt ? { endedAt: agentRun.endedAt } : {}),
+    duration: formatDuration(agentRun.metrics?.durationMs ?? elapsedMs),
+    summary: agentRun.summary,
+    logs: agentRun.events.map((event) => `[${nowLabel()}] ${event.type}: ${event.message}`),
+    steps: [
+      {
+        id: `${agentRun.runId}-step-0`,
+        stepId: request.sourceStep.id,
+        title: request.sourceStep.title,
+        status: failedEvent ? 'failed' : assertionEvent?.status ?? agentRun.status,
+        message: failedEvent?.message ?? assertionEvent?.message ?? agentRun.summary,
+        ...(observationEvent?.observation?.screenshotPath
+          ? { screenshotPath: observationEvent.observation.screenshotPath }
+          : {}),
+      },
+    ],
     artifacts: agentRun.artifacts,
     agentRun,
     ...(agentRun.failureReason ? { failureReason: agentRun.failureReason } : {}),
@@ -941,6 +1032,31 @@ function evaluateExplicitAssertion(
     evidence,
     failureReason: `${targetLabel}不包含「${assertion.expected}」。`,
   };
+}
+
+function toExplicitAssertionIntent(assertion: ExplicitTestAssertion): ExplicitAssertionIntent {
+  switch (assertion.kind) {
+    case 'urlContains':
+      return { kind: 'urlContains', expected: assertion.expected, label: '当前 URL 包含' };
+    case 'titleContains':
+      return { kind: 'titleContains', expected: assertion.expected, label: '页面标题包含' };
+    case 'pageContains':
+      return { kind: 'pageContains', expected: assertion.expected, label: '页面文本包含' };
+    case 'locatorVisible':
+      return {
+        kind: 'domSelectorVisible',
+        expected: assertion.locator.selector,
+        label: '元素可见',
+        domSelector: assertion.locator.selector,
+      };
+    case 'locatorTextContains':
+      return {
+        kind: 'domSelectorTextContains',
+        expected: assertion.expected,
+        label: '元素文本包含',
+        domSelector: assertion.locator.selector,
+      };
+  }
 }
 
 function normalizeSortDirection(value: string): 'ascending' | 'descending' | undefined {
@@ -3619,6 +3735,156 @@ export class StudioRuntime {
         throw error;
       }
       return undefined;
+    }
+  }
+
+  private async prepareDeterministicAssertion(
+    request: RunDeterministicStepRequest & { assertion: ExplicitTestAssertion },
+  ): Promise<BrowserPreparationResult> {
+    const assertion = toExplicitAssertionIntent(request.assertion);
+    const session = await awaitWithRunCancellation(this.browserObserver!.capture(), request.cancellationSignal);
+    throwIfRunCancelled(request.cancellationSignal);
+    const pageText =
+      assertion.kind === 'pageContains' && this.browserObserver?.getPageText
+        ? await awaitWithRunCancellation(this.browserObserver.getPageText(), request.cancellationSignal)
+        : undefined;
+    const domInspection =
+      (assertion.kind === 'domSelectorVisible' || assertion.kind === 'domSelectorTextContains') &&
+      assertion.domSelector &&
+      this.browserObserver?.inspectDom
+        ? await awaitWithRunCancellation(this.browserObserver.inspectDom(assertion.domSelector), request.cancellationSignal)
+        : undefined;
+    const observation = await this.captureBrowserObservation(request.cancellationSignal);
+    const assertionEvaluation = evaluateExplicitAssertion(assertion, session, pageText, observation, domInspection);
+
+    return {
+      session,
+      message: `已复用浏览器会话执行已确认的显式断言；${assertionEvaluation.summary}`,
+      assertion,
+      assertionEvaluation,
+      ...(observation ? { observation } : {}),
+    };
+  }
+
+  async runDeterministicStep(request: RunDeterministicStepRequest): Promise<RunDeterministicStepResponse> {
+    const traceScopeId = request.runId ?? `agent-run-deterministic-${Date.now()}`;
+    let ownsTraceScope = false;
+    const createRun = (executions: PlannedAgentStepExecution[]): AgentRunResult =>
+      createPlannedAgentRun({
+        mode: request.assertion ? 'aiAssert' : 'ai',
+        prompt: request.sourceStep.body,
+        runtimeDescription: describeRuntimeProfile(request.runtimeProfile),
+        targetEnvironment: request.targetEnvironment,
+        targetUrl:
+          request.plannedStep.action === 'navigate' && request.plannedStep.url
+            ? request.plannedStep.url
+            : request.runtimeProfile.baseUrl,
+        plannedPlan: {
+          title: request.sourceStep.title,
+          summary: request.assertion ? '执行用户已确认的显式测试断言。' : '执行用户已确认的确定性测试步骤。',
+          steps: [request.plannedStep],
+          risks: ['仅执行已确认的结构化动作或断言；不会调用模型、重试、selector fallback 或重规划。'],
+        },
+        planner: {
+          source: 'rule',
+          fallbackReason: '用户已确认的结构化测试步骤。',
+        },
+        executions,
+        ...(request.assertion
+          ? {
+              assertion: {
+                id: request.assertion.id,
+                version: request.assertion.version,
+                kind: request.assertion.kind,
+              },
+            }
+          : {}),
+        ...(request.project ? { projectId: request.project.id } : {}),
+        ...(request.environment ? { environmentId: request.environment.id } : {}),
+        testCaseId: request.testCaseId,
+        ...(request.documentId ? { documentId: request.documentId } : {}),
+      });
+    const complete = async (agentRun: AgentRunResult): Promise<RunDeterministicStepResponse> => {
+      const tracedRun = await this.finishTraceScope(traceScopeId, ownsTraceScope, agentRun);
+      return {
+        runId: tracedRun.runId,
+        title: request.sourceStep.title,
+        detail: createDeterministicRunDetail(request, tracedRun),
+        agentRun: tracedRun,
+      };
+    };
+    const neutralExecution = (summary: string, evidence: string): PlannedAgentStepExecution => ({
+      stepIndex: 0,
+      status: 'neutral',
+      summary,
+      evidence,
+      browserActionMessage: summary,
+    });
+
+    try {
+      ownsTraceScope = await this.beginTraceScope(traceScopeId);
+      throwIfRunCancelled(request.cancellationSignal);
+
+      if (!isSupportedDeterministicPlanStep(request.plannedStep, request.assertion)) {
+        return complete(
+          createRun([
+            neutralExecution(
+              '已确认的结构化动作不在当前确定性执行范围内。',
+              `${request.plannedStep.action === 'assert' ? '断言' : '动作'}「${request.plannedStep.action}」不支持确定性执行，未调用浏览器或模型。`,
+            ),
+          ]),
+        );
+      }
+
+      if (this.browserObserver?.hasRealPage?.() !== true) {
+        return complete(
+          createRun([
+            neutralExecution(
+              '未检测到真实 Playwright 页面，确定性步骤保持等待态。',
+              'BrowserRuntime 未提供真实页面能力，未派发浏览器动作。',
+            ),
+          ]),
+        );
+      }
+
+      const preparation = request.assertion
+        ? await this.prepareDeterministicAssertion(request as RunDeterministicStepRequest & { assertion: ExplicitTestAssertion })
+        : await this.prepareBrowserForAgent(
+            {
+              mode: 'ai',
+              ...(request.cancellationSignal ? { cancellationSignal: request.cancellationSignal } : {}),
+              prompt: request.sourceStep.body,
+              targetEnvironment: request.targetEnvironment,
+              deepThink: false,
+              deepLocate: false,
+              runtimeProfile: request.runtimeProfile,
+              ...(request.browserSession ? { browserSession: request.browserSession } : {}),
+              ...(request.project ? { project: request.project, projectId: request.project.id } : {}),
+              ...(request.environment ? { environment: request.environment } : {}),
+              ...(request.environment ? { environmentId: request.environment.id } : {}),
+              testCaseId: request.testCaseId,
+              ...(request.documentId ? { documentId: request.documentId } : {}),
+            },
+            request.plannedStep,
+          );
+      throwIfRunCancelled(request.cancellationSignal);
+      return complete(createRun([toPlannedStepExecution(request.plannedStep, 0, preparation)]));
+    } catch (error) {
+      if (isRunCancelled(error)) {
+        const cancellation = createUserRunCancellation();
+        const cancelledRun = markAgentRunCancelled(await this.finishTraceScope(traceScopeId, ownsTraceScope, createRun([])), cancellation);
+        return {
+          runId: cancelledRun.runId,
+          title: request.sourceStep.title,
+          detail: {
+            ...createDeterministicRunDetail(request, cancelledRun),
+            cancellation,
+          },
+          agentRun: cancelledRun,
+        };
+      }
+      await this.finishTraceScope(traceScopeId, ownsTraceScope, createRun([]));
+      throw error;
     }
   }
 

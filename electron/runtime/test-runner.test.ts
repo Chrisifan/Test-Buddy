@@ -10,6 +10,7 @@ import type {
   TestCaseDraft,
 } from '../../shared/studio.js';
 import { createEmptyProject } from '../../shared/studio.js';
+import { createStubAgentRun } from '../../shared/agentStub.js';
 import type { RecordingReplayResult } from './browser-runtime.js';
 import { TestRunner } from './test-runner.js';
 
@@ -274,6 +275,290 @@ describe('TestRunner recording replay', () => {
     expect(response.detail.steps).toEqual(
       expect.arrayContaining([expect.objectContaining({ stepId: 'case-step-assert', status: 'passed' })]),
     );
+  });
+
+  it('runs confirmed deterministic steps before replay and legacy AI steps, then preserves parent evidence', async () => {
+    const project = createProjectWithRecording();
+    const environment = project.environments[0]!;
+    const testCase = {
+      ...project.testCases[0],
+      steps: [
+        {
+          id: 'step-confirmed-navigate',
+          type: 'ai' as const,
+          title: '打开登录页',
+          body: '打开登录页',
+          execution: {
+            schemaVersion: 2 as const,
+            intent: '打开登录页',
+            reviewStatus: 'confirmed' as const,
+            actionRisk: 'low' as const,
+            action: { kind: 'navigate' as const, url: environment.url },
+          },
+        },
+        project.testCases[0]!.steps[0]!,
+        { id: 'step-legacy-ai', type: 'ai' as const, title: '确认登录', body: '确认当前用户已登录' },
+        { id: 'step-manual', type: 'manual' as const, title: '人工检查', body: '确认页面视觉状态' },
+      ],
+    };
+    const browserRuntime = {
+      start: vi.fn().mockResolvedValue({
+        id: 'session-test',
+        status: 'ready',
+        projectId: project.id,
+        environmentId: environment.id,
+        currentUrl: environment.url,
+        pageTitle: project.name,
+        message: 'ready',
+        updatedAt: new Date(0).toISOString(),
+      }),
+    };
+    const artifacts = {
+      createSnapshot: vi.fn().mockResolvedValue({
+        id: 'artifact-start',
+        type: 'snapshot',
+        label: '运行起始快照',
+        path: '/tmp/start.svg',
+      }),
+    };
+    const order: string[] = [];
+    const deterministicAgentRun = createStubAgentRun({
+      mode: 'ai',
+      prompt: '打开登录页',
+      runtimeDescription: 'chromium / desktop',
+      targetEnvironment: environment.name,
+      plannedPlan: {
+        title: '打开登录页',
+        summary: '已打开登录页。',
+        risks: [],
+        steps: [{ action: 'navigate', title: '打开登录页', instruction: '打开登录页', url: environment.url }],
+      },
+      verificationStatus: 'passed',
+    });
+    const deterministicRunner = {
+      runDeterministicStep: vi.fn().mockImplementation(async () => {
+        order.push('deterministic');
+        return {
+          runId: deterministicAgentRun.runId,
+          title: '打开登录页',
+          agentRun: deterministicAgentRun,
+          detail: {
+            id: deterministicAgentRun.runId,
+            projectId: project.id,
+            testCaseId: testCase.id,
+            environmentId: environment.id,
+            title: '打开登录页',
+            status: 'passed',
+            startedAt: new Date(0).toISOString(),
+            endedAt: new Date(0).toISOString(),
+            duration: '00:00:01',
+            summary: '确定性导航通过。',
+            logs: ['deterministic complete'],
+            steps: [{ id: 'deterministic-step', stepId: 'step-confirmed-navigate', title: '打开登录页', status: 'passed', message: '确定性导航通过。', screenshotPath: '/tmp/navigate.png' }],
+            artifacts: [{ id: 'deterministic-artifact', type: 'screenshot', label: '导航截图', path: '/tmp/navigate.png' }],
+          },
+        };
+      }),
+    };
+    const recordingRunner = {
+      run: vi.fn().mockImplementation(async () => {
+        order.push('recording');
+        return {
+          runId: 'agent-run-recording-child',
+          title: '登录冒烟 回放',
+          agentRun: createStubAgentRun({ mode: 'ai', prompt: '回放', verificationStatus: 'passed' }),
+          detail: {
+            id: 'agent-run-recording-child', projectId: project.id, testCaseId: testCase.id, environmentId: environment.id,
+            title: '登录冒烟 回放', status: 'passed', startedAt: new Date(0).toISOString(), endedAt: new Date(0).toISOString(), duration: '00:00:01', summary: '回放通过。', logs: [], steps: [], artifacts: [],
+          },
+        };
+      }),
+    };
+    const workflowRunner = {
+      runWorkflow: vi.fn().mockImplementation(async () => {
+        order.push('workflow');
+        return {
+          runId: 'agent-run-workflow-child',
+          title: '确认登录',
+          agentRun: createStubAgentRun({ mode: 'ai', prompt: '确认登录', verificationStatus: 'passed' }),
+          detail: {
+            id: 'agent-run-workflow-child', projectId: project.id, testCaseId: testCase.id, environmentId: environment.id,
+            title: '确认登录', status: 'passed', startedAt: new Date(0).toISOString(), endedAt: new Date(0).toISOString(), duration: '00:00:01', summary: '确认通过。', logs: [],
+            steps: [{ id: 'workflow-step', stepId: 'step-legacy-ai', title: '确认登录', status: 'passed', message: '确认通过。', screenshotPath: '/tmp/assert.png' }], artifacts: [],
+          },
+        };
+      }),
+    };
+    const runner = new TestRunner(
+      artifacts as never,
+      browserRuntime as never,
+      vi.fn(),
+      recordingRunner as never,
+      workflowRunner as never,
+      deterministicRunner as never,
+    );
+
+    const response = await runner.run({ project, testCase, environment });
+
+    expect(order).toEqual(['deterministic', 'recording', 'workflow']);
+    expect(response.detail.steps).toEqual([
+      expect.objectContaining({ stepId: 'step-confirmed-navigate', status: 'passed' }),
+      expect.objectContaining({ stepId: 'case-step-replay', status: 'passed' }),
+      expect.objectContaining({ stepId: 'step-legacy-ai', status: 'passed' }),
+      expect.objectContaining({ stepId: 'step-manual', status: 'neutral' }),
+    ]);
+    expect(response.detail.agentRuns).toHaveLength(3);
+    expect(response.detail.agentRuns?.[0]).toBe(deterministicAgentRun);
+    expect(response.detail.agentRun?.plan.steps).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: 'step-confirmed-navigate', action: 'navigate' }),
+        expect.objectContaining({ id: 'case-step-replay' }),
+        expect.objectContaining({ id: 'step-legacy-ai' }),
+      ]),
+    );
+  });
+
+  it('keeps unsupported confirmed V2 actions neutral instead of sending them to the workflow runtime', async () => {
+    const project = createProjectWithRecording();
+    const environment = project.environments[0]!;
+    const testCase = {
+      ...project.testCases[0],
+      steps: [{
+        id: 'step-confirmed-input', type: 'ai' as const, title: '填写邮箱', body: '填写测试邮箱',
+        execution: {
+          schemaVersion: 2 as const, intent: '填写测试邮箱', reviewStatus: 'confirmed' as const, actionRisk: 'medium' as const,
+          action: { kind: 'input' as const, locator: { selector: '#email', quality: 'acceptable' as const }, value: 'qa@example.test' },
+        },
+      }],
+    };
+    const browserRuntime = {
+      start: vi.fn().mockResolvedValue({ id: 'session-test', status: 'ready', currentUrl: environment.url, pageTitle: project.name, message: 'ready', updatedAt: new Date(0).toISOString() }),
+    };
+    const artifacts = { createSnapshot: vi.fn().mockResolvedValue({ id: 'artifact-start', type: 'snapshot', label: '运行起始快照', path: '/tmp/start.svg' }) };
+    const deterministicRunner = { runDeterministicStep: vi.fn() };
+    const workflowRunner = { runWorkflow: vi.fn() };
+    const runner = new TestRunner(
+      artifacts as never,
+      browserRuntime as never,
+      vi.fn(),
+      undefined,
+      workflowRunner as never,
+      deterministicRunner as never,
+    );
+
+    const response = await runner.run({ project, testCase, environment });
+
+    expect(response.detail.status).toBe('neutral');
+    expect(response.detail.steps[0]).toEqual(
+      expect.objectContaining({ status: 'neutral', message: expect.stringContaining('确认的结构化动作') }),
+    );
+    expect(deterministicRunner.runDeterministicStep).not.toHaveBeenCalled();
+    expect(workflowRunner.runWorkflow).not.toHaveBeenCalled();
+  });
+
+  it('runs a confirmed explicit assertion deterministically instead of dispatching Workflow', async () => {
+    const project = createProjectWithRecording();
+    const environment = project.environments[0]!;
+    const testCase = {
+      ...project.testCases[0],
+      steps: [{
+        id: 'step-confirmed-assertion', type: 'aiAssert' as const, title: '确认订单已创建', body: '确认页面包含订单已创建',
+        execution: {
+          schemaVersion: 2 as const, intent: '确认订单已创建', reviewStatus: 'confirmed' as const, actionRisk: 'low' as const,
+          assertion: { id: 'assert-order-created', version: 1 as const, kind: 'pageContains' as const, expected: '订单已创建' },
+        },
+      }],
+    };
+    const browserRuntime = {
+      start: vi.fn().mockResolvedValue({ id: 'session-test', status: 'ready', currentUrl: environment.url, pageTitle: project.name, message: 'ready', updatedAt: new Date(0).toISOString() }),
+    };
+    const artifacts = { createSnapshot: vi.fn().mockResolvedValue({ id: 'artifact-start', type: 'snapshot', label: '运行起始快照', path: '/tmp/start.svg' }) };
+    const assertionAgentRun = createStubAgentRun({ mode: 'aiAssert', prompt: '确认订单已创建', verificationStatus: 'passed' });
+    const deterministicRunner = {
+      runDeterministicStep: vi.fn().mockResolvedValue({
+        runId: assertionAgentRun.runId,
+        title: '确认订单已创建',
+        agentRun: assertionAgentRun,
+        detail: {
+          id: assertionAgentRun.runId, projectId: project.id, testCaseId: testCase.id, environmentId: environment.id,
+          title: '确认订单已创建', status: 'passed', startedAt: new Date(0).toISOString(), endedAt: new Date(0).toISOString(), duration: '00:00:01', summary: '页面文本断言通过。', logs: [],
+          steps: [{ id: 'assertion-step', stepId: 'step-confirmed-assertion', title: '确认订单已创建', status: 'passed', message: '页面文本断言通过。', screenshotPath: '/tmp/assertion.png' }], artifacts: [],
+        },
+      }),
+    };
+    const workflowRunner = { runWorkflow: vi.fn() };
+    const runner = new TestRunner(
+      artifacts as never,
+      browserRuntime as never,
+      vi.fn(),
+      undefined,
+      workflowRunner as never,
+      deterministicRunner as never,
+    );
+
+    const response = await runner.run({ project, testCase, environment });
+
+    expect(deterministicRunner.runDeterministicStep).toHaveBeenCalledWith(
+      expect.objectContaining({
+        plannedStep: expect.objectContaining({ action: 'assert' }),
+        assertion: { id: 'assert-order-created', version: 1, kind: 'pageContains', expected: '订单已创建' },
+      }),
+    );
+    expect(workflowRunner.runWorkflow).not.toHaveBeenCalled();
+    expect(response.detail.status).toBe('passed');
+  });
+
+  it('stops a case after a failed deterministic step without dispatching later workflow steps', async () => {
+    const project = createProjectWithRecording();
+    const environment = project.environments[0]!;
+    const testCase = {
+      ...project.testCases[0],
+      steps: [
+        {
+          id: 'step-confirmed-navigate', type: 'ai' as const, title: '打开登录页', body: '打开登录页',
+          execution: {
+            schemaVersion: 2 as const, intent: '打开登录页', reviewStatus: 'confirmed' as const, actionRisk: 'low' as const,
+            action: { kind: 'navigate' as const, url: environment.url },
+          },
+        },
+        { id: 'step-legacy-ai', type: 'ai' as const, title: '确认登录', body: '确认当前用户已登录' },
+      ],
+    };
+    const browserRuntime = {
+      start: vi.fn().mockResolvedValue({ id: 'session-test', status: 'ready', currentUrl: environment.url, pageTitle: project.name, message: 'ready', updatedAt: new Date(0).toISOString() }),
+    };
+    const artifacts = { createSnapshot: vi.fn().mockResolvedValue({ id: 'artifact-start', type: 'snapshot', label: '运行起始快照', path: '/tmp/start.svg' }) };
+    const failedAgentRun = createStubAgentRun({ mode: 'ai', prompt: '打开登录页', verificationStatus: 'failed', verificationFailureReason: '页面不可访问' });
+    const deterministicRunner = {
+      runDeterministicStep: vi.fn().mockResolvedValue({
+        runId: failedAgentRun.runId,
+        title: '打开登录页',
+        agentRun: failedAgentRun,
+        detail: {
+          id: failedAgentRun.runId, projectId: project.id, testCaseId: testCase.id, environmentId: environment.id,
+          title: '打开登录页', status: 'failed', startedAt: new Date(0).toISOString(), endedAt: new Date(0).toISOString(), duration: '00:00:01', summary: '页面不可访问', failureReason: '页面不可访问', logs: [],
+          steps: [{ id: 'deterministic-step', stepId: 'step-confirmed-navigate', title: '打开登录页', status: 'failed', message: '页面不可访问', screenshotPath: '/tmp/navigate.png' }], artifacts: [],
+        },
+      }),
+    };
+    const workflowRunner = { runWorkflow: vi.fn() };
+    const runner = new TestRunner(
+      artifacts as never,
+      browserRuntime as never,
+      vi.fn(),
+      undefined,
+      workflowRunner as never,
+      deterministicRunner as never,
+    );
+
+    const response = await runner.run({ project, testCase, environment });
+
+    expect(response.detail.status).toBe('failed');
+    expect(response.detail.steps).toEqual([
+      expect.objectContaining({ stepId: 'step-confirmed-navigate', status: 'failed' }),
+      expect.objectContaining({ stepId: 'step-legacy-ai', status: 'neutral', message: expect.stringContaining('前序步骤') }),
+    ]);
+    expect(workflowRunner.runWorkflow).not.toHaveBeenCalled();
   });
 });
 

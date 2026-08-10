@@ -39,8 +39,8 @@ Hybrid Case 固定包含：
 
 不再用单一百分比描述完成度。当前状态按可验证边界分为三层：
 
-- **代码已实现**：项目、用例、录制、PRD 覆盖治理、运行记录、跨运行覆盖风险、项目级离线 HTML 报告、受控恢复草稿，以及 BrowserRuntime/Workflow/Recording 和 Planner/Verifier/Reporter 请求的取消协议均已进入持久化模型和桌面调用链；已通过的自然语言 Agent Run 可转存为独立、可编辑的 `naturalLanguage` 用例，并保留原始业务意图、发起时的项目/分组/环境，以及待审阅的 V2 结构化 action、定位 fingerprint、风险和运行来源。
-- **离线验证已完成**：状态迁移、风险派生、PRD triage、报告脱敏与 HTML 转义、受控取消（含模型请求、规则降级和 Reporter 产物写入边界）、录制视觉比较异常、表格/图表证据完整度、自然语言运行转 V2 foundation、运行记录命令和工程构建门禁均由单元测试、类型检查、构建和差异检查覆盖；这些验证不调用模型，也不访问业务页面。
+- **代码已实现**：项目、用例、录制、PRD 覆盖治理、运行记录、跨运行覆盖风险、项目级离线 HTML 报告、受控恢复草稿，以及 BrowserRuntime/Workflow/Recording 和 Planner/Verifier/Reporter 请求的取消协议均已进入持久化模型和桌面调用链；已通过的自然语言 Agent Run 可转存为独立、可编辑的 `naturalLanguage` 用例，并保留原始业务意图、发起时的项目/分组/环境，以及待审阅的 V2 结构化 action、定位 fingerprint、风险和运行来源。编辑器仅允许人工确认当前可离线执行的 V2 action 或显式断言，且标题、指令或类型修改会立即撤销确认。已确认 V2 的 `navigate`、selector `click`、selector/超时 `wait`、selector `scroll` 和显式 URL/标题/页面文本/公开 DOM 断言均有独立的无模型执行链路，要求真实 Playwright 页面；混合用例按源顺序编排，失败、等待和取消不会继续派发后续步骤。
+- **离线验证已完成**：状态迁移、风险派生、PRD triage、报告脱敏与 HTML 转义、受控取消（含模型请求、规则降级和 Reporter 产物写入边界）、录制视觉比较异常、表格/图表证据完整度、自然语言运行转 V2 foundation、V2 编辑器的确认/撤销/编辑回退与未支持动作门禁、确认 V2 动作与显式断言的真实页面门禁/单次执行/取消/失败停止、运行记录命令和工程构建门禁均由单元测试、类型检查、构建和差异检查覆盖；这些验证不调用模型，也不访问业务页面。
 - **需真实模型/业务页面验收**：语义规划、语义点击/输入/选择/断言、复杂第三方网格、真实图表 tooltip/数据结构、视觉阈值和完整证据的业务语义仍需以真实页面样本验收。
 
 因此，当前工作台已不是 UI 原型；离线工程边界和结果治理已经成型，但不能把真实模型质量或任意业务页面的兼容性视为已完成。
@@ -624,8 +624,8 @@ fill #password with 123456
 
 ### 仍然距离较远的部分
 
-- Hybrid Case V2 的意图、用户确认目标、定位指纹和断言版本 contract。
-- Project asset 从 `studio-data/state.json` 拆到 project directory。
+- Hybrid Case V2 的 `input/select` 安全绑定，以及完整的意图、目标、定位指纹和断言证据 contract；Case 顶层 schema version `2` 已完成向后兼容迁移。
+- Project asset 从 `studio-data/state.json` 接入 project directory：底层 `ProjectAssetStore` 已具备空目录原子写入、读取校验和迁移冲突预览，但尚未提供用户确认后的正式迁移和常规保存切换。
 - typed fixtures、HTTP setup/cleanup、storageState 生命周期和 script trust。
 - 六种终态与独立 flaky 标记，替代 `neutral` 的混合语义。
 - 10–100 case Suite 的有限并发、资源锁和桌面/CLI 单一 Runner。
@@ -678,7 +678,7 @@ pnpm check
 
 它按顺序执行全量单元测试、`tsc --noEmit`、生产构建和 `git diff --check`。非首屏页面已采用 route-level dynamic import，并使用不改变主区域尺寸的加载占位；不再把之前的主包体积警告当作已知遗留项。
 
-最近一次离线门禁结果：38 个测试文件、281 个测试通过；类型检查、renderer/Electron 构建和差异检查均通过。
+最近一次离线门禁结果：39 个测试文件、334 个测试通过；类型检查、renderer/Electron 构建和差异检查均通过。
 
 这层验证不启动应用、不调用模型、不访问业务页面。真实模型和业务页面验收仍应单独记录输入页面、模型配置、可复现步骤和证据产物。
 

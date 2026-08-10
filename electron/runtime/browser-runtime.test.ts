@@ -12,6 +12,7 @@ describe('BrowserRuntime page access', () => {
     const runtime = new BrowserRuntime('/tmp/playtest-browser-runtime-test', new ArtifactManager('/tmp'));
 
     expect(runtime.getPage()).toBeNull();
+    expect(runtime.hasRealPage()).toBe(false);
   });
 
   it('archives a Playwright trace only when a real browser context is available', async () => {

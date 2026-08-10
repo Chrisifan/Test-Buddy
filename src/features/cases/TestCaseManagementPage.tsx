@@ -28,7 +28,12 @@ import {
   Trash2,
 } from 'lucide-react';
 
-import { createManualStepAutomationReplacement, getTestStepRunBlocker } from '../../../shared/studio.js';
+import {
+  createManualStepAutomationReplacement,
+  getConfirmedDeterministicTestStep,
+  getConfirmedExplicitTestAssertion,
+  getTestStepRunBlocker,
+} from '../../../shared/studio.js';
 import { StatusPill } from '../../components/StatusPill.js';
 import { Badge } from '../../components/ui/badge.js';
 import { Button } from '../../components/ui/button.js';
@@ -80,6 +85,32 @@ function getSourceLabel(testCase: TestCaseDraft, t: (key: string) => string): st
 
 function getBlockerLabel(blocker: TestCaseRunBlocker | undefined, t: (key: string) => string): string | undefined {
   return blocker ? t(`cases.validation.${blocker}`) : undefined;
+}
+
+function canConfirmDeterministicAction(step: TestStepDraft): boolean {
+  if (step.type !== 'ai' || !step.execution?.action) {
+    return false;
+  }
+
+  return Boolean(getConfirmedDeterministicTestStep({
+    ...step,
+    execution: { ...step.execution, reviewStatus: 'confirmed' },
+  }));
+}
+
+function canConfirmExplicitAssertion(step: TestStepDraft): boolean {
+  if (step.type !== 'aiAssert' || !step.execution?.assertion) {
+    return false;
+  }
+
+  return Boolean(getConfirmedExplicitTestAssertion({
+    ...step,
+    execution: { ...step.execution, reviewStatus: 'confirmed' },
+  }));
+}
+
+function canConfirmStructuredExecution(step: TestStepDraft): boolean {
+  return canConfirmDeterministicAction(step) || canConfirmExplicitAssertion(step);
 }
 
 function StepTypeIcon({ type, className }: { type: TestStepDraft['type']; className?: string }) {
@@ -367,8 +398,31 @@ function StepInspector({
   function updateStep(patch: Partial<TestStepDraft>, mode: SaveMode = 'debounced') {
     onUpdateTestCase((testCase) => ({
       ...testCase,
-      steps: testCase.steps.map((item) => (item.id === step.id ? { ...item, ...patch } : item)),
+      steps: testCase.steps.map((item) => {
+        if (item.id !== step.id) {
+          return item;
+        }
+
+        const changesVisibleIntent = 'title' in patch || 'body' in patch || 'type' in patch;
+        const nextStep = { ...item, ...patch };
+        return changesVisibleIntent && item.execution?.reviewStatus === 'confirmed'
+          ? { ...nextStep, execution: { ...item.execution, reviewStatus: 'needsReview' as const } }
+          : nextStep;
+      }),
     }), mode);
+  }
+
+  function updateStructuredExecutionReviewStatus(reviewStatus: 'needsReview' | 'confirmed') {
+    onUpdateTestCase((testCase) => ({
+      ...testCase,
+      steps: testCase.steps.map((item) => {
+        if (!canConfirmStructuredExecution(item) || item.id !== step.id || !item.execution) {
+          return item;
+        }
+
+        return { ...item, execution: { ...item.execution, reviewStatus } };
+      }),
+    }), 'immediate');
   }
 
   function bindRecording(recordingId: string) {
@@ -378,6 +432,12 @@ function StepInspector({
       body: recording ? t('cases.replay.description', { name: recording.name, count: recording.steps.length }) : step.body,
     }, 'immediate');
   }
+
+  const hasStructuredAction = step.type === 'ai' && Boolean(step.execution?.action);
+  const hasStructuredAssertion = step.type === 'aiAssert' && Boolean(step.execution?.assertion);
+  const hasStructuredExecution = hasStructuredAction || hasStructuredAssertion;
+  const supportsDeterministicExecution = canConfirmStructuredExecution(step);
+  const isDeterministicActionConfirmed = supportsDeterministicExecution && step.execution?.reviewStatus === 'confirmed';
 
   return (
     <div className="case-step-inspector-fields grid gap-4">
@@ -452,6 +512,38 @@ function StepInspector({
           <WandSparkles className="size-4" />
           {t('cases.manual.automate')}
         </Button>
+      ) : null}
+
+      {hasStructuredExecution ? (
+        <div className="grid gap-3 border-t border-border pt-4">
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-sm font-medium text-foreground">{t('cases.execution.title')}</span>
+            <Badge className="case-editor-tag" variant="outline">
+              {supportsDeterministicExecution
+                ? t(`cases.execution.${isDeterministicActionConfirmed ? 'confirmed' : 'needsReview'}`)
+                : t('cases.execution.unsupportedStatus')}
+            </Badge>
+          </div>
+          {supportsDeterministicExecution ? (
+            <Button
+              className="justify-start"
+              onClick={() => updateStructuredExecutionReviewStatus(isDeterministicActionConfirmed ? 'needsReview' : 'confirmed')}
+              type="button"
+              variant={isDeterministicActionConfirmed ? 'outline' : 'default'}
+            >
+              {isDeterministicActionConfirmed ? <RotateCcw className="size-4" /> : <ShieldCheck className="size-4" />}
+              {t(
+                isDeterministicActionConfirmed
+                  ? 'cases.execution.revoke'
+                  : hasStructuredAssertion
+                    ? 'cases.execution.confirmAssertion'
+                    : 'cases.execution.confirm',
+              )}
+            </Button>
+          ) : (
+            <p className="text-sm leading-5 text-muted-foreground">{t('cases.execution.unsupported')}</p>
+          )}
+        </div>
       ) : null}
 
       <div className="grid gap-2">

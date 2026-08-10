@@ -222,4 +222,59 @@ describe('RuntimeBundle test case routing', () => {
     expect(workflowRun).not.toHaveBeenCalled();
     await bundle.close();
   });
+
+  it('runs a case with a confirmed V2 explicit assertion through TestRunner', async () => {
+    const bundle = createRuntimeBundle({
+      rootDir: '/tmp/testbuddy-runtime-bundle-confirmed-assertion',
+      visualDiffImageAdapter: {
+        read: vi.fn(),
+        write: vi.fn(),
+      },
+    });
+    const project = createEmptyProject(1);
+    const environment = project.environments[0]!;
+    const testCase = {
+      id: 'case-confirmed-assertion',
+      kind: 'assertion' as const,
+      groupId: project.groups[0]!.id,
+      environmentId: environment.id,
+      source: 'manual' as const,
+      name: '确认的订单断言',
+      category: '核心链路',
+      lastEdited: '刚刚',
+      url: environment.url,
+      notes: '',
+      steps: [
+        {
+          id: 'step-confirmed-assertion',
+          type: 'aiAssert' as const,
+          title: '确认订单已创建',
+          body: '确认页面包含订单已创建',
+          execution: {
+            schemaVersion: 2 as const,
+            intent: '确认订单已创建',
+            reviewStatus: 'confirmed' as const,
+            actionRisk: 'low' as const,
+            assertion: { id: 'assert-order-created', version: 1 as const, kind: 'pageContains' as const, expected: '订单已创建' },
+          },
+        },
+      ],
+    };
+    const runnerResponse = { runId: 'run-confirmed-assertion', title: testCase.name, detail: {} } as RunTestCaseResponse;
+    const testRunnerRun = vi.spyOn(bundle.testRunner, 'run').mockResolvedValue(runnerResponse);
+    const workflowRun = vi.spyOn(bundle.studioRuntime, 'runWorkflow').mockResolvedValue({} as RunWorkflowResponse);
+
+    await expect(
+      bundle.runTestCase({
+        runId: 'run-confirmed-assertion',
+        project,
+        environment,
+        testCase,
+      }),
+    ).resolves.toBe(runnerResponse);
+
+    expect(testRunnerRun).toHaveBeenCalledOnce();
+    expect(workflowRun).not.toHaveBeenCalled();
+    await bundle.close();
+  });
 });

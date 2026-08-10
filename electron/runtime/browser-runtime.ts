@@ -140,6 +140,10 @@ export class BrowserRuntime {
     return this.page;
   }
 
+  hasRealPage(): boolean {
+    return Boolean(this.page);
+  }
+
   async start(request: BrowserSessionRequest): Promise<BrowserSessionState> {
     const targetUrl = composeEnvironmentUrl(request.environment);
     this.recordingEnabled = request.record !== false;

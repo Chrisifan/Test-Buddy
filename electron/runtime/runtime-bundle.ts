@@ -88,6 +88,7 @@ export function createRuntimeBundle(options: RuntimeBundleOptions): RuntimeBundl
     emitRunEvent,
     recordingRunner,
     studioRuntime,
+    studioRuntime,
   );
   const activeRuns = new Map<string, AbortController>();
 

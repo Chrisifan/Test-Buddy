@@ -20,6 +20,11 @@ Object.defineProperty(window, 'matchMedia', {
   writable: true,
 });
 
+Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+  value: () => undefined,
+  writable: true,
+});
+
 const localStorageStore = new Map<string, string>();
 
 Object.defineProperty(window, 'localStorage', {

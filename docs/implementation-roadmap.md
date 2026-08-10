@@ -13,6 +13,7 @@ TestBuddy 已经从 UI 原型进入“具备本地执行与结果治理基础，
 - 自然语言 Agent 的 `Intent -> Plan -> Execute -> Observe -> Verify -> Report` 链路。
 - BrowserRuntime、Workflow、Recording 和 TestRunner 基础。
 - 明确 URL/selector 的确定性动作、条件等待、有限重试、定位 fallback 和 Planner 重规划。
+- 已确认 V2 `navigate`、selector `click`、selector/超时 `wait` 和 selector `scroll` 已通过独立确定性链路执行：它们要求真实 Playwright 页面，绕过 Planner、Midscene、Verifier、Reporter、重试、selector fallback 和重规划；stub 会话、取消、未支持动作和失败步骤均保持 `neutral` 或 `failed`，不会伪造通过或继续派发后续步骤。
 - `stopAndReport` 已阻止断言失败被重试或重规划吞掉，包括语义动作中的业务断言失败。
 - 表格/图表证据完整度约束：局部或未知证据不推断全量结论。
 - 已通过的自然语言 Agent Run 可生成独立、可编辑用例，并保留发起时的项目、分组和环境；生成后仍需用户审阅并主动运行。
@@ -37,7 +38,7 @@ TestBuddy 已经从 UI 原型进入“具备本地执行与结果治理基础，
 - **离线验证已完成**：单元测试、类型检查、构建或差异检查覆盖了该工程边界；不代表模型和业务页面质量。
 - **真实验收已完成**：在明确浏览器、页面、数据、模型和产物条件下完成可复现验收。
 
-截至 2026-08-09，最近一次 `pnpm check` 包含 38 个测试文件、286 个测试通过，以及类型检查、renderer/Electron 构建和差异检查通过。该数字只代表当前快照，后续应以最新命令输出为准。
+截至 2026-08-10，离线质量门禁仍由 `pnpm check` 统一执行；测试数量随持续开发变化，应以最新命令输出为准。该门禁不代表真实模型或业务页面验收。
 
 ### 1.3 当前目标
 
@@ -77,18 +78,24 @@ TestBuddy 已经从 UI 原型进入“具备本地执行与结果治理基础，
 
 ## 3. Phase 1：Regression Case V2
 
-**当前状态：V2 基础契约已实现并完成离线验证，完整 Hybrid Case contract 未完成。**
+**当前状态：V2 基础契约、编辑器人工确认、首批确定性动作与显式断言执行已实现并完成离线验证，完整 Hybrid Case contract 未完成。**
 
 本轮已经完成的基础能力：
 
-- `TestCaseDraft.sourceIntent` 保留自然语言探索的原始业务目标。
+- `TestCaseDraft.sourceIntent` 保留自然语言探索、PRD 路径或录制对比目标的原始业务意图；PRD 与录制的自由文本仍只作为待审阅说明，不会提升为确定性浏览器动作。
 - `TestStepDraft.execution` 以 schema version `2` 保存待审阅的结构化 action、定位 fingerprint、风险级别和 Agent Run 来源。
 - `navigate`、明确 selector 的 `click`、明确 selector 或超时的 `wait`、selector `scroll` 可以在保存时保留为候选确定性动作；Agent Run 的 `input/select` 原值不写入资产，必须在后续编辑器中通过变量、fixture 输出或凭据引用确认后才能执行。
 - 语义断言、自由文本断言和 `aiQuery` 仍由派生规则标记为需要模型；显式 assertion contract 才能成为无模型断言。
 - hydration 保留旧步骤不变，局部丢弃畸形 V2 execution，不丢 legacy 文本、用例或项目。
+- Target locator quality 已收敛为 `strong/acceptable/weak/unresolved`；hydration 会把早期的 `fragile/unknown` 映射为 `weak/unresolved`。`unresolved` 定位不得被人工确认进入确定性执行，必须先替换为可审阅目标。
 - 所有 Agent Run 的 `input/select` 原值均不会写进 Case；相关步骤保存为无原值的审阅提示，不携带 action value。这样不依赖字段别名猜测敏感性，密码、token、OTP 和未知秘密字段都不会因漏检落盘。
+- 已确认的 `navigate`、selector `click`、selector/超时 `wait`、selector `scroll` 会从 `RuntimeBundle -> TestRunner -> StudioRuntime` 进入无模型确定性执行路径。混合用例保持源步骤顺序；任一确定性步骤为 `failed` 或 `neutral` 时，后续步骤记录为未执行的 `neutral`。
+- 确定性执行只在 `BrowserRuntime.hasRealPage()` 为真时派发一次既有浏览器动作。没有真实页面、缺失能力、取消或确认但未支持的 V2 action 不会退回到 Workflow/Planner，也不会调用 Midscene、Verifier、Reporter、重试、fallback 或重规划。
+- 持久化脱敏区分结构化 `url` 字段与普通文本：结构化 URL 覆盖任意合法 scheme；普通文本只扫描 `http(s)`、`ftp`、`file`、`about`、`data`；CSS 选择器保留伪选择器，仅检查带引号属性值中的明确 URL，并在发生脱敏时移除候选确定性 action。
+- 编辑器仅为可离线执行的 V2 `ai` action 展示人工确认或撤销入口；`input/select` 等未支持动作保持审阅态。确认状态以步骤元数据持久化，编辑步骤标题、指令或类型会自动回退为待确认，避免结构化动作与可见意图脱节。
+- 合法且已确认的 V2 `aiAssert` 显式断言也可在编辑器确认或撤销，并在同一无模型执行链路中读取真实页面 URL、标题、文本或公开 DOM。断言失败立即停止后续步骤；没有真实页面、取消、畸形断言或未支持结构均为 `neutral`，不会回退到 Workflow、Planner、Verifier 或 Reporter。每条显式断言证据保留 assertion ID、version、kind 和当次计划中的 expected/evidence，后续编辑 Case 不会改写历史运行的断言归属。
 
-尚未在本阶段完成：V2 编辑器确认联动、实际确定性执行、Case 顶层版本迁移、录制/PRD 统一转换、完整 assertion evidence contract 和六种终态迁移。
+尚未在本阶段完成：`input/select` 安全绑定、录制/PRD 到完整 Hybrid Case contract 的统一转换、完整 assertion evidence contract 和六种终态迁移。Case 顶层 schema version `2` 已由 hydration 兼容升级，所有当前官方创建入口也会直接写入该版本。
 
 ### 3.1 目标
 
@@ -136,7 +143,7 @@ Project Asset Store 开始写入前，V2 schema、版本引用和迁移规则必
 
 ## 4. Phase 2：Project Asset Store
 
-**当前状态：现有本地持久化可用，长期资产与运行数据尚未分离。**
+**当前状态：已有独立 Project Asset Store 基础，可生成迁移计划并向空的、经审阅的目录原子写入 `project.json`、Case、Recording 和 PRD 文档资产；它尚未接管现有 `studio-data/state.json`，完整资产分类和审阅式迁移 UI 仍未完成。**
 
 ### 4.1 目标
 
@@ -161,6 +168,7 @@ studio-data/
 ```
 
 - Project Asset Store：schema 校验、原子写入、稳定 ID 和版本引用。
+- `ProjectAssetStore` 目前只提供独立迁移计划、首次写入和读取验证：目录非空时不覆盖，录制步骤中的 screenshot/artifact path 会在写入前剥离，运行数据仍留在 `studio-data`。后续接入必须经过用户确认，不能在普通状态保存时自动迁移。
 - Studio Data Store：run/artifact/credential/cache 生命周期。
 - 旧 `state.json` 到 project directory 的审阅式迁移。
 - 引用完整性、冲突和损坏诊断。

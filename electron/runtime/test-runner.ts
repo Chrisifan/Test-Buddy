@@ -13,7 +13,9 @@ import type {
   StepType,
   TestStepDraft,
 } from '../../shared/studio.js';
-import type { AgentRunResult } from '../../shared/agent.js';
+import { getConfirmedDeterministicTestStep, getConfirmedExplicitTestAssertion } from '../../shared/studio.js';
+import type { AgentPlanStepDraft, AgentRunResult } from '../../shared/agent.js';
+import type { RunDeterministicStepRequest, RunDeterministicStepResponse } from '../studioRuntime.js';
 import {
   awaitWithRunCancellation,
   createUserRunCancellation,
@@ -32,6 +34,10 @@ interface WorkflowSegmentRunner {
   runWorkflow(request: RunWorkflowRequest): Promise<RunWorkflowResponse>;
 }
 
+interface DeterministicStepRunner {
+  runDeterministicStep(request: RunDeterministicStepRequest): Promise<RunDeterministicStepResponse>;
+}
+
 export class TestRunner {
   constructor(
     private readonly artifacts: ArtifactManager,
@@ -39,6 +45,7 @@ export class TestRunner {
     private readonly emitRunEvent: (event: RunEventPayload) => void,
     private readonly recordingRunner?: RecordingReplayRunner,
     private readonly workflowRunner?: WorkflowSegmentRunner,
+    private readonly deterministicRunner?: DeterministicStepRunner,
   ) {}
 
   async run(request: RunTestCaseRequest): Promise<RunTestCaseResponse> {
@@ -240,6 +247,104 @@ export class TestRunner {
           break;
         }
         continue;
+      }
+
+      const deterministicAction = getConfirmedDeterministicTestStep(step);
+      const deterministicAssertion = getConfirmedExplicitTestAssertion(step);
+      const deterministicStep = deterministicAction ?? (deterministicAssertion ? toDeterministicAssertionPlanStep(step) : undefined);
+      if (deterministicStep) {
+        if (!this.deterministicRunner) {
+          hasNeutral = true;
+          const message = `步骤 ${index + 1} 已确认的结构化${deterministicAssertion ? '断言' : '动作'}等待确定性运行器接入。`;
+          const line = `[${timeLabel(new Date())}] ${message}`;
+          logs.push(line);
+          this.emitRunEvent({ runId, title, type: 'log', line });
+          steps.push({
+            id: `run-step-${runId}-${index}`,
+            stepId: step.id,
+            title: step.title,
+            status: 'neutral',
+            message,
+            screenshotPath: artifact.path,
+          });
+          appendUnexecutedSteps(steps, request, index + 1, runId, artifact.path, message);
+          break;
+        }
+
+        const deterministic = await this.deterministicRunner.runDeterministicStep({
+          sourceStep: step,
+          plannedStep: deterministicStep,
+          ...(deterministicAssertion ? { assertion: deterministicAssertion } : {}),
+          testCaseId: request.testCase.id,
+          targetEnvironment: request.environment.name,
+          runtimeProfile: request.runtimeProfile ?? {
+            browser: request.environment.browser,
+            baseUrl: request.environment.url,
+            viewport: request.environment.viewport,
+            locale: request.environment.locale,
+            headless: request.environment.headless,
+          },
+          project: request.project,
+          environment: request.environment,
+          ...(request.testCase.prdPath?.documentId ? { documentId: request.testCase.prdPath.documentId } : {}),
+          parentRunId: runId,
+          ...(request.browserSession ? { browserSession: request.browserSession } : {}),
+          ...(request.cancellationSignal ? { cancellationSignal: request.cancellationSignal } : {}),
+        });
+        if (isAgentRunResult(deterministic.agentRun)) {
+          agentRuns.push(deterministic.agentRun);
+          agentStepRuns[index] = deterministic.agentRun;
+        }
+        deterministic.detail.logs.forEach((message) => {
+          const line = `[${timeLabel(new Date())}] ${message}`;
+          logs.push(line);
+          this.emitRunEvent({ runId, title, type: 'log', line });
+        });
+        artifacts.push(...deterministic.detail.artifacts);
+
+        const deterministicRunStep = deterministic.detail.steps[0];
+        const screenshotPath = deterministicRunStep?.screenshotPath ?? artifact.path;
+        const message = `步骤 ${index + 1} ${deterministicRunStep?.message ?? deterministic.detail.summary}`;
+        steps.push({
+          id: `run-step-${runId}-${index}`,
+          stepId: step.id,
+          title: step.title,
+          status: deterministic.detail.status,
+          message,
+          screenshotPath,
+        });
+        if (deterministic.detail.status !== 'passed') {
+          if (deterministic.detail.cancellation) {
+            cancellation = deterministic.detail.cancellation;
+          }
+          if (deterministic.detail.status === 'failed') {
+            hasFailure = true;
+            failureReason = deterministic.detail.failureReason ?? deterministic.detail.summary;
+          } else {
+            hasNeutral = true;
+          }
+          appendUnexecutedSteps(steps, request, index + 1, runId, screenshotPath, message);
+          break;
+        }
+        continue;
+      }
+
+      if ((step.type === 'ai' || step.type === 'aiAssert') && step.execution?.reviewStatus === 'confirmed') {
+        hasNeutral = true;
+        const message = `步骤 ${index + 1} 已确认的结构化${step.type === 'aiAssert' ? '断言' : '动作'}不在当前确定性执行范围内，未调用模型。`;
+        const line = `[${timeLabel(new Date())}] ${message}`;
+        logs.push(line);
+        this.emitRunEvent({ runId, title, type: 'log', line });
+        steps.push({
+          id: `run-step-${runId}-${index}`,
+          stepId: step.id,
+          title: step.title,
+          status: 'neutral',
+          message,
+          screenshotPath: artifact.path,
+        });
+        appendUnexecutedSteps(steps, request, index + 1, runId, artifact.path, message);
+        break;
       }
 
       if (this.workflowRunner && isAgentStep(step)) {
@@ -465,6 +570,23 @@ function isAgentRunResult(value: unknown): value is AgentRunResult {
       'plan' in value &&
       'events' in value,
   );
+}
+
+function toDeterministicAssertionPlanStep(step: TestStepDraft): AgentPlanStepDraft {
+  const assertion = step.execution?.assertion;
+  const expected =
+    assertion?.kind === 'locatorVisible'
+      ? assertion.locator.selector
+      : assertion && 'expected' in assertion
+        ? assertion.expected
+        : undefined;
+
+  return {
+    action: 'assert',
+    title: step.title,
+    instruction: step.body,
+    ...(expected ? { expected } : {}),
+  };
 }
 
 function findRecording(request: RunTestCaseRequest, recordingId?: string): RecordingAsset | undefined {

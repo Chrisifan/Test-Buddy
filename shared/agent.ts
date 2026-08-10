@@ -163,12 +163,20 @@ export interface AgentObservation {
   createdAt: string;
 }
 
+/** Identifies the immutable Case assertion version that produced an evidence record. */
+export interface AgentAssertionReference {
+  id: string;
+  version: number;
+  kind: string;
+}
+
 export interface AgentVerification {
   id: string;
   stepId: string;
   status: AgentRunStatus;
   summary: string;
   evidence?: string;
+  assertion?: AgentAssertionReference;
   failureReason?: string;
   failureCategory?: AgentFailureCategory;
   recoveryStrategy?: AgentRecoveryStrategy;

@@ -67,7 +67,7 @@ export interface WorkflowDraft {
 export type TestStepReviewStatus = 'needsReview' | 'confirmed';
 export type TestStepActionRisk = 'low' | 'medium' | 'high' | 'unknown';
 export type TestStepModelRequirement = 'none' | 'required' | 'notApplicable';
-export type TestLocatorQuality = 'acceptable' | 'fragile' | 'unknown';
+export type TestLocatorQuality = 'strong' | 'acceptable' | 'weak' | 'unresolved';
 
 export interface TestLocatorFingerprint {
   selector: string;
@@ -121,6 +121,8 @@ export interface PrdPathReference {
 }
 
 export interface TestCaseDraft extends Omit<WorkflowDraft, 'kind' | 'steps'> {
+  /** Legacy cases are upgraded to this value during hydration. */
+  schemaVersion?: 2;
   kind: TestCaseKind;
   groupId: string;
   environmentId: string;
@@ -931,6 +933,7 @@ export function workflowToTestCase(
 ): TestCaseDraft {
   return {
     ...workflow,
+    schemaVersion: 2,
     groupId,
     environmentId,
     source: 'manual',
@@ -971,8 +974,9 @@ export function getConfirmedDeterministicTestStep(step: TestStepDraft): AgentPla
   }
   const title = step.title;
   const instruction = step.body;
-  const selector = 'locator' in action ? action.locator?.selector : undefined;
-  const hasSelector = typeof selector === 'string' && Boolean(selector.trim());
+  const locator = 'locator' in action ? action.locator : undefined;
+  const selector = locator?.selector;
+  const hasSelector = hasExecutableTestLocator(locator);
   const hasValidOptionalTimeout =
     !('timeoutMs' in action) || action.timeoutMs === undefined || (Number.isFinite(action.timeoutMs) && action.timeoutMs > 0);
 
@@ -1004,13 +1008,55 @@ export function isConfirmedDeterministicTestStep(step: TestStepDraft): boolean {
   return getConfirmedDeterministicTestStep(step) !== undefined;
 }
 
+export function getConfirmedExplicitTestAssertion(step: TestStepDraft): ExplicitTestAssertion | undefined {
+  if (step.type !== 'aiAssert' || step.execution?.reviewStatus !== 'confirmed') {
+    return undefined;
+  }
+
+  const assertion = step.execution.assertion;
+  if (
+    !assertion ||
+    typeof assertion !== 'object' ||
+    assertion.version !== 1 ||
+    typeof assertion.id !== 'string' ||
+    !assertion.id.trim()
+  ) {
+    return undefined;
+  }
+
+  if (
+    (assertion.kind === 'urlContains' || assertion.kind === 'titleContains' || assertion.kind === 'pageContains') &&
+    typeof assertion.expected === 'string' &&
+    assertion.expected.trim()
+  ) {
+    return assertion;
+  }
+
+  if (
+    assertion.kind === 'locatorVisible' &&
+    hasExecutableTestLocator(assertion.locator)
+  ) {
+    return assertion;
+  }
+  if (
+    assertion.kind === 'locatorTextContains' &&
+    hasExecutableTestLocator(assertion.locator) &&
+    typeof assertion.expected === 'string' &&
+    assertion.expected.trim()
+  ) {
+    return assertion;
+  }
+
+  return undefined;
+}
+
 export function isAgentRunnableTestCase(testCase: TestCaseDraft): boolean {
   return (
     testCase.steps.length > 0 &&
     testCase.steps.every(
-      (step) =>
+        (step) =>
         (step.type === 'ai' || step.type === 'aiAssert' || step.type === 'aiQuery') &&
-        !(step.type === 'ai' && step.execution?.reviewStatus === 'confirmed'),
+        !((step.type === 'ai' || step.type === 'aiAssert') && step.execution?.reviewStatus === 'confirmed'),
     )
   );
 }
@@ -1398,9 +1444,7 @@ function normalizeTestLocatorFingerprint(value: unknown): TestLocatorFingerprint
   if (!rawLocator || !selector) {
     return undefined;
   }
-  const quality = rawLocator.quality === 'acceptable' || rawLocator.quality === 'fragile' || rawLocator.quality === 'unknown'
-    ? rawLocator.quality
-    : undefined;
+  const quality = normalizeTestLocatorQuality(rawLocator.quality);
   if (!quality) {
     return undefined;
   }
@@ -1427,6 +1471,33 @@ function normalizeTestLocatorFingerprint(value: unknown): TestLocatorFingerprint
     ...(publicAttributes && Object.keys(publicAttributes).length ? { publicAttributes } : {}),
     quality,
   };
+}
+
+function normalizeTestLocatorQuality(value: unknown): TestLocatorQuality | undefined {
+  if (value === 'strong' || value === 'acceptable' || value === 'weak' || value === 'unresolved') {
+    return value;
+  }
+
+  // V2 early drafts used these names before the four-level locator contract was finalized.
+  if (value === 'fragile') {
+    return 'weak';
+  }
+  if (value === 'unknown') {
+    return 'unresolved';
+  }
+  return undefined;
+}
+
+function hasExecutableTestLocator(locator: unknown): locator is TestLocatorFingerprint {
+  if (!locator || typeof locator !== 'object') {
+    return false;
+  }
+  const candidate = locator as Partial<TestLocatorFingerprint>;
+  return (
+    typeof candidate.selector === 'string' &&
+    Boolean(candidate.selector.trim()) &&
+    (candidate.quality === 'strong' || candidate.quality === 'acceptable' || candidate.quality === 'weak')
+  );
 }
 
 function normalizeOptionalTimeout(value: unknown): number | undefined {
@@ -1589,10 +1660,11 @@ function normalizeProjectDraft(rawProject: ProjectDraft): ProjectDraft {
     prdCoverageTriage: prunePrdCoverageTriage(documents, rawProject.prdCoverageTriage),
     testCases: Array.isArray(rawProject.testCases)
       ? rawProject.testCases.map((testCase) => {
-          const { sourceIntent: rawSourceIntent, ...legacyTestCase } = testCase;
+          const { sourceIntent: rawSourceIntent, schemaVersion: _schemaVersion, ...legacyTestCase } = testCase;
           const sourceIntent = normalizedNonEmptyString(rawSourceIntent);
           return {
             ...legacyTestCase,
+            schemaVersion: 2,
             groupId: testCase.groupId || groups[0]?.id || '',
             environmentId: testCase.environmentId || environmentId,
             source: testCase.source || 'manual',
@@ -1937,11 +2009,13 @@ export function createTestCaseFromGeneratedPath({
   seed: number;
 }): TestCaseDraft {
   return {
+    schemaVersion: 2,
     id: `case-prd-${Date.now()}-${seed}`,
     kind: 'scenario',
     groupId,
     environmentId,
     source: 'prd',
+    sourceIntent: path.sourceExcerpt?.trim() || path.rationale.trim() || path.title,
     prdPath: {
       documentId,
       pathId: path.id,
@@ -1973,9 +2047,10 @@ const bareSensitiveTestDataPattern = /((?:(?:\b(?:password|passwd|passcode|passp
 const sensitiveTestDataSignalPattern = /(?:pass(?:word|wd|code|phrase)?|pwd|pin|secret|token|cookie|authorization|bearer|api[-_ ]?key|密码|口令|密钥|令牌|凭证)/iu;
 const secretLikeValuePattern = /^(?:sk-[A-Za-z0-9_-]+|eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+|Bearer\s+\S+|[A-Za-z0-9+/_=-]{32,})$/u;
 const bareSecretValueSignalPattern = /(?:\d|[_+\/=.-])/u;
-const persistedUrlPattern = /\b[a-z][a-z0-9+.-]*:[^\s'"\]\)>]+/giu;
+const persistedTextUrlPattern = /\b(?:https?|ftp|file|about|data):[^\s'"\]\)>]+/giu;
 const urlSchemePattern = /^([a-z][a-z0-9+.-]*):(.*)$/iu;
 const hierarchicalUrlPattern = /^[a-z][a-z0-9+.-]*:\/\//iu;
+const quotedSelectorAttributeValuePattern = /(\[[^\]\r\n=]+?=\s*)(["'])([^"'\r\n]*)(\2)/gu;
 
 function isLikelyBareSecretValue(value: string): boolean {
   return secretLikeValuePattern.test(value) || bareSecretValueSignalPattern.test(value);
@@ -2031,19 +2106,40 @@ function redactPersistedTestUrl(value: string): string {
 }
 
 function redactPersistedTestUrls(value: string): string {
-  return value.replace(persistedUrlPattern, redactPersistedTestUrl);
+  return value.replace(persistedTextUrlPattern, redactPersistedTestUrl);
 }
 
-function redactPersistedTestText(value: string, unreviewedInputValues: readonly string[] = []): string {
-  const urlRedacted = redactPersistedTestUrls(value);
-  const redactedValues = Array.from(new Set(unreviewedInputValues))
+function redactPersistedKnownInputValues(value: string, unreviewedInputValues: readonly string[]): string {
+  return Array.from(new Set(unreviewedInputValues))
     .filter(Boolean)
-    .reduce((text, inputValue) => text.split(inputValue).join('[已隐藏]'), urlRedacted);
-  return redactedValues
+    .reduce((text, inputValue) => text.split(inputValue).join('[已隐藏]'), value);
+}
+
+function redactPersistedSensitiveTestText(value: string, unreviewedInputValues: readonly string[]): string {
+  return redactPersistedKnownInputValues(value, unreviewedInputValues)
     .replace(explicitSensitiveTestDataPattern, '$1[已隐藏]')
     .replace(bareSensitiveTestDataPattern, (match, prefix: string, candidate: string) =>
       isLikelyBareSecretValue(candidate) ? `${prefix}[已隐藏]` : match,
     );
+}
+
+function redactPersistedTestText(value: string, unreviewedInputValues: readonly string[] = []): string {
+  return redactPersistedSensitiveTestText(redactPersistedTestUrls(value), unreviewedInputValues);
+}
+
+function redactPersistedDirectTestUrl(value: string, unreviewedInputValues: readonly string[] = []): string {
+  return redactPersistedSensitiveTestText(redactPersistedTestUrl(value), unreviewedInputValues);
+}
+
+function redactPersistedTestSelector(selector: string, unreviewedInputValues: readonly string[]): string {
+  const inputsRedacted = redactPersistedKnownInputValues(selector, unreviewedInputValues);
+  return inputsRedacted.replace(
+    quotedSelectorAttributeValuePattern,
+    (match, prefix: string, quote: string, attributeValue: string) => {
+      const redactedValue = redactPersistedTestText(attributeValue);
+      return redactedValue === attributeValue ? match : `${prefix}${quote}${redactedValue}${quote}`;
+    },
+  );
 }
 
 function hasUnreviewedAgentInputValue(step: AgentStep): boolean {
@@ -2084,11 +2180,18 @@ function testStepBodyForAgentPlanStep(step: AgentStep, unreviewedInputValues: re
 
 function createTestLocatorFingerprint(selector: string): TestLocatorFingerprint {
   const normalizedSelector = selector.trim();
-  const isFragile = normalizedSelector.includes(':nth-child(') || normalizedSelector.includes(':nth-of-type(');
-  const isPublicSelector = normalizedSelector.startsWith('#') || normalizedSelector.includes('[');
+  const isPositionalSelector = normalizedSelector.includes(':nth-child(') || normalizedSelector.includes(':nth-of-type(');
+  const hasStrongSemanticSignal = /\[(?:data-(?:test(?:id)?|qa)|aria-label|role)\b/i.test(normalizedSelector);
+  const hasPublicSignal = normalizedSelector.startsWith('#') || normalizedSelector.includes('[data-') || normalizedSelector.includes('[name=');
   return {
     selector: normalizedSelector,
-    quality: isFragile ? 'fragile' : isPublicSelector ? 'acceptable' : 'unknown',
+    quality: isPositionalSelector
+      ? 'weak'
+      : hasStrongSemanticSignal
+        ? 'strong'
+        : hasPublicSignal
+          ? 'acceptable'
+          : 'unresolved',
   };
 }
 
@@ -2101,13 +2204,13 @@ function toDeterministicTestAction(
   unreviewedInputValues: readonly string[],
 ): DeterministicTestAction | undefined {
   const selector = step.selector?.trim();
-  const redactedSelector = selector ? redactPersistedTestText(selector, unreviewedInputValues) : undefined;
+  const redactedSelector = selector ? redactPersistedTestSelector(selector, unreviewedInputValues) : undefined;
   const selectorCanBePersisted = selector === redactedSelector;
   const url = step.url?.trim();
   const timeoutMs = toPositiveTimeout(step.timeoutMs);
 
   if (step.action === 'navigate' && url) {
-    return { kind: 'navigate', url: redactPersistedTestText(url, unreviewedInputValues) };
+    return { kind: 'navigate', url: redactPersistedDirectTestUrl(url, unreviewedInputValues) };
   }
   if (step.action === 'click' && selector && selectorCanBePersisted) {
     return { kind: 'click', locator: createTestLocatorFingerprint(selector) };
@@ -2180,10 +2283,10 @@ export function getTestStepModelRequirement(step: TestStepDraft): TestStepModelR
   if (step.type === 'manual' || step.type === 'recordingReplay') {
     return 'notApplicable';
   }
-  if (step.type === 'ai' && step.execution?.action) {
+  if (getConfirmedDeterministicTestStep(step)) {
     return 'none';
   }
-  if (step.type === 'aiAssert' && step.execution?.assertion) {
+  if (getConfirmedExplicitTestAssertion(step)) {
     return 'none';
   }
   return 'required';
@@ -2223,6 +2326,7 @@ export function createTestCaseFromAgentRun({
   );
   const createdAt = Date.now();
   return {
+    schemaVersion: 2,
     id: `case-nl-${createdAt}-${seed}`,
     kind: 'scenario',
     groupId,
@@ -2232,7 +2336,7 @@ export function createTestCaseFromAgentRun({
     name: redactPersistedTestText(agentRun.plan.title.trim(), unreviewedInputValues) || `自然语言测试 ${seed}`,
     category: '自然语言',
     lastEdited: '刚刚',
-    url: redactPersistedTestText(agentRun.intent.targetUrl?.trim() || url, unreviewedInputValues),
+    url: redactPersistedDirectTestUrl(agentRun.intent.targetUrl?.trim() || url, unreviewedInputValues),
     notes: [
       '由已通过的自然语言 Agent 运行生成，请在执行前审阅步骤和目标环境。',
       redactPersistedTestText(agentRun.plan.summary.trim(), unreviewedInputValues),
@@ -2401,11 +2505,13 @@ export function createTestCaseFromRecording({
   seed: number;
 }): TestCaseDraft {
   return {
+    schemaVersion: 2,
     id: `case-recording-${Date.now()}-${seed}`,
     kind: 'recording',
     groupId: recording.groupId,
     environmentId: recording.environmentId,
     source: 'recording',
+    sourceIntent: recording.comparisonGoal.trim() || recording.summary.trim() || recording.name,
     name: `${recording.name} 回放校验`,
     category: '录制回放',
     lastEdited: '刚刚',
@@ -2472,6 +2578,7 @@ export function createEmptyTestCase(
   environmentId: string,
 ): TestCaseDraft {
   return {
+    schemaVersion: 2,
     id: `case-${Date.now()}-${seed}`,
     kind: 'scenario',
     groupId,

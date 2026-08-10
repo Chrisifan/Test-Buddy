@@ -2,7 +2,15 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import * as React from 'react';
 import { describe, expect, it, vi } from 'vitest';
 
-import { createDemoStudioState, createTestStep, insertTestStep, removeTestStep } from '../../../shared/studio.js';
+import {
+  createDemoStudioState,
+  createTestStep,
+  insertTestStep,
+  removeTestStep,
+  type DeterministicTestAction,
+  type ExplicitTestAssertion,
+  type TestCaseDraft,
+} from '../../../shared/studio.js';
 import { I18nProvider } from '../../i18n/index.js';
 import { TestCaseManagementPage } from './TestCaseManagementPage.js';
 
@@ -33,6 +41,7 @@ function renderPage({
     onCreateTestCase,
     onMoveStep,
     onRetrySave,
+    onUpdateTestCase,
     ...render(
       <I18nProvider locale={locale}>
         <TestCaseManagementPage
@@ -55,6 +64,64 @@ function renderPage({
         />
       </I18nProvider>,
     ),
+  };
+}
+
+function createStructuredActionCase(
+  action: DeterministicTestAction,
+  reviewStatus: 'needsReview' | 'confirmed' = 'needsReview',
+): TestCaseDraft {
+  return {
+    ...selectedTestCase,
+    steps: [
+      {
+        id: 'structured-action-step',
+        type: 'ai',
+        title: '进入订单页',
+        body: '打开订单列表并等待页面可用。',
+        execution: {
+          schemaVersion: 2,
+          intent: '进入订单页',
+          reviewStatus,
+          actionRisk: 'low',
+          action,
+          provenance: {
+            source: 'agentRun',
+            runId: 'run-structured-action',
+            stepId: 'agent-step-structured-action',
+          },
+        },
+      },
+    ],
+  };
+}
+
+function createStructuredAssertionCase(
+  assertion: ExplicitTestAssertion,
+  reviewStatus: 'needsReview' | 'confirmed' = 'needsReview',
+): TestCaseDraft {
+  return {
+    ...selectedTestCase,
+    steps: [
+      {
+        id: 'structured-assertion-step',
+        type: 'aiAssert',
+        title: '确认订单状态',
+        body: '确认页面显示订单已创建。',
+        execution: {
+          schemaVersion: 2,
+          intent: '确认订单状态',
+          reviewStatus,
+          actionRisk: 'low',
+          assertion,
+          provenance: {
+            source: 'agentRun',
+            runId: 'run-structured-assertion',
+            stepId: 'agent-step-structured-assertion',
+          },
+        },
+      },
+    ],
   };
 }
 
@@ -214,6 +281,112 @@ describe('TestCaseManagementPage', () => {
 
     expect(screen.getByRole('combobox', { name: '步骤类型' })).toHaveTextContent('断言');
     expect(screen.getByLabelText('执行指令')).toHaveValue('验证：订单状态显示为已支付');
+  });
+
+  it('lets a user confirm a supported structured deterministic action', () => {
+    const testCase = createStructuredActionCase({ kind: 'navigate', url: 'https://example.test/orders' });
+    const { onUpdateTestCase } = renderPage({ testCase });
+
+    fireEvent.click(screen.getByRole('button', { name: '确认确定性动作' }));
+
+    const updater = onUpdateTestCase.mock.calls[0]?.[0] as ((testCase: TestCaseDraft) => TestCaseDraft) | undefined;
+    expect(updater).toBeTypeOf('function');
+    expect(updater?.(testCase).steps[0]?.execution?.reviewStatus).toBe('confirmed');
+  });
+
+  it('lets a user revoke confirmation for a structured deterministic action', () => {
+    const testCase = createStructuredActionCase(
+      { kind: 'waitForSelector', locator: { selector: '#orders', quality: 'acceptable' } },
+      'confirmed',
+    );
+    const { onUpdateTestCase } = renderPage({ testCase });
+
+    fireEvent.click(screen.getByRole('button', { name: '撤销确认' }));
+
+    const updater = onUpdateTestCase.mock.calls[0]?.[0] as ((testCase: TestCaseDraft) => TestCaseDraft) | undefined;
+    expect(updater).toBeTypeOf('function');
+    expect(updater?.(testCase).steps[0]?.execution?.reviewStatus).toBe('needsReview');
+  });
+
+  it('lets a user confirm a supported structured deterministic assertion', () => {
+    const testCase = createStructuredAssertionCase({
+      id: 'assert-order-created',
+      version: 1,
+      kind: 'pageContains',
+      expected: '订单已创建',
+    });
+    const { onUpdateTestCase } = renderPage({ testCase });
+
+    fireEvent.click(screen.getByRole('button', { name: '确认确定性断言' }));
+
+    const updater = onUpdateTestCase.mock.calls[0]?.[0] as ((testCase: TestCaseDraft) => TestCaseDraft) | undefined;
+    expect(updater).toBeTypeOf('function');
+    expect(updater?.(testCase).steps[0]?.execution?.reviewStatus).toBe('confirmed');
+  });
+
+  it('returns a confirmed structured action to review when visible intent is edited', () => {
+    const testCase = createStructuredActionCase(
+      { kind: 'click', locator: { selector: '#create-order', quality: 'acceptable' } },
+      'confirmed',
+    );
+    const { onUpdateTestCase } = renderPage({ testCase });
+
+    fireEvent.change(screen.getByLabelText('步骤标题'), { target: { value: '创建订单' } });
+
+    const updater = onUpdateTestCase.mock.calls[0]?.[0] as ((testCase: TestCaseDraft) => TestCaseDraft) | undefined;
+    expect(updater).toBeTypeOf('function');
+    expect(updater?.(testCase).steps[0]).toMatchObject({
+      title: '创建订单',
+      execution: { reviewStatus: 'needsReview' },
+    });
+  });
+
+  it('returns a confirmed structured action to review when its instruction is edited', () => {
+    const testCase = createStructuredActionCase(
+      { kind: 'waitForTimeout', timeoutMs: 800 },
+      'confirmed',
+    );
+    const { onUpdateTestCase } = renderPage({ testCase });
+
+    fireEvent.change(screen.getByLabelText('执行指令'), { target: { value: '等待订单列表刷新。' } });
+
+    const updater = onUpdateTestCase.mock.calls[0]?.[0] as ((testCase: TestCaseDraft) => TestCaseDraft) | undefined;
+    expect(updater).toBeTypeOf('function');
+    expect(updater?.(testCase).steps[0]).toMatchObject({
+      body: '等待订单列表刷新。',
+      execution: { reviewStatus: 'needsReview' },
+    });
+  });
+
+  it('returns a confirmed structured action to review when its type changes', async () => {
+    const testCase = createStructuredActionCase(
+      { kind: 'scrollTo', locator: { selector: '#orders', quality: 'acceptable' } },
+      'confirmed',
+    );
+    const { onUpdateTestCase } = renderPage({ testCase });
+
+    fireEvent.click(screen.getByRole('combobox', { name: '步骤类型' }));
+    fireEvent.click(await screen.findByRole('option', { name: '断言' }));
+
+    const updater = onUpdateTestCase.mock.calls[0]?.[0] as ((testCase: TestCaseDraft) => TestCaseDraft) | undefined;
+    expect(updater).toBeTypeOf('function');
+    expect(updater?.(testCase).steps[0]).toMatchObject({
+      type: 'aiAssert',
+      execution: { reviewStatus: 'needsReview' },
+    });
+  });
+
+  it('keeps unsupported structured input actions review-only', () => {
+    const testCase = createStructuredActionCase({
+      kind: 'input',
+      locator: { selector: '#email', quality: 'acceptable' },
+      value: 'not-persisted@example.test',
+    });
+
+    renderPage({ testCase });
+
+    expect(screen.queryByRole('button', { name: '确认确定性动作' })).not.toBeInTheDocument();
+    expect(screen.getByText('该结构化动作暂不支持离线执行。')).toBeInTheDocument();
   });
 
   it('uses English labels for the editor controls', async () => {

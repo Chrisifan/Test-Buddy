@@ -6358,4 +6358,281 @@ describe('StudioRuntime agent observation', () => {
       expect.arrayContaining([expect.objectContaining({ type: 'agent:plan-revised' })]),
     );
   });
+
+  it('keeps a deterministic step neutral without a real Playwright page and never invokes the Planner', async () => {
+    const currentState: BrowserSessionState = {
+      id: 'session-stub',
+      status: 'ready',
+      currentUrl: 'https://example.test/orders',
+      pageTitle: 'Orders',
+      message: 'stub',
+      updatedAt: '2026-08-10T08:00:00.000Z',
+    };
+    const navigate = vi.fn();
+    const click = vi.fn();
+    const waitForSelector = vi.fn();
+    const scroll = vi.fn();
+    const createPlan = vi.fn();
+    const runtime = new StudioRuntime(
+      vi.fn(),
+      {
+        hasRealPage: () => false,
+        start: vi.fn(),
+        navigate,
+        click,
+        input: vi.fn(),
+        waitForSelector,
+        scroll,
+        capture: vi.fn().mockResolvedValue(currentState),
+        getState: () => currentState,
+      },
+      undefined,
+      { createPlan },
+    );
+
+    const response = await runtime.runDeterministicStep({
+      testCaseId: 'case-orders',
+      sourceStep: {
+        id: 'step-open-orders',
+        type: 'ai',
+        title: '打开订单页',
+        body: '打开订单页',
+        execution: {
+          schemaVersion: 2,
+          intent: '打开订单页',
+          reviewStatus: 'confirmed',
+          actionRisk: 'low',
+          action: { kind: 'navigate', url: 'https://example.test/orders' },
+        },
+      },
+      plannedStep: {
+        action: 'navigate',
+        title: '打开订单页',
+        instruction: '打开订单页',
+        url: 'https://example.test/orders',
+      },
+      targetEnvironment: 'staging',
+      runtimeProfile: {
+        browser: 'chromium',
+        baseUrl: 'https://example.test',
+        viewport: 'desktop',
+        locale: 'zh-CN',
+        headless: true,
+      },
+    });
+
+    expect(response.agentRun.status).toBe('neutral');
+    expect(response.detail.steps).toEqual([
+      expect.objectContaining({ stepId: 'step-open-orders', status: 'neutral' }),
+    ]);
+    expect(navigate).not.toHaveBeenCalled();
+    expect(click).not.toHaveBeenCalled();
+    expect(waitForSelector).not.toHaveBeenCalled();
+    expect(scroll).not.toHaveBeenCalled();
+    expect(createPlan).not.toHaveBeenCalled();
+  });
+
+  it('executes one deterministic step through a real page without Planner or model execution', async () => {
+    const currentState: BrowserSessionState = {
+      id: 'session-real',
+      status: 'ready',
+      currentUrl: 'https://example.test/start',
+      pageTitle: 'Start',
+      screenshotPath: '/tmp/start.png',
+      message: 'ready',
+      updatedAt: '2026-08-10T08:00:00.000Z',
+    };
+    const navigatedState: BrowserSessionState = {
+      ...currentState,
+      currentUrl: 'https://example.test/orders',
+      pageTitle: 'Orders',
+      screenshotPath: '/tmp/orders.png',
+    };
+    const navigate = vi.fn().mockResolvedValue(navigatedState);
+    const createPlan = vi.fn();
+    const runtime = new StudioRuntime(
+      vi.fn(),
+      {
+        hasRealPage: () => true,
+        start: vi.fn(),
+        navigate,
+        click: vi.fn(),
+        input: vi.fn(),
+        capture: vi.fn().mockResolvedValue(currentState),
+        getState: () => currentState,
+      },
+      undefined,
+      { createPlan },
+    );
+
+    const response = await runtime.runDeterministicStep({
+      testCaseId: 'case-orders',
+      sourceStep: {
+        id: 'step-open-orders',
+        type: 'ai',
+        title: '打开订单页',
+        body: '打开订单页',
+        execution: {
+          schemaVersion: 2,
+          intent: '打开订单页',
+          reviewStatus: 'confirmed',
+          actionRisk: 'low',
+          action: { kind: 'navigate', url: 'https://example.test/orders' },
+        },
+      },
+      plannedStep: {
+        action: 'navigate',
+        title: '打开订单页',
+        instruction: '打开订单页',
+        url: 'https://example.test/orders',
+      },
+      targetEnvironment: 'staging',
+      runtimeProfile: {
+        browser: 'chromium',
+        baseUrl: 'https://example.test',
+        viewport: 'desktop',
+        locale: 'zh-CN',
+        headless: true,
+      },
+    });
+
+    expect(navigate).toHaveBeenCalledWith({ url: 'https://example.test/orders' });
+    expect(createPlan).not.toHaveBeenCalled();
+    expect(response.agentRun.status).toBe('passed');
+    expect(response.agentRun.plan.steps).toEqual(
+      expect.arrayContaining([expect.objectContaining({ action: 'navigate', url: 'https://example.test/orders' })]),
+    );
+    expect(response.agentRun.artifacts).toEqual(
+      expect.arrayContaining([expect.objectContaining({ type: 'screenshot', path: '/tmp/orders.png' })]),
+    );
+    expect(response.detail.steps).toEqual([
+      expect.objectContaining({ stepId: 'step-open-orders', status: 'passed', screenshotPath: '/tmp/orders.png' }),
+    ]);
+  });
+
+  it('evaluates a confirmed explicit assertion against a real page without Planner or model execution', async () => {
+    const currentState: BrowserSessionState = {
+      id: 'session-real',
+      status: 'ready',
+      currentUrl: 'https://example.test/orders',
+      pageTitle: 'Orders',
+      screenshotPath: '/tmp/orders.png',
+      message: 'ready',
+      updatedAt: '2026-08-10T08:00:00.000Z',
+    };
+    const getPageText = vi.fn().mockResolvedValue('订单已创建\n订单号：A-001');
+    const createPlan = vi.fn();
+    const runtime = new StudioRuntime(
+      vi.fn(),
+      {
+        hasRealPage: () => true,
+        start: vi.fn(),
+        navigate: vi.fn(),
+        click: vi.fn(),
+        input: vi.fn(),
+        capture: vi.fn().mockResolvedValue(currentState),
+        getPageText,
+        captureObservation: vi.fn().mockResolvedValue({ textSummary: '订单已创建' }),
+        getState: () => currentState,
+      },
+      undefined,
+      { createPlan },
+    );
+
+    const response = await runtime.runDeterministicStep({
+      testCaseId: 'case-orders',
+      sourceStep: {
+        id: 'step-confirm-order', type: 'aiAssert', title: '确认订单已创建', body: '确认页面包含订单已创建',
+        execution: {
+          schemaVersion: 2, intent: '确认订单已创建', reviewStatus: 'confirmed', actionRisk: 'low',
+          assertion: { id: 'assert-order-created', version: 1, kind: 'pageContains', expected: '订单已创建' },
+        },
+      },
+      plannedStep: { action: 'assert', title: '确认订单已创建', instruction: '确认页面包含订单已创建', expected: '订单已创建' },
+      assertion: { id: 'assert-order-created', version: 1, kind: 'pageContains', expected: '订单已创建' },
+      targetEnvironment: 'staging',
+      runtimeProfile: { browser: 'chromium', baseUrl: 'https://example.test', viewport: 'desktop', locale: 'zh-CN', headless: true },
+    });
+
+    expect(getPageText).toHaveBeenCalledTimes(1);
+    expect(createPlan).not.toHaveBeenCalled();
+    expect(response.agentRun.status).toBe('passed');
+    expect(response.agentRun.plan.steps).toEqual(
+      expect.arrayContaining([expect.objectContaining({ action: 'assert', sourceStepType: 'aiAssert' })]),
+    );
+    expect(response.agentRun.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'agent:assertion-result',
+          verification: expect.objectContaining({
+            assertion: { id: 'assert-order-created', version: 1, kind: 'pageContains' },
+            evidence: expect.stringContaining('订单已创建'),
+          }),
+        }),
+      ]),
+    );
+    expect(response.detail.steps).toEqual([
+      expect.objectContaining({ stepId: 'step-confirm-order', status: 'passed', screenshotPath: '/tmp/orders.png' }),
+    ]);
+  });
+
+  it('cancels a deterministic selector wait without invoking the Planner', async () => {
+    const currentState: BrowserSessionState = {
+      id: 'session-real',
+      status: 'ready',
+      currentUrl: 'https://example.test/orders',
+      pageTitle: 'Orders',
+      message: 'ready',
+      updatedAt: '2026-08-10T08:00:00.000Z',
+    };
+    let markWaitStarted: () => void = () => undefined;
+    const waitStarted = new Promise<void>((resolve) => {
+      markWaitStarted = resolve;
+    });
+    const waitForSelector = vi.fn(() => {
+      markWaitStarted();
+      return new Promise<BrowserSessionState>(() => undefined);
+    });
+    const createPlan = vi.fn();
+    const runtime = new StudioRuntime(
+      vi.fn(),
+      {
+        hasRealPage: () => true,
+        start: vi.fn(),
+        navigate: vi.fn(),
+        click: vi.fn(),
+        input: vi.fn(),
+        waitForSelector,
+        capture: vi.fn().mockResolvedValue(currentState),
+        getState: () => currentState,
+      },
+      undefined,
+      { createPlan },
+    );
+    const controller = new AbortController();
+    const pending = runtime.runDeterministicStep({
+      testCaseId: 'case-orders',
+      cancellationSignal: controller.signal,
+      sourceStep: {
+        id: 'step-wait-orders', type: 'ai', title: '等待订单就绪', body: '等待订单就绪',
+        execution: {
+          schemaVersion: 2, intent: '等待订单就绪', reviewStatus: 'confirmed', actionRisk: 'low',
+          action: { kind: 'waitForSelector', locator: { selector: '#orders-ready', quality: 'acceptable' } },
+        },
+      },
+      plannedStep: { action: 'wait', title: '等待订单就绪', instruction: '等待订单就绪', selector: '#orders-ready' },
+      targetEnvironment: 'staging',
+      runtimeProfile: { browser: 'chromium', baseUrl: 'https://example.test', viewport: 'desktop', locale: 'zh-CN', headless: true },
+    });
+
+    await waitStarted;
+    controller.abort();
+    const response = await pending;
+
+    expect(waitForSelector).toHaveBeenCalledWith({ selector: '#orders-ready', timeoutMs: 1000 });
+    expect(response.agentRun.status).toBe('neutral');
+    expect(response.agentRun.cancellation).toEqual(expect.objectContaining({ source: 'user', reason: 'userCancelled' }));
+    expect(response.detail.cancellation).toEqual(expect.objectContaining({ source: 'user', reason: 'userCancelled' }));
+    expect(createPlan).not.toHaveBeenCalled();
+  });
 });

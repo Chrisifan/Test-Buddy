@@ -11,11 +11,13 @@ import {
   createTestStep,
   createTestCaseFromAgentRun,
   createTestCaseFromGeneratedPath,
+  createTestCaseFromRecording,
   createEmptyProject,
   createInitialStudioState,
   createManualStepAutomationReplacement,
   createReporterFixDraft,
   getConfirmedDeterministicTestStep,
+  getConfirmedExplicitTestAssertion,
   getExclusiveRecordingReplayId,
   isRecordingLinkedToGeneratedPath,
   isConfirmedDeterministicTestStep,
@@ -632,7 +634,7 @@ describe('studio state hydration', () => {
     });
   });
 
-  it('redacts payloads from arbitrary opaque URL schemes', () => {
+  it('redacts arbitrary opaque URL schemes in structured direct URL fields', () => {
     const unsafeUrl = 'custom:secret-value?token=raw#x';
     const safeUrl = 'custom:[已隐藏]';
     const agentRun = createStubAgentRun({
@@ -662,12 +664,127 @@ describe('studio state hydration', () => {
     const serialized = JSON.stringify(testCase);
 
     expect(testCase?.url).toBe(safeUrl);
-    expect(testCase?.sourceIntent).toContain(safeUrl);
-    expect(testCase?.notes).toContain(safeUrl);
     expect(testCase?.steps[0]?.execution?.action).toEqual({ kind: 'navigate', url: safeUrl });
-    ['secret-value', 'raw', '#'].forEach((secret) => {
+    expect(testCase?.sourceIntent).toContain('custom:secret-value?token=[已隐藏]');
+    ['token=raw', '#x'].forEach((secret) => {
       expect(serialized).not.toContain(secret);
     });
+  });
+
+  it('preserves CSS pseudo selectors while redacting supported URLs in quoted selector attributes', () => {
+    const unsafeUrl = 'https://user:pw@example.test/orders?token=raw#code=raw2';
+    const agentRun = createStubAgentRun({
+      mode: 'ai',
+      prompt: '检查订单筛选条件',
+      runtimeDescription: 'chromium / desktop / headless / https://app.example.test',
+      targetEnvironment: 'staging',
+      projectId: 'project-orders',
+      targetUrl: 'https://app.example.test/orders',
+      plannedPlan: {
+        title: '检查订单筛选条件',
+        summary: '检查可交互元素。',
+        risks: [],
+        steps: [
+          { action: 'click', title: '切换已选状态', instruction: '切换已选状态', selector: 'input:checked' },
+          { action: 'wait', title: '等待第二项', instruction: '等待第二项', selector: '.item:nth-child(2)' },
+          { action: 'click', title: '打开敏感链接', instruction: '打开敏感链接', selector: `a[href="${unsafeUrl}"]` },
+        ],
+      },
+    });
+
+    const testCase = createTestCaseFromAgentRun({
+      agentRun,
+      groupId: 'group-orders',
+      environmentId: 'env-staging',
+      url: 'https://fallback.example.test',
+      seed: 21,
+    });
+
+    expect(testCase?.steps[0]?.execution?.action).toEqual({
+      kind: 'click',
+      locator: { selector: 'input:checked', quality: 'unresolved' },
+    });
+    expect(testCase?.steps[1]?.execution?.action).toEqual({
+      kind: 'waitForSelector',
+      locator: { selector: '.item:nth-child(2)', quality: 'weak' },
+    });
+    expect(testCase?.steps[2]?.execution?.action).toBeUndefined();
+    expect(JSON.stringify(testCase)).not.toContain(unsafeUrl);
+  });
+
+  it('redacts every structured direct URL scheme without treating ordinary colon text as a URL', () => {
+    const aboutUrl = 'about:blank#token=raw';
+    const dataUrl = 'data:text/plain,private-value?token=raw';
+    const opaqueUrl = 'custom:secret-value?token=raw#code=raw2';
+    const fileUrl = 'file:///tmp/page.html?token=raw#code=raw2';
+    const agentRun = createStubAgentRun({
+      mode: 'ai',
+      prompt: 'status:pending; token should be rotated',
+      runtimeDescription: 'chromium / desktop / headless / https://app.example.test',
+      targetEnvironment: 'staging',
+      projectId: 'project-orders',
+      targetUrl: opaqueUrl,
+      plannedPlan: {
+        title: '结构化 URL 边界',
+        summary: '保留 status:pending。',
+        risks: [],
+        steps: [
+          { action: 'navigate', title: '打开 about 页面', instruction: '打开 about 页面', url: aboutUrl },
+          { action: 'navigate', title: '打开 data 页面', instruction: '打开 data 页面', url: dataUrl },
+          { action: 'navigate', title: '打开自定义页面', instruction: '打开自定义页面', url: opaqueUrl },
+          { action: 'navigate', title: '打开本地页面', instruction: '打开本地页面', url: fileUrl },
+        ],
+      },
+    });
+
+    const testCase = createTestCaseFromAgentRun({
+      agentRun,
+      groupId: 'group-orders',
+      environmentId: 'env-staging',
+      url: 'https://fallback.example.test',
+      seed: 22,
+    });
+
+    expect(testCase?.sourceIntent).toBe('status:pending; token should be rotated');
+    expect(testCase?.notes).toContain('status:pending');
+    expect(testCase?.url).toBe('custom:[已隐藏]');
+    expect(testCase?.steps.map((step) => step.execution?.action)).toEqual([
+      { kind: 'navigate', url: 'about:blank' },
+      { kind: 'navigate', url: 'data:[已隐藏]' },
+      { kind: 'navigate', url: 'custom:[已隐藏]' },
+      { kind: 'navigate', url: 'file:///tmp/page.html?token=[已隐藏]' },
+    ]);
+  });
+
+  it('redacts explicit token values while preserving non-sensitive token prose', () => {
+    const token = 'token-value-123';
+    const agentRun = createStubAgentRun({
+      mode: 'ai',
+      prompt: `token should be rotated; token: ${token}`,
+      runtimeDescription: 'chromium / desktop / headless / https://app.example.test',
+      targetEnvironment: 'staging',
+      projectId: 'project-orders',
+      targetUrl: 'https://app.example.test/orders',
+      plannedPlan: {
+        title: 'token should be rotated',
+        summary: `token: ${token}`,
+        risks: [],
+        steps: [{ action: 'assert', title: 'token should be rotated', instruction: `token: ${token}`, expected: '令牌策略已更新' }],
+      },
+    });
+
+    const testCase = createTestCaseFromAgentRun({
+      agentRun,
+      groupId: 'group-orders',
+      environmentId: 'env-staging',
+      url: 'https://fallback.example.test',
+      seed: 23,
+    });
+
+    expect(testCase?.sourceIntent).toBe('token should be rotated; token: [已隐藏]');
+    expect(testCase?.name).toBe('token should be rotated');
+    expect(testCase?.notes).toContain('token: [已隐藏]');
+    expect(JSON.stringify(testCase)).not.toContain(token);
   });
 
   it('keeps ordinary sensitive-word prose while redacting explicit secret values', () => {
@@ -810,6 +927,19 @@ describe('studio state hydration', () => {
       },
     })).toBe('none');
     expect(studio.getTestStepModelRequirement({
+      id: 'unreviewed-navigate',
+      type: 'ai',
+      title: '打开订单页',
+      body: '打开订单页',
+      execution: {
+        schemaVersion: 2,
+        intent: '进入订单页',
+        reviewStatus: 'needsReview',
+        actionRisk: 'low',
+        action: { kind: 'navigate', url: 'https://example.test/orders' },
+      },
+    })).toBe('required');
+    expect(studio.getTestStepModelRequirement({
       id: 'semantic-assert',
       type: 'aiAssert',
       title: '确认订单状态',
@@ -828,6 +958,19 @@ describe('studio state hydration', () => {
         assertion: { id: 'assert-order-created', version: 1, kind: 'pageContains', expected: '订单已创建' },
       },
     })).toBe('none');
+    expect(studio.getTestStepModelRequirement({
+      id: 'unreviewed-explicit-assert',
+      type: 'aiAssert',
+      title: '确认订单状态',
+      body: '页面包含订单已创建',
+      execution: {
+        schemaVersion: 2,
+        intent: '确认订单状态',
+        reviewStatus: 'needsReview',
+        actionRisk: 'low',
+        assertion: { id: 'assert-order-created', version: 1, kind: 'pageContains', expected: '订单已创建' },
+      },
+    })).toBe('required');
     expect(studio.getTestStepModelRequirement({
       id: 'manual',
       type: 'manual',
@@ -970,6 +1113,48 @@ describe('studio state hydration', () => {
     expect(isRecordingLinkedToGeneratedPath(recording, 'doc-other', reanalyzedPath)).toBe(false);
   });
 
+  it('preserves PRD and recording business intent in V2 case drafts without promoting free text to actions', () => {
+    const project = createEmptyProject(1);
+    const document = createPrdDocumentAsset({
+      name: 'orders.md',
+      kind: 'markdown',
+      size: 120,
+      sourceText: '# 订单\n- 用户提交订单后必须展示成功提示。',
+    });
+    const path = document.generatedPaths[0]!;
+    const prdCase = createTestCaseFromGeneratedPath({
+      path,
+      documentId: document.id,
+      groupId: project.groups[0]!.id,
+      environmentId: project.environments[0]!.id,
+      url: project.defaultUrl,
+      seed: 1,
+    });
+    const recording = createRecordingFromGeneratedPath({
+      path,
+      documentId: document.id,
+      groupId: project.groups[0]!.id,
+      environmentId: project.environments[0]!.id,
+      startUrl: project.defaultUrl,
+      seed: 1,
+    });
+    const recordingCase = createTestCaseFromRecording({ recording, seed: 2 });
+
+    expect(prdCase).toMatchObject({
+      schemaVersion: 2,
+      source: 'prd',
+      sourceIntent: path.sourceExcerpt,
+      prdPath: { documentId: document.id, pathId: path.id },
+    });
+    expect(recordingCase).toMatchObject({
+      schemaVersion: 2,
+      source: 'recording',
+      sourceIntent: recording.comparisonGoal,
+    });
+    expect(recordingCase.steps[1]).toMatchObject({ type: 'aiAssert', body: recording.comparisonGoal });
+    expect(recordingCase.steps[1]?.execution).toBeUndefined();
+  });
+
   it('starts with an empty workspace and removes the legacy demo workspace during hydration', () => {
     const initialState = createInitialStudioState();
     const hydrated = hydrateStudioState(createDemoStudioState());
@@ -994,6 +1179,40 @@ describe('studio state hydration', () => {
 
     expect(hydrated.projects.map((project) => project.id)).toEqual(['project-user']);
     expect(hydrated.selectedProjectId).toBe('project-user');
+  });
+
+  it('migrates legacy test cases to schema version 2 without changing their assets', () => {
+    const project = createEmptyProject(1);
+    const legacyCase = {
+      id: 'case-legacy-schema',
+      kind: 'scenario' as const,
+      groupId: project.groups[0]!.id,
+      environmentId: project.environments[0]!.id,
+      source: 'prd' as const,
+      prdPath: { documentId: 'doc-orders', pathId: 'path-checkout' },
+      sourceIntent: '验证结算页关键状态',
+      name: '结算页回归',
+      category: '订单',
+      lastEdited: '刚刚',
+      url: project.defaultUrl,
+      notes: '旧格式用例',
+      steps: [{ id: 'step-legacy-schema', type: 'aiAssert' as const, title: '确认状态', body: '页面显示订单已创建' }],
+    };
+
+    const hydrated = hydrateStudioState({
+      ...createInitialStudioState(),
+      projects: [{ ...project, testCases: [legacyCase] }],
+      selectedProjectId: project.id,
+    });
+
+    expect(hydrated.projects[0]?.testCases[0]).toMatchObject({
+      schemaVersion: 2,
+      id: legacyCase.id,
+      source: 'prd',
+      prdPath: legacyCase.prdPath,
+      sourceIntent: legacyCase.sourceIntent,
+      steps: legacyCase.steps,
+    });
   });
 
   it('keeps legacy test steps unchanged and discards malformed V2 execution drafts during hydration', () => {
@@ -1072,6 +1291,55 @@ describe('studio state hydration', () => {
     expect(steps?.[3]).toMatchObject({ id: 'step-v2-bad-assertion', body: '保留断言文本' });
     expect(steps?.[3]?.execution).toBeUndefined();
     expect(hydrated.projects[0]?.testCases[0]?.sourceIntent).toBeUndefined();
+  });
+
+  it('maps legacy locator-quality values into the four-level V2 contract during hydration', () => {
+    const project = createEmptyProject(9);
+    const execution = (id: string, selector: string, quality: string) => ({
+      id,
+      type: 'ai' as const,
+      title: id,
+      body: id,
+      execution: {
+        schemaVersion: 2,
+        intent: id,
+        reviewStatus: 'needsReview',
+        actionRisk: 'low',
+        action: { kind: 'click', locator: { selector, quality } },
+      },
+    });
+    const hydrated = hydrateStudioState({
+      ...createInitialStudioState(),
+      projects: [{
+        ...project,
+        testCases: [{
+          ...project.testCases[0]!,
+          steps: [
+            execution('legacy-fragile', '.row:nth-child(2)', 'fragile'),
+            execution('legacy-unknown', '.submit', 'unknown'),
+            execution('current-strong', '[aria-label="提交订单"]', 'strong'),
+            execution('invalid-quality', '#submit', 'unsafe'),
+          ] as never,
+        }],
+      }],
+      selectedProjectId: project.id,
+    });
+
+    const steps = hydrated.projects[0]?.testCases[0]?.steps;
+    expect(steps?.[0]?.execution?.action).toEqual({
+      kind: 'click',
+      locator: { selector: '.row:nth-child(2)', quality: 'weak' },
+    });
+    expect(steps?.[1]?.execution?.action).toEqual({
+      kind: 'click',
+      locator: { selector: '.submit', quality: 'unresolved' },
+    });
+    expect(steps?.[2]?.execution?.action).toEqual({
+      kind: 'click',
+      locator: { selector: '[aria-label="提交订单"]', quality: 'strong' },
+    });
+    expect(steps?.[3]).toMatchObject({ id: 'invalid-quality', body: 'invalid-quality' });
+    expect(steps?.[3]?.execution).toBeUndefined();
   });
 
   it('discards non-object persisted test steps while keeping adjacent legacy and V2 steps', () => {
@@ -1313,6 +1581,26 @@ describe('studio state hydration', () => {
     expect(
       isAgentRunnableTestCase({
         ...baseCase,
+        steps: [
+          {
+            id: 'step-confirmed-assertion',
+            type: 'aiAssert',
+            title: '确认订单已创建',
+            body: '确认页面包含订单已创建',
+            execution: {
+              schemaVersion: 2,
+              intent: '确认订单已创建',
+              reviewStatus: 'confirmed',
+              actionRisk: 'low',
+              assertion: { id: 'assert-order-created', version: 1, kind: 'pageContains', expected: '订单已创建' },
+            },
+          },
+        ],
+      }),
+    ).toBe(false);
+    expect(
+      isAgentRunnableTestCase({
+        ...baseCase,
         steps: [{ id: 'step-manual', type: 'manual', title: '人工检查', body: '确认状态' }],
       }),
     ).toBe(false);
@@ -1502,6 +1790,91 @@ describe('studio state hydration', () => {
       instruction: 'scrollTo 说明',
       selector: '#summary',
     });
+    expect(
+      getConfirmedDeterministicTestStep(
+        confirmedAction({ kind: 'click', locator: { selector: '.submit', quality: 'unresolved' } }),
+      ),
+    ).toBeUndefined();
+  });
+
+  it('accepts only confirmed and complete V2 explicit assertions', () => {
+    const confirmedAssertion = (assertion: NonNullable<studio.TestStepDraft['execution']>['assertion']) => ({
+      id: `step-${assertion!.kind}`,
+      type: 'aiAssert' as const,
+      title: `${assertion!.kind} 标题`,
+      body: `${assertion!.kind} 说明`,
+      execution: {
+        schemaVersion: 2 as const,
+        intent: `${assertion!.kind} 意图`,
+        reviewStatus: 'confirmed' as const,
+        actionRisk: 'low' as const,
+        assertion: assertion!,
+      },
+    });
+
+    expect(
+      getConfirmedExplicitTestAssertion(
+        confirmedAssertion({ id: 'assert-page', version: 1, kind: 'pageContains', expected: '订单已创建' }),
+      ),
+    ).toEqual({ id: 'assert-page', version: 1, kind: 'pageContains', expected: '订单已创建' });
+    expect(
+      getConfirmedExplicitTestAssertion(
+        confirmedAssertion({
+          id: 'assert-visible',
+          version: 1,
+          kind: 'locatorVisible',
+          locator: { selector: '#orders', quality: 'acceptable' },
+        }),
+      ),
+    ).toEqual({
+      id: 'assert-visible',
+      version: 1,
+      kind: 'locatorVisible',
+      locator: { selector: '#orders', quality: 'acceptable' },
+    });
+    expect(
+      getConfirmedExplicitTestAssertion({
+        ...confirmedAssertion({ id: 'assert-page', version: 1, kind: 'pageContains', expected: '订单已创建' }),
+        execution: {
+          ...confirmedAssertion({ id: 'assert-page', version: 1, kind: 'pageContains', expected: '订单已创建' }).execution,
+          reviewStatus: 'needsReview',
+        },
+      }),
+    ).toBeUndefined();
+    expect(
+      getConfirmedExplicitTestAssertion(
+        confirmedAssertion({
+          id: 'assert-unresolved',
+          version: 1,
+          kind: 'locatorVisible',
+          locator: { selector: '.submit', quality: 'unresolved' },
+        }),
+      ),
+    ).toBeUndefined();
+    const malformedAssertion = {
+      ...confirmedAssertion({ id: 'assert-page', version: 1, kind: 'pageContains', expected: '订单已创建' }),
+      execution: {
+        ...confirmedAssertion({ id: 'assert-page', version: 1, kind: 'pageContains', expected: '订单已创建' }).execution,
+        assertion: { id: 42, version: 1, kind: 'pageContains', expected: 42 } as never,
+      },
+    };
+    expect(() => getConfirmedExplicitTestAssertion(malformedAssertion)).not.toThrow();
+    expect(getConfirmedExplicitTestAssertion(malformedAssertion)).toBeUndefined();
+    expect(
+      getConfirmedExplicitTestAssertion({
+        ...confirmedAssertion({ id: 'assert-page', version: 1, kind: 'pageContains', expected: '订单已创建' }),
+        type: 'ai',
+      }),
+    ).toBeUndefined();
+    expect(
+      getConfirmedExplicitTestAssertion({
+        ...confirmedAssertion({ id: 'assert-page', version: 1, kind: 'pageContains', expected: '订单已创建' }),
+        execution: {
+          ...confirmedAssertion({ id: 'assert-page', version: 1, kind: 'pageContains', expected: '订单已创建' }).execution,
+          assertion: { id: 'assert-invalid', version: 1, kind: 'locatorTextContains', expected: '已创建' } as never,
+        },
+      }),
+    ).toBeUndefined();
   });
 
   it('rejects unconfirmed, unsupported, malformed, and non-AI deterministic steps', () => {
