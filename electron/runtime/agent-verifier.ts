@@ -5,11 +5,13 @@ import type {
   AgentUsageBucket,
 } from '../../shared/agent.js';
 import type { AgentPlannerModelConfig } from './agent-planner.js';
+import { createLinkedAbortController } from './run-cancellation.js';
 
 export type AgentVerifierModelConfig = AgentPlannerModelConfig;
 
 export interface AgentVerifierRequest {
   config: AgentVerifierModelConfig;
+  cancellationSignal?: AbortSignal;
   assertion: string;
   prompt: string;
   currentUrl?: string;
@@ -107,7 +109,8 @@ export class OpenAICompatibleAgentVerifier implements AgentVerifier {
 
   async verify(request: AgentVerifierRequest): Promise<AgentVerifierResult> {
     const startedAt = Date.now();
-    const controller = new AbortController();
+    const linkedAbort = createLinkedAbortController(request.cancellationSignal);
+    const { controller } = linkedAbort;
     const timeout = setTimeout(() => controller.abort(), 30_000);
     let response: Response;
 
@@ -140,6 +143,7 @@ export class OpenAICompatibleAgentVerifier implements AgentVerifier {
       });
     } finally {
       clearTimeout(timeout);
+      linkedAbort.dispose();
     }
 
     if (!response.ok) {

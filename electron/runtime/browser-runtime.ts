@@ -21,6 +21,7 @@ import type {
   RecordingStepKind,
   RunArtifact,
 } from '../../shared/studio.js';
+import { awaitWithRunCancellation, throwIfRunCancelled } from './run-cancellation.js';
 import { ArtifactManager } from './artifact-manager.js';
 
 type PlaywrightPage = {
@@ -1049,8 +1050,35 @@ export class BrowserRuntime {
             )
             .filter((aggregate): aggregate is { label: string; value: string } => Boolean(aggregate))
             .slice(0, 12);
+          const explicitCompleteness = cleanText(
+            table.getAttribute('data-evidence-completeness') || table.getAttribute('data-completeness'),
+          ).toLowerCase();
+          const isLoading =
+            table.getAttribute('aria-busy') === 'true' ||
+            table.getAttribute('data-loading') === 'true' ||
+            table.getAttribute('data-state') === 'loading';
+          const isVirtualized =
+            table.getAttribute('data-virtualized') === 'true' ||
+            table.getAttribute('data-virtualization') === 'true';
+          const totalItems = pagination.totalItems;
+          const evidenceCompleteness = isLoading
+            ? 'unknown' as const
+            : isVirtualized || explicitCompleteness === 'partial'
+              ? 'partial' as const
+              : explicitCompleteness === 'complete'
+                ? 'complete' as const
+                : explicitCompleteness === 'unknown'
+                  ? 'unknown' as const
+                  : totalItems !== undefined
+                    ? totalItems === dataRows.length
+                      ? 'complete' as const
+                      : 'partial' as const
+                    : isNativeTable && !pagination.totalPages
+                      ? 'complete' as const
+                      : 'unknown' as const;
           return {
             index: index + 1,
+            evidenceCompleteness,
             ...(cleanText(table.querySelector('caption')?.textContent) ||
             cleanText(table.getAttribute('aria-label')) ||
             cleanText(table.getAttribute('data-label')) ||
@@ -1218,8 +1246,34 @@ export class BrowserRuntime {
                     ? undefined
                     : inferChartTrend(dataPoints.map((point) => point.value));
         const visualSize = sizeOf(visual);
+        const explicitCompleteness = cleanText(
+          element.getAttribute('data-evidence-completeness') ||
+          element.getAttribute('data-chart-completeness') ||
+          chartScope.getAttribute('data-evidence-completeness') ||
+          chartScope.getAttribute('data-chart-completeness'),
+        ).toLowerCase();
+        const declaredPointCount = firstPositiveNumber(
+          element.getAttribute('data-point-count'),
+          chartScope.getAttribute('data-point-count'),
+        );
+        const isLoading =
+          element.getAttribute('aria-busy') === 'true' ||
+          element.getAttribute('data-loading') === 'true' ||
+          chartScope.getAttribute('aria-busy') === 'true' ||
+          chartScope.getAttribute('data-loading') === 'true';
+        const isVirtualized =
+          element.getAttribute('data-virtualized') === 'true' ||
+          chartScope.getAttribute('data-virtualized') === 'true';
+        const evidenceCompleteness = isLoading
+          ? 'unknown' as const
+          : isVirtualized || explicitCompleteness === 'partial'
+            ? 'partial' as const
+            : explicitCompleteness === 'complete' || (declaredPointCount !== undefined && declaredPointCount === dataPoints.length)
+              ? 'complete' as const
+              : 'unknown' as const;
         return {
           index: index + 1,
+          evidenceCompleteness,
           ...(title ? { title } : {}),
           kind,
           ...visualSize,
@@ -1264,8 +1318,13 @@ export class BrowserRuntime {
     };
   }
 
-  async replayRecordingSteps(steps: RecordingStepDraft[], sessionId: string): Promise<RecordingReplayResult[]> {
+  async replayRecordingSteps(
+    steps: RecordingStepDraft[],
+    sessionId: string,
+    cancellationSignal?: AbortSignal,
+  ): Promise<RecordingReplayResult[]> {
     const results: RecordingReplayResult[] = [];
+    throwIfRunCancelled(cancellationSignal);
     if (!this.page) {
       return steps.map((step) => ({
         step,
@@ -1275,10 +1334,11 @@ export class BrowserRuntime {
     }
 
     for (const step of steps) {
+      throwIfRunCancelled(cancellationSignal);
       try {
-        await this.replayStep(step);
-        const screenshotPath = await this.captureScreenshotPath(sessionId);
-        await this.page.screenshot({ path: screenshotPath, fullPage: true });
+        await awaitWithRunCancellation(this.replayStep(step), cancellationSignal);
+        const screenshotPath = await awaitWithRunCancellation(this.captureScreenshotPath(sessionId), cancellationSignal);
+        await awaitWithRunCancellation(this.page.screenshot({ path: screenshotPath, fullPage: true }), cancellationSignal);
         results.push({
           step,
           status: 'passed',
@@ -1286,6 +1346,7 @@ export class BrowserRuntime {
           screenshotPath,
         });
       } catch (error) {
+        throwIfRunCancelled(cancellationSignal);
         const screenshotPath = await this.captureScreenshotPath(sessionId);
         await this.page.screenshot({ path: screenshotPath, fullPage: true }).catch(() => undefined);
         results.push({

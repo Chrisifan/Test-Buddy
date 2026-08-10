@@ -4,8 +4,9 @@ import type {
   MidsceneConfig,
   RuntimeProfile,
 } from '../../../shared/studio.js';
+import type { AgentRunResult } from '../../../shared/agent.js';
 
-import { BrainCircuit, RadioTower, Send, SquareActivity } from 'lucide-react';
+import { BrainCircuit, ClipboardPlus, RadioTower, Send, SquareActivity } from 'lucide-react';
 
 import { EvidenceCard, MetricTile, PageHeader, Surface, PageBody, PageShell } from '../../components/workbench.js';
 import { Badge } from '@/components/ui/badge';
@@ -66,12 +67,14 @@ export function NaturalLanguagePage({
   recentChatEntries,
   runtimeProfile,
   midsceneConfig,
+  latestAgentRun,
   onChangeCommandMode,
   onChangeChatInput,
   onChangeTargetEnvironment,
   onChangeDeepThink,
   onChangeDeepLocate,
   onToggleSession,
+  onSaveLatestRunAsTestCase,
   onSavePromptAsStep,
   onSendMessage,
 }: {
@@ -86,12 +89,14 @@ export function NaturalLanguagePage({
   recentChatEntries: ChatEntry[];
   runtimeProfile: RuntimeProfile;
   midsceneConfig: MidsceneConfig;
+  latestAgentRun?: Pick<AgentRunResult, 'status'>;
   onChangeCommandMode: (mode: CommandMode) => void;
   onChangeChatInput: (value: string) => void;
   onChangeTargetEnvironment: (value: string) => void;
   onChangeDeepThink: (value: boolean) => void;
   onChangeDeepLocate: (value: boolean) => void;
   onToggleSession: () => void;
+  onSaveLatestRunAsTestCase: () => void;
   onSavePromptAsStep: () => void;
   onSendMessage: () => void;
 }) {
@@ -209,6 +214,12 @@ export function NaturalLanguagePage({
             </div>
             <div className="mt-2 flex flex-wrap gap-2">
               <Button onClick={onSavePromptAsStep} size="sm" type="button" variant="outline">{t('nl.saveAsStep')}</Button>
+              {latestAgentRun?.status === 'passed' ? (
+                <Button disabled={isSending || isRunning} onClick={onSaveLatestRunAsTestCase} size="sm" type="button" variant="outline">
+                  <ClipboardPlus className="h-4 w-4" />
+                  {t('nl.saveAsCase')}
+                </Button>
+              ) : null}
               <Button disabled={isSending || isRunning} onClick={onToggleSession} size="sm" type="button" variant="outline">
                 {sessionActive ? t('nl.session.stop') : t('nl.session.start')}
               </Button>

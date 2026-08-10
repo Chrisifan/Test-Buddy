@@ -2,303 +2,437 @@
 
 ## 1. 当前阶段判断
 
-当前项目已经完成了自动化测试 Agent 的外壳和一部分资产管理基础：
+TestBuddy 已经从 UI 原型进入“具备本地执行与结果治理基础，但长期回归资产契约尚未收敛”的阶段。
 
-- Electron 桌面壳。
-- React 工作台。
-- 启动屏和 Midscene 配置引导。
-- 项目、分组、环境、用例、录制、PRD、运行记录页面。
-- 本地状态持久化。
-- 浏览器 runtime 雏形。
-- 录制事件和录制回放 runner 雏形。
-- PRD 到路径/用例/录制草稿的基础链路。
-- 自然语言 Agent 已进入 `Intent -> Plan -> Execute -> Observe -> Verify -> RunRecord` 的最小链路。
-- 当前最小 Executor 已支持明确 URL 的 `navigate`、明确 selector 的 `click/input/select`、可等待 selector / 特定接口响应 / 图表稳定 / 数据就绪 / network idle / 固定 timeout 的条件化 `wait`、基础 `scroll`，以及基于 Observer 的宽泛 `extract` 与基于 Midscene `aiQuery` 的目标化 `extract`；直接提交的自然语言 `select`、条件 `wait`、`scroll` 与 `aiQuery` 也会分别解析执行意图并回显运行证据，不再依赖 Planner 先生成对应步骤。
-- semantic click / input / assert 已具备可替换执行 contract，并能区分成功、失败和等待状态。
-- Midscene `PlaywrightAgent` adapter 已绑定当前 BrowserRuntime Page，并在 Main Process 完成装配。
-- Midscene 单动作耗时、模型调用量和 token usage 已进入 Agent Run 与运行记录，异常动作也会保留指标。
-- Planner、重规划、语义动作和 Reporter 的单次耗时、调用量与 token usage 已按事件归档；运行记录可在事件流和选中证据中定位每一步的模型成本，同时保留整次运行聚合指标。
-- Workflow 已转换为统一父级 Agent plan，顺序执行自然语言步骤并聚合事件、产物、指标和失败状态。
-- 仅包含 `ai`、`aiAssert`、`aiQuery` 步骤的测试用例会复用统一 Workflow Agent Runtime，获得真实浏览器动作、验证、证据与报告；网页 fallback 和无法由专用执行器处理的步骤明确保持 `neutral`，不再模拟通过。
-- 浏览器 fallback 的 Workflow 只生成等待态，不再模拟通过。
-- Recording 已支持从录制页直接进入统一 Agent Run，真实回放节点并配对基线/实际截图证据；可比 PNG 截图会进行逐像素对比并生成差异图，差异会使回放失败，不可比截图保持 `neutral`。每条录制可配置 `0–100%` 的视觉差异阈值，默认 `0%` 保持严格比较；也可用截图相对坐标设置动态区域遮罩，遮罩像素不参与差异比例计算。
-- 已提供纯 Node 的 CLI/CI 执行入口：`pnpm build:electron && pnpm cli -- run --data-dir <数据根目录> --project-id <ID> --case-id <ID>`。命令只接受稳定 ID，复用桌面端的执行分流、运行记录与 artifact 目录，标准输出 JSON 并生成 JUnit XML；可用 `--environment-id` 覆盖环境、重复 `--case-id` 批量执行、用 `--json` 额外落盘 JSON 报告。录制回放在 CI 中复用 Node PNG 适配器完成基线差异图；没有 Midscene 配置的 Agent 用例会明确失败而不伪造执行结果。
-- Planner 已接入 OpenAI-compatible 模型调用，可生成经过白名单校验的结构化计划并顺序驱动现有执行链。
-- 每个模型计划步骤都会生成独立 action、observation、verification 和 artifact 证据；`failed` 或 `neutral` 会停止后续步骤。
-- Planner 配置缺失、请求失败或响应非法时会降级为规则规划并记录原因；执行器缺失或语义选择尚未接入时保持 `neutral`。
-- 浏览器执行类步骤失败或进入等待态时已支持配置上限内的多轮 Planner 重规划，并记录实际重规划次数。
-- 每次成功重规划都会保留旧计划截至失败步骤的完整执行证据，并以 `agent:plan-revised` 串联前后计划；恢复成功仍只按最终计划结果保持 `passed`。
-- 重规划会跨所有恢复轮次累积携带已通过步骤的动作、证据与页面 URL，要求 Planner 只生成从当前状态继续的后续步骤；执行器会剔除与任一已完成步骤完全相同的有副作用动作，重规划事件同步记录累计保留的前置步骤数，避免后续修订重复提交输入或点击。
-- 重规划历史会保留动态等待、重试、selector fallback、观察、验证、浏览器状态、截图和报告产物；产物按路径跨轮次去重，Reporter 在失败或等待态运行中接收结构化重规划上下文。
-- 带明确 selector/URL 的确定性浏览器步骤会在重规划前进行一次同计划重试，并记录重试事件与实际重试次数；明确 selector 的动作重试前会按 `selector visible -> network idle -> timeout` 的顺序做一次动态等待；断言失败不会自动重试。
-- 明确 selector 的 `click/input/select` 在同计划重试失败后，会基于 Observer 的可交互元素做最多 3 个受控 selector fallback，并记录 fallback 事件与次数。
-- 确定性浏览器步骤失败时已生成结构化 `failureCategory`，可区分 selector、timeout、navigation、network、assertion、runtime 和 unknown，并映射为 `recoveryStrategy`：selector 建议替换 selector，timeout/network 建议等待就绪，navigation 建议重规划导航，assertion 建议停止并报告，runtime 建议等待后重试，unknown 建议从当前状态重规划。分类和策略会写入重试事件、验证结果与 Planner 重规划上下文。
-- `waitForReadiness` 策略已开始驱动恢复路径：网络失败且计划步骤明确给出 URL 或 `/api/...` 路径时，会先等待该接口的下一次成功响应；没有稳定接口信息时，timeout/network 类失败若上下文明确涉及 table/list/grid/data/chart 等数据加载语义，会优先等待页面数据就绪，其他情况等待页面网络空闲，而不是只使用固定 500ms 等待。动态等待无论成功或失败都会保留实际 strategy、超时、selector 或接口模式；就绪等待自身失败时不会重复原操作或尝试 selector fallback，而是携带当前观察直接进入 Planner 重规划。
-- `retryAfterWait` 策略会让可安全重试的确定性运行时异常先等待页面网络空闲，浏览器不支持该能力时回退为短暂稳定等待；导航异常仍保守地进入 `replanNavigation`，不会重复访问可能不可达的地址。
-- 图表稳定等待会在目标区域临时冻结 CSS/SVG 动画与过渡，并将 Canvas 的低分辨率像素签名纳入稳定判断；等待结束后自动移除冻结样式，避免影响后续交互。
-- `replanNavigation` 策略已开始驱动恢复路径：导航失败不会盲目重试同一个坏 URL，而是直接把失败分类、策略和当前页面观察交给 Planner 重规划。
-- `replaceSelector` 策略已开始驱动恢复路径：明确 selector 找不到时不会重复点击同一个坏 selector，而是直接进入受控 selector fallback；没有可靠候选时再交给 Planner 重规划。
-- `replanFromCurrentState` 策略已开始驱动恢复路径：浏览器明确报告未知或不确定状态时，不会重复执行可能已产生副作用的动作，而是携带当前页面观察直接交给 Planner 生成后续计划；仍在加载、渲染等可识别的瞬时执行异常保持动态等待重试。
-- Verifier 已支持从结构化表格观察中判断原生/明确标注的筛选状态、当前页、总页数、总条数、每页条数和 `tfoot` 聚合值；缺少对应 DOM 信号时断言保持失败，不会猜测通过。
-- Observer 已将原生 `<table>` 与标准 ARIA `role="grid"` / `role="table"` 归一为同一表格观察 contract，因此现有行列、单元格、排序、筛选和分页断言可直接用于语义数据网格；AG Grid、MUI、Ant Design、Element Plus 等已知分页根节点的非末页范围文本（如 `1 to 10 of 36`）也会被归一为当前页、每页条数、总条数和总页数，末页不足一页时只保留可确定的总条数。
-- 显式标注 `data-grid` / `data-table`、`data-column-header`、`data-row`、`data-cell` 与可选 `data-aggregate` 的自定义 `div` 网格也会归一到同一 contract；不依赖 class 名或整页布局猜测数据网格。
-- 多表页面可在自然语言断言中用带引号的表格标题限定目标（例如 `断言表格「订单列表」行数为 2`）；标题严格匹配观察到的 caption，避免其他表格意外满足条件。
-- 多图表页面可用带引号的标题限定目标（例如 `断言图表「成交趋势」图例包含 买入`）；标题严格匹配观察到的图表标题，避免其他图表意外满足条件。
-- Verifier 已支持图表系列存在性断言（例如 `断言图表「成交趋势」系列包含 买入`）；系列名来自显式数据点或系列趋势，且与图表标题限定共同生效。
-- Verifier 已支持指定图表数据点的标签和值关联断言（例如 `断言图表数据点 二月 为 180`），避免“标签存在、数值也存在但并非同一点”时误判通过。
-- Verifier 已支持按系列、标签和值关联图表数据点（例如 `断言图表「成交趋势」系列 买入 数据点 二月 为 180`）；显式 `data-series` / `data-series-name` 与数据点必须同时匹配，避免同标签的不同系列互相误判。
-- Verifier 已支持按指定系列验证趋势（例如 `断言图表「成交趋势」系列 买入 趋势上升`）；优先采用组件显式 `data-series-trend`，否则才从该系列至少两个显式数值点推导，系列间不会相互影响。
-- Verifier 已支持从关联的可见 tooltip、单图页面中唯一可见的 ECharts/Recharts/Highcharts/ApexCharts tooltip、显式 `data-point` / `data-chart-value` 数据点，以及显式或单系列单调数列趋势中生成图表证据；图表根节点、标题和图例会优先识别这些库的公开 DOM 结构并去重。多个不同系列交错时仅接受显式 `data-trend`，不从混合数值猜测图表趋势。
-- Verifier 已支持明确 CSS selector 的 DOM 存在、可见性、文本包含与单属性等值断言；无效 selector、未连接浏览器或隐藏元素都会留下失败证据，不会被当作语义断言默认通过。
-- Verifier 已接入独立 OpenAI-compatible 模型路由，处理规则断言覆盖不了的复杂语义断言，并保留确定性断言优先级。
-- Reporter 已接入独立 OpenAI-compatible 模型路由，可为失败/等待态运行生成证据摘要、失败归因和修复建议。
-- Reporter Markdown 和 HTML 已持久化为运行 artifact；运行记录可通过受控 IPC 打开或导出应用管理目录内的本地报告，渲染进程不能借此访问任意本地路径。
-- Reporter 结构化建议会随 Agent Run 持久化；同时只从已记录的失败分类、恢复策略和动态等待证据派生受控恢复计划。计划仅允许等待接口响应、等待 selector、等待数据就绪、等待网络空闲或观察；创建草稿时仅在原失败步骤前插入对应的 `ai` 等待/观察步骤，Reporter 自由文本只写入草稿说明，用户必须在图形化编辑器中审阅并主动运行，绝不自动执行浏览器动作。
-- MidScene 设置页可使用当前未保存的配置发起最小 OpenAI-compatible completion 探针，明确展示连接耗时、HTTP、网络、配置或响应格式失败；探针仅在主进程执行，不持久化密钥或创建运行记录。
-- 真实 Playwright 浏览器会话已使用独立 BrowserContext；自然语言 Agent、Workflow 和录制回放会在运行开始时启用 tracing，在结束时将 Trace `.zip` 写入 `studio-data/artifacts`。归档后的 Trace 同时进入 `AgentRunResult.artifacts`、`RunDetail.artifacts` 和 `agent:artifact-created` 事件；未连接真实浏览器的 stub/fallback 不会伪造 Trace。
-- 运行记录已提供运行内证据链：可从 Agent 事件流定位同一节点的页面观察、验证依据、浏览器状态、截图预览和同步骤产物，并对受控本地产物执行打开或导出。
-- 运行记录可按项目、分组、用例、环境和状态筛选；同一用例同一环境的历史运行可对比结果、步骤状态、产物数量与耗时。
-- 用例编辑器支持将人工检查步骤转换为可编辑的 `aiAssert` 智能断言，保留检查意图并复用统一 Agent 执行链路。
-- 运行智能分析已按可见运行样本对结构化失败原因做保守聚类，并展示高频失败模式及样本数；仅归并空白和末尾标点差异，不猜测语义等价原因。
-- 运行智能分析会在至少 4 条带时间戳样本时比较近期与早期窗口的失败率，展示上升、下降或稳定趋势；样本不足时明确显示而不推断风险走向。
-- 已提供项目级跨运行覆盖风险：按“用例 + 目标环境”从完整历史中选取最近终态，未运行、最近失败和最近等待均列为风险，最近通过才视为已验证；`running` 不会覆盖终态，旧记录缺失时间戳时仅按原历史顺序回退。该概览始终使用完整项目历史，不受运行列表筛选或当前选中记录影响。
-- PRD 覆盖矩阵已加入本地治理：以 `documentId + pathId + target` 维护用例和录制两类缺口的延后/忽略决定，二者必须有说明和更新时间；覆盖生成后自动显示已解决但保留说明，文档或路径失效时清理引用。当前没有登录或成员体系，因此不实现分派、通知或外部协作同步。
+### 1.1 当前代码基线
 
-更详细的当前状态见：
+已经具备：
 
-- [自动化测试 Agent 进度与目标状态](./agent-progress-and-target.md)
+- Electron/React 本地工作台、启动屏、设置和 Midscene/角色模型配置。
+- 项目、分组、环境、用例、录制、PRD、运行记录和 artifact 基础。
+- 自然语言 Agent 的 `Intent -> Plan -> Execute -> Observe -> Verify -> Report` 链路。
+- BrowserRuntime、Workflow、Recording 和 TestRunner 基础。
+- 明确 URL/selector 的确定性动作、条件等待、有限重试、定位 fallback 和 Planner 重规划。
+- `stopAndReport` 已阻止断言失败被重试或重规划吞掉，包括语义动作中的业务断言失败。
+- 表格/图表证据完整度约束：局部或未知证据不推断全量结论。
+- 已通过的自然语言 Agent Run 可生成独立、可编辑用例，并保留发起时的项目、分组和环境；生成后仍需用户审阅并主动运行。
+- Planner、Verifier、Reporter、取消协议、运行内证据链、受控报告和恢复草稿基础。
+- CLI 可复用现有 TestRunner/RecordingRunner/StudioRuntime/BrowserRuntime，输出 JSON/JUnit 并归档 artifact。
+- PRD 覆盖矩阵、本地 triage、跨运行覆盖风险和项目级离线报告基础。
 
-接下来的路线不再围绕 UI 页面补全，而是围绕 Agent 闭环推进：
+这些能力为后续路线提供实现基础，但不代表以下目标已经完成：
+
+- 当前用例还不是完整 Hybrid Case V2。
+- 长期资产仍未按 project directory 拆分。
+- `neutral` 仍混合表达多种无法继续/未执行情形。
+- CLI 批量入口不等于 10–100 case Suite 调度和资源锁已完成。
+- Workflow/Recording 的统一运行链不等于固定版本公共流程已完成。
+- 恢复草稿基础不等于完整维护队列、安全和保留策略已完成。
+
+### 1.2 完成状态标记
+
+路线图中的状态统一按以下边界解读：
+
+- **代码已实现**：能力已进入共享模型和桌面/CLI 调用链。
+- **离线验证已完成**：单元测试、类型检查、构建或差异检查覆盖了该工程边界；不代表模型和业务页面质量。
+- **真实验收已完成**：在明确浏览器、页面、数据、模型和产物条件下完成可复现验收。
+
+截至 2026-08-09，最近一次 `pnpm check` 包含 38 个测试文件、286 个测试通过，以及类型检查、renderer/Electron 构建和差异检查通过。该数字只代表当前快照，后续应以最新命令输出为准。
+
+### 1.3 当前目标
+
+路线不再以补齐页面或继续扩大“每次都由 Agent 决策”的能力为主，而是围绕：
 
 ```text
-Intent -> Plan -> Execute -> Observe -> Verify -> Report -> Asset
+自然语言探索
+-> 用户确认
+-> Hybrid Case
+-> Project Assets
+-> Shared Runner
+-> 长期回归
+-> 维护草稿
 ```
 
-## 2. Milestone 0：Agent 目标与文档收敛
+## 2. 总体依赖与推进规则
 
-目标：
+正式优先顺序固定为：
 
-- 明确最终产品定位为自动化测试 Agent。
-- 统一产品、架构、数据模型和 UI 设计文档。
-- 避免继续以“测试管理客户端”作为实现目标。
+1. Regression Case V2。
+2. Project Asset Store。
+3. Fixtures / Auth。
+4. Suite Runner。
+5. Reusable Flows。
+6. Maintenance / Safety。
+7. Interaction Breadth。
+8. Real Acceptance。
 
-交付：
+依赖规则：
 
-- `automated-testing-agent-design.md`
-- 更新后的产品需求文档。
-- 更新后的系统架构文档。
-- 更新后的实施路线图。
+- 后序阶段可以做技术预研，但不能用临时格式绕过前序 contract。
+- 每阶段先兼容读取现有数据，再写入新格式。
+- 自然语言、录制和 PRD 都写入同一 Hybrid Case 草稿模型。
+- Desktop 与 CLI 不能发展第二套 Runner 或状态语义。
+- AI 只能生成探索/恢复/判断结果和维护草稿，不能自动改 project asset。
+- 断言失败和高风险动作边界是所有阶段的共同门禁。
 
-验收：
+## 3. Phase 1：Regression Case V2
 
-- 文档明确 Agent 能力闭环。
-- 文档明确启动屏、Midscene 配置和门禁逻辑。
-- 文档明确下一阶段优先打通自然语言 Agent 执行链路。
+**当前状态：V2 基础契约已实现并完成离线验证，完整 Hybrid Case contract 未完成。**
 
-## 3. Milestone 1：Agent Runtime Contract
+本轮已经完成的基础能力：
 
-目标：
+- `TestCaseDraft.sourceIntent` 保留自然语言探索的原始业务目标。
+- `TestStepDraft.execution` 以 schema version `2` 保存待审阅的结构化 action、定位 fingerprint、风险级别和 Agent Run 来源。
+- `navigate`、明确 selector 的 `click`、明确 selector 或超时的 `wait`、selector `scroll` 可以在保存时保留为候选确定性动作；Agent Run 的 `input/select` 原值不写入资产，必须在后续编辑器中通过变量、fixture 输出或凭据引用确认后才能执行。
+- 语义断言、自由文本断言和 `aiQuery` 仍由派生规则标记为需要模型；显式 assertion contract 才能成为无模型断言。
+- hydration 保留旧步骤不变，局部丢弃畸形 V2 execution，不丢 legacy 文本、用例或项目。
+- 所有 Agent Run 的 `input/select` 原值均不会写进 Case；相关步骤保存为无原值的审阅提示，不携带 action value。这样不依赖字段别名猜测敏感性，密码、token、OTP 和未知秘密字段都不会因漏检落盘。
 
-- 在 shared/electron 之间定义统一 Agent 执行协议。
+尚未在本阶段完成：V2 编辑器确认联动、实际确定性执行、Case 顶层版本迁移、录制/PRD 统一转换、完整 assertion evidence contract 和六种终态迁移。
 
-交付：
+### 3.1 目标
 
-- `AgentIntent`
-- `AgentPlan`
-- `AgentStep`
-- `AgentObservation`
-- `AgentVerification`
-- `AgentRunEvent`
-- `AgentRunResult`
+把现有用例收敛为 Hybrid Case：
 
-验收：
+- 业务意图。
+- 用户确认的结构化动作与目标。
+- 上下文定位指纹和定位质量。
+- 显式版本化断言。
+- fixture、公共流程和 baseline 的版本引用位。
+- 自然语言 Run、录制节点和 PRD 原文来源。
 
-- Renderer 可以用统一结构发起 Agent 执行。
-- Main Process 可以用统一事件流回传计划、步骤、截图、判断和结果。
-- 当前 `sendChatCommand` 和后续 `runWorkflow` 都能逐步迁移到该协议。
+### 3.2 交付
 
-## 4. Milestone 2：自然语言 Agent 最小闭环
+- Case V2 schema 与版本迁移器。
+- Assertion ID/version/evidence contract。
+- Target fingerprint：语义 HTML、ARIA、公开 DOM 和上下文信号。
+- 定位质量 `strong/acceptable/weak/unresolved`。
+- 自然语言 Run 保存为 V2 草稿的确认界面。
+- 录制和 PRD 适配到同一草稿 contract。
+- 运行终态模型：`passed/failed/blocked/skipped/cancelled/error`。
+- 独立 flaky 标记及原因。
+- 旧 `neutral` 的确定性迁移/映射规则。
 
-目标：
+### 3.3 AI 与风险门禁
 
-- 让自然语言测试成为第一个真正可用的 Agent 入口。
+- 已确认 Case 默认不经过 Planner 重新解释。
+- 定位候选仍不可靠时才允许 AI 恢复。
+- AI 恢复只影响本次 Run，并生成草稿。
+- 断言失败停止，不重试或改写断言。
+- 高风险动作不能改变对象、范围、输入、账号、租户、环境或业务语义。
 
-功能：
+### 3.4 验收
 
-- 用户输入自然语言测试目标。
-- 系统生成基础计划。
-- 启动受控浏览器。
-- 执行 navigate / click / input / assert。
-- 当前已支持明确 URL、明确 selector 点击、明确 selector 输入，以及 URL/标题/页面文本包含断言。
-- 采集截图和日志。
-- 输出通过或失败。
-- 写入运行记录。
+- 一个自然语言探索可以经用户确认保存为 V2 Case。
+- Case 重新运行时使用确认的动作和断言版本。
+- 不提供 `data-testid` 的语义页面可以形成高质量定位。
+- `neutral` 样本可明确迁移到 blocked/skipped/cancelled/error/failed。
+- AI 恢复成功不会修改原 Case 文件。
+- 断言和高风险动作的语义保护有离线测试。
 
-验收：
+### 3.5 下阶段门禁
 
-- 用户可以在一个真实 Web 页面完成一次自然语言测试。
-- 失败时能看到失败步骤和截图。
-- 成功步骤可以保存为用例步骤。
+Project Asset Store 开始写入前，V2 schema、版本引用和迁移规则必须稳定；否则资产拆分只会把旧歧义分散到更多文件。
 
-## 5. Milestone 3：Observer / Verifier 强化
+## 4. Phase 2：Project Asset Store
 
-目标：
+**当前状态：现有本地持久化可用，长期资产与运行数据尚未分离。**
 
-- 让 Agent 不只是执行动作，还能判断结果。
+### 4.1 目标
 
-功能：
+将长期资产保存到用户选择的 project directory，将运行时数据保留在 `studio-data`。
 
-- DOM 摘要采集。
-- 页面文本摘要、关键交互元素、console 和失败请求的轻量观察快照。
-- 页面截图采集。
-- 文本断言。
-- 表格断言。
-- 图表展示状态断言。
-- 失败原因归因。
+### 4.2 交付
 
-验收：
+```text
+<project-directory>/
+  project.json
+  cases/
+  suites/
+  fixtures/
+  reusable-flows/
+  baselines/
 
-- 对图表和表格型页面能输出明确判断。
-- 失败报告包含证据。
+studio-data/
+  runs/
+  artifacts/
+  credentials/
+  cache/
+```
 
-## 6. Milestone 4：录制回放 Agent 化
+- Project Asset Store：schema 校验、原子写入、稳定 ID 和版本引用。
+- Studio Data Store：run/artifact/credential/cache 生命周期。
+- 旧 `state.json` 到 project directory 的审阅式迁移。
+- 引用完整性、冲突和损坏诊断。
+- 外部文件变化检测和重新加载。
+- 外部 Git 友好的普通文本/资产文件；不内置 Git 操作。
 
-目标：
+### 4.3 安全边界
 
-- 让录制回放成为 Agent 的路径采集与复跑能力。
+- Project directory 不写 API Key、storageState、cookie、截图、trace 或下载。
+- `studio-data` 恢复结果不能直接覆盖 project asset。
+- 迁移失败保留原状态，不做部分切换。
+- Renderer 只能通过受控 IPC 访问已授权根目录。
 
-功能：
+### 4.4 验收
 
-- 录制 navigate / click / input / wait / snapshot。
-- 生成可编辑录制资产。
-- 回放录制资产。
-- 对关键节点截图对比。
-- 将录制资产转为测试用例。
-- 直接运行录制资产并生成 Recording Agent Run。
-- 基线截图与实际截图证据配对。
+- Case/Suite/fixture/flow/baseline 可独立读取、校验和写入。
+- run/artifact/credential/cache 不进入 project directory。
+- 用户可用外部 Git 查看可读 diff，但 TestBuddy 不要求目录是 Git repository。
+- 旧项目迁移有预览、失败回滚和引用校验。
 
-验收：
+### 4.5 下阶段门禁
 
-- 用户可以录制一条业务路径并回放。
-- 回放失败时能定位失败节点。
-- 录制资产删除后引用关系能安全处理。
+Fixtures/Auth 必须基于稳定逻辑引用和双存储边界实现，不能把秘密或运行状态重新塞回 Case 文件。
 
-## 7. Milestone 5：PRD Agent Planner
+## 5. Phase 3：Fixtures / Auth
 
-目标：
+**当前状态：环境和凭证引用已有基础，typed fixture、storageState 生命周期和脚本信任未完成。**
 
-- 让 PRD/PDF 不只是上传材料，而是测试路径生成输入。
+### 5.1 目标
 
-功能：
+为回归用例提供可复用、可诊断、可清理的数据准备与认证能力。
 
-- PDF 文本抽取。
-- 已完成基于 Markdown 标题、列表和句子的规则化需求提取；最多生成 8 条去重的需求路径，并保留原文摘录、覆盖域和保守优先级。
-- 已完成从路径写入可编辑用例或录制草稿，并用 `documentId + pathId` 维护稳定覆盖引用；资产改名、同名条款或重新分析未变更条款不会误判覆盖。PRD 来源会沿测试执行进入 Agent Run、RunDetail 和运行列表。
-- 已接入 Planner 角色的已配置 OpenAI-compatible / Midscene 模型做需求语义复核：模型只能细化规则已提取路径的标题、分组、优先级、步骤和摘要，不能新增无原文来源的路径或改变稳定 `pathId`。模型停用、未配置、请求失败或返回非法路径时明确保留规则结果并标注原因。
-- 已提供项目级 PRD 覆盖矩阵，在同一视图汇总全部文档路径及其用例、录制覆盖状态；稳定引用优先，历史无引用资产仍沿用既有兼容匹配。未覆盖路径可直接写入用例或录制草稿，也可跨文档一次性写入全部缺口用例或录制草稿，并按缺用例、缺录制、完全未覆盖及本地治理状态筛选。延后/忽略必须记录说明；生成覆盖后自动显示已解决并保留治理说明。
+### 5.2 交付
 
-验收：
+- Typed fixture input/output。
+- Versioned setup/cleanup。
+- HTTP、UI、trusted-script 三种执行方式。
+- 默认优先 HTTP setup/cleanup。
+- setup 部分成功、Case 失败或取消后的 cleanup 尽力执行。
+- Playwright `storageState` 创建、引用、刷新和失效诊断。
+- Script trust：project identity + relative path + content hash。
+- 账号、租户、环境和 fixture 的资源声明。
 
-- 用户上传一份 PRD 后能得到可编辑测试路径。
-- 每条规则化路径可回溯到对应的 PRD 原文摘录；重复条款不会重复生成路径。
-- 测试路径能转成正式用例。
-- PRD 生成的用例或录制执行后，运行记录能保留并展示来源文档。
-- 模型复核不改变已有路径的原文摘录和稳定覆盖引用；缺少可用模型时不会伪造模型分析成功。
+### 5.3 状态规则
 
-## 8. Milestone 6：报告与结果分析
+- fixture 前置条件不满足、认证过期、脚本未信任 -> `blocked`。
+- fixture/runtime 文件损坏或执行器异常 -> `error`。
+- 被测业务断言不满足 -> `failed`。
+- cleanup 结果单独记录，不覆盖原 Case 终态。
 
-目标：
+### 5.4 验收
 
-- 让运行记录成为可复盘的测试报告中心。
+- HTTP fixture 可把 typed output 传给 Case 并在结束后 cleanup。
+- 未信任或 hash 变化的脚本不会执行。
+- storageState 不进入 project directory 或报告。
+- setup、Case 和 cleanup 的证据可以分别诊断。
 
-功能：
+### 5.5 下阶段门禁
 
-- RunDetail 详情页。
-- 步骤截图。
-- Trace / artifact 链接。
-- 失败原因摘要。
-- 复跑入口。
-- 按项目、分组、用例、环境过滤。
-- 展示真实运行耗时、模型调用数、token 用量与重规划配置。
-- 展示实际动态等待次数、重试次数和 selector fallback 次数。
-- 在未选择运行记录时仍展示完整项目的跨运行覆盖风险概览。
+Suite Runner 只有在 fixture 依赖、认证和资源声明可解析后才能正确并发；否则先保持串行。
 
-验收：
+## 6. Phase 4：Suite Runner
 
-- 每次 Agent 执行都有可查看、可复盘、可复跑的结果。
-- Reporter 修复草稿必须经人工审阅并主动运行，不能由报告文本自动触发浏览器执行。
+**当前状态：桌面/CLI 复用执行组件并支持批量 case 参数，但尚未形成完整 Suite 调度。**
 
-## 9. Milestone 7：工程化与稳定性
+### 6.1 目标
 
-目标：
+在本地稳定运行 10–100 case Suite，并保证桌面端和 CLI 使用同一调度、状态和报告口径。
 
-- 从可用原型走向可长期使用的本地工具。
+### 6.2 交付
 
-功能：
+- Suite asset：用例选择、标签、顺序依赖和环境。
+- Shared Runner：Desktop/CLI 单一入口。
+- 本地有限并发。
+- account/tenant/environment/fixture 等资源锁。
+- fail-fast、continue、retry 和 cancel 策略。
+- 六种终态聚合和独立 flaky。
+- 无后台 daemon 的一次性 Runner 生命周期。
+- JSON/JUnit/桌面视图适配同一 RunResult。
 
-- 资产文件拆分。
-- 凭证安全存储。
-- 执行超时和重试策略。
-- selector fallback 扩展策略。
-- 日志分级。
-- 可配置模型供应商。
-- CLI/CI 可复用执行入口、JSON 摘要与 JUnit XML。
+### 6.3 验收
 
-验收：
+- 同一 20 case Suite 在桌面和 CLI 选择相同 Case、解析相同资产版本。
+- 资源锁不会并发占用同一共享资源。
+- 取消能停止等待、浏览器动作和模型请求，并保留已完成证据。
+- 重试后通过显示 `passed + flaky`，不伪装为干净通过。
+- Runner 结束后没有后台调度进程。
 
-- 复杂页面失败率可控。
-- 运行产物不会污染主状态文件。
-- 用户可以长期维护项目资产。
+### 6.4 下阶段门禁
 
-## 10. 当前最高优先级
+Reusable Flow 必须通过 Runner 的版本解析和依赖图执行，不能成为 Workflow 专属旁路。
 
-下一步按这个顺序推进：
+## 7. Phase 5：Reusable Flows
 
-1. 用真实模型和业务页面验收 Planner 多步骤执行与 semantic click、semantic input、semantic assert，核验耗时、usage、报告与失败证据。
-2. 在已完成的动态等待、特定接口响应等待、图表稳定判断、数据就绪判断、失败分类、恢复策略建议、`waitForReadiness`、`replanNavigation` 和 `replaceSelector` 策略驱动、条件化 wait、单次确定性动作重试、受控 selector fallback、跨步骤连续重规划和配置上限内多轮重规划基础上，继续让更多恢复策略直接驱动路径选择。
-3. 以真实业务页面验收语义 `select` 与目标化 `extract`：核验原生/自定义下拉框表现，以及 `aiQuery` 返回值、报告、usage 和失败证据。
-4. 在已完成运行内证据链导航、重规划历史关联、受控本地报告打开与导出的基础上，以真实业务页面验收报告、截图、trace 与步骤事件的关联完整性。
-5. 在已完成图表动画稳定策略的基础上，以真实图表页面验收 CSS、SVG 与 Canvas 动画的稳定判定、耗时和失败证据。
+**当前状态：Workflow/Recording 可进入统一 Run，但固定版本和影响分析未完成。**
 
-## 11. 风险与应对
+### 7.1 目标
 
-### 风险 1：继续只做 UI，核心执行迟迟不通
+复用登录、导航和数据准备等公共步骤，同时避免“改一处、静默改变所有用例”。
+
+### 7.2 交付
+
+- `flowId@version` 不可变版本。
+- Case 固定版本引用。
+- 新版本创建和旧版本保留。
+- Case/Suite/fixture/baseline 反向引用索引。
+- 升级前影响分析和可审阅 diff。
+- 用户确认后的原子批量升级。
+
+### 7.3 验收
+
+- 修改公共流程只创建新版本，不改变旧 Run 可复现性。
+- 能列出所有受影响 Case 和 Suite。
+- 仍被引用的旧版本不能静默删除。
+- Desktop/CLI 在 Run 中记录实际 flow 版本。
+
+### 7.4 下阶段门禁
+
+Maintenance/Safety 需要稳定版本和反向引用，才能生成可信维护草稿和保留策略。
+
+## 8. Phase 6：Maintenance / Safety
+
+**当前状态：恢复草稿、报告脱敏、受控 artifact、PRD triage 和取消已有基础，尚未形成统一维护队列。**
+
+### 8.1 目标
+
+把页面变化和运行风险转成可审阅草稿，同时保护资产、秘密和本地数据生命周期。
+
+### 8.2 交付
+
+- 统一维护队列。
+- 定位质量下降、AI 恢复、断言变化、baseline 差异、fixture/auth、flow 升级和 flaky 条目。
+- 原版本/候选版本 diff 和影响分析。
+- 接受后创建新版本，拒绝后不改资产。
+- API Key、password、token、cookie、Authorization 和自定义敏感字段脱敏。
+- 模型最小证据输入。
+- runs/screenshots/traces/downloads/diffs/reports/cache 分类保留策略。
+- 固定、baseline 或维护草稿引用的产物保护。
+
+### 8.3 验收
+
+- 页面定位变化后生成草稿并保留原 Case。
+- Reporter 自由文本不能直接转成可执行动作。
+- 高风险恢复不能改变业务对象或断言。
+- 导出报告和模型输入不包含已声明秘密。
+- 清理 artifact 不删除 project asset、credential 或仍被引用的证据。
+
+### 8.4 下阶段门禁
+
+Interaction Breadth 扩大副作用和 artifact 类型，必须复用现有信任、脱敏、状态和保留策略。
+
+## 9. Phase 7：Interaction Breadth
+
+**当前状态：基本 navigate/click/input/select/wait/scroll/assert 和部分 network/trace 已存在，目标交互面未完整覆盖。**
+
+### 9.1 目标
+
+在不破坏确定性、安全和证据契约的前提下补齐常见 Web UI 交互。
+
+### 9.2 交付顺序
+
+1. iframe。
+2. tab / popup。
+3. upload / download。
+4. hover。
+5. drag and drop。
+6. clipboard。
+7. network request/response assertions。
+8. explicit network mocks。
+9. Firefox/WebKit 实验性适配。
+
+Chromium 始终是稳定支持基线。Firefox/WebKit 的结果带实验性标记，不阻塞 Chromium 完成定义。
+
+### 9.3 验收
+
+- 每类交互有结构化 action、observation、artifact 和失败分类。
+- download 可等待、校验、归档并应用保留策略。
+- mock 必须显式声明、显示启用范围并写入 Run。
+- iframe/tab 目标进入上下文定位指纹。
+- clipboard 和 upload 的敏感内容经过脱敏策略。
+
+### 9.4 下阶段门禁
+
+真实验收只覆盖已具备明确 contract、离线测试和安全边界的交互，不把现场热修当成正式能力。
+
+## 10. Phase 8：Real Acceptance
+
+**当前状态：有无密钥本地页面基线和离线门禁，真实模型/业务页面的系统验收尚未完成。**
+
+### 10.1 目标
+
+用真实页面、真实模型配置和可复现 Suite 证明产品完成定义，而不是只证明 mock 和单元测试通过。
+
+### 10.2 验收矩阵
+
+- Chromium 稳定页面与动态业务页面。
+- 自然语言探索到 Hybrid Case。
+- 确定性回归、AI 恢复和复杂 AI 判断。
+- typed fixture、storageState 和 cleanup。
+- 20 case Suite 的 Desktop/CLI 一致性。
+- 公共流程版本升级和影响分析。
+- 页面变化到维护草稿。
+- iframe/tab/upload/download/hover/drag/clipboard/network。
+- Firefox/WebKit 实验性结果单独记录。
+
+每条真实验收记录：
+
+- 页面/环境和数据条件。
+- Case、assertion、fixture、flow、baseline 版本。
+- 浏览器与模型配置摘要，不记录秘密。
+- 输入步骤和期望。
+- Run ID、截图、trace、报告和失败证据。
+- 干净通过、重试通过和 flaky 区分。
+
+### 10.3 产品完成门禁
+
+- 新用户 15 分钟内完成首个 Hybrid Case。
+- 同一 20 case Suite 在桌面与 CLI 的选取、调度、终态和报告口径一致。
+- 稳定页面在等价条件下连续 10 轮，干净通过率不低于 95%。
+- 页面变化形成维护草稿，原资产、断言和业务语义不被自动改写。
+
+## 11. 跨阶段风险与应对
+
+### 风险 1：继续以 Agent 自主性代替回归稳定性
 
 应对：
 
-- 每个新页面需求都必须说明它服务 Agent 闭环的哪个环节。
-- 优先打通自然语言执行闭环。
+- V2 Case 固定动作、目标和断言。
+- AI 只在探索、受控恢复和复杂判断出现。
+- AI 介入全部记录，不能静默写资产。
 
-### 风险 2：Agent、Workflow、Recording 三套执行逻辑分裂
-
-应对：
-
-- 用统一 Agent Runtime contract 收敛。
-- Workflow 与 Recording 已使用统一 Agent Run；仅包含一个 `recordingReplay` 步骤的测试用例已收敛到同一 RecordingRunner，并保留测试用例关联、视觉对比和回放证据。混合用例中的录制步骤会委托给 RecordingRunner，后续 `ai`、`aiAssert`、`aiQuery` 会在当前页面继续复用 Workflow Runtime；子段日志、产物与 Agent Run 都会折叠进父用例运行。父用例会生成单一 Agent Run，规范化全部测试步骤、子段事件、产物与模型指标；运行记录默认展示用例总览，也可切换查看子段。失败或等待态会阻断后续步骤。
-
-### 风险 3：Midscene 接入后调试困难
+### 风险 2：先做 Suite UI，后补资产和调度语义
 
 应对：
 
-- 所有模型输入输出、计划、动作、观察和断言都结构化记录。
-- 失败时保存截图和原始错误。
+- 严格按 V2 -> Asset Store -> Fixtures/Auth -> Runner 推进。
+- Desktop/CLI 都只调用 Shared Runner。
 
-### 风险 4：图表和表格页面稳定性不足
+### 风险 3：用 `neutral` 掩盖不可执行原因
 
 应对：
 
-- 表格专项断言优先采用表格范围内的结构化 DOM 信号，避免从整页文本推断筛选、分页或聚合状态。
-- 图表先做存在性、标题、图例、tooltip 和数据区域断言。
-- 后续再做更复杂视觉对比。
+- 在 V2 阶段拆分 blocked/skipped/cancelled/error/failed。
+- flaky 与终态独立。
 
-## 12. 完成定义
+### 风险 4：公共流程和 AI 恢复造成批量语义漂移
 
-一个阶段可以被视为完成，至少满足：
+应对：
 
-- 有明确用户入口。
-- 有真实 runtime 或可替换的 contract。
-- 有结构化事件。
-- 有运行记录。
-- 有错误反馈。
-- 有测试覆盖。
-- 有文档同步更新。
+- 固定版本引用。
+- 变更前影响分析。
+- 只生成草稿，用户确认后创建新版本。
+
+### 风险 5：扩大交互范围后泄露秘密或残留数据
+
+应对：
+
+- Fixtures/Auth 和 Maintenance/Safety 先于 Interaction Breadth。
+- upload/download/clipboard/mock 复用脱敏、信任和保留 contract。
+
+## 12. 非目标
+
+路线图不包含多人/RBAC、云同步、分布式执行、内置 Git、完整 API 测试、移动端、性能测试、验证码绕过或跨桌面应用自动化。
+
+## 13. 阶段完成定义
+
+一个阶段只有同时满足以下条件才可标记完成：
+
+- 目标 contract 明确并与前序阶段兼容。
+- 桌面/CLI 或资产消费者没有旁路实现。
+- 状态、错误和证据可诊断。
+- AI 和高风险动作边界有自动化验证。
+- 迁移保留旧数据，失败可回滚。
+- 文档同步更新。
+- 需要真实页面/模型的能力完成独立真实验收，不用离线测试代替。

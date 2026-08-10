@@ -162,4 +162,46 @@ describe('OpenAICompatibleAgentReporter', () => {
       }),
     ).rejects.toThrow('Reporter 返回的 summary/evidenceSummary/failureAnalysis 不能为空');
   });
+
+  it('aborts the model request when the enclosing run is cancelled', async () => {
+    let receivedSignal: AbortSignal | undefined;
+    const fetchImpl = vi.fn<typeof fetch>((_input, init) => {
+      receivedSignal = init?.signal ?? undefined;
+      return new Promise<Response>((_resolve, reject) => {
+        receivedSignal?.addEventListener(
+          'abort',
+          () => reject(Object.assign(new Error('The operation was aborted.'), { name: 'AbortError' })),
+          { once: true },
+        );
+      });
+    });
+    const reporter = new OpenAICompatibleAgentReporter(fetchImpl);
+    const cancellation = new AbortController();
+    const pending = reporter.report({
+      config: {
+        modelBaseUrl: 'https://reporter.example.test/v1',
+        modelApiKey: 'reporter-secret',
+        modelName: 'reporter-large',
+        modelFamily: 'openai',
+        temperature: '0.1',
+      },
+      cancellationSignal: cancellation.signal,
+      run: createStubAgentRun({
+        mode: 'aiAssert',
+        prompt: '验证图表刷新成功',
+        runtimeDescription: 'chromium / desktop / headless / https://example.test',
+        targetEnvironment: 'staging',
+        verificationStatus: 'failed',
+        verificationSummary: '未找到刷新成功状态。',
+        verificationEvidence: '页面仍显示加载中。',
+        verificationFailureReason: '图表未刷新完成。',
+      }),
+    });
+
+    expect(receivedSignal?.aborted).toBe(false);
+    cancellation.abort();
+
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    expect(receivedSignal?.aborted).toBe(true);
+  });
 });

@@ -1,19 +1,24 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import * as studio from './studio.js';
 import {
   copyTestStep,
   createDemoStudioState,
+  deriveProjectRunReport,
   deriveRunCoverageRisk,
   createPrdDocumentAsset,
   createRecordingFromGeneratedPath,
   createTestStep,
+  createTestCaseFromAgentRun,
   createTestCaseFromGeneratedPath,
   createEmptyProject,
   createInitialStudioState,
   createManualStepAutomationReplacement,
   createReporterFixDraft,
+  getConfirmedDeterministicTestStep,
   getExclusiveRecordingReplayId,
   isRecordingLinkedToGeneratedPath,
+  isConfirmedDeterministicTestStep,
   isTestCaseLinkedToGeneratedPath,
   getTestCaseRunBlocker,
   getTestStepRunBlocker,
@@ -25,8 +30,840 @@ import {
   prunePrdCoverageTriage,
   updatePrdDocumentAnalysis,
 } from './studio.js';
+import { createStubAgentRun } from './agentStub.js';
 
 describe('studio state hydration', () => {
+  it('creates an editable natural-language test case from a passed Agent plan', () => {
+    const agentRun = createStubAgentRun({
+      mode: 'ai',
+      prompt: '使用测试账号提交订单并读取订单编号',
+      runtimeDescription: 'chromium / desktop / headless / https://app.example.test',
+      targetEnvironment: 'staging',
+      projectId: 'project-orders',
+      targetUrl: 'https://app.example.test/orders',
+      plannedPlan: {
+        title: '提交订单并确认结果',
+        summary: '填写测试数据，提交订单并确认结果。',
+        risks: ['测试数据需要独立清理。'],
+        steps: [
+          { action: 'navigate', title: '进入订单页', instruction: '进入订单页', url: 'https://app.example.test/orders' },
+          { action: 'input', title: '填写邮箱', instruction: '填写测试邮箱', selector: '#email', value: 'qa@example.test' },
+          { action: 'click', title: '提交订单', instruction: '提交订单', selector: '#submit-order' },
+          { action: 'assert', title: '确认订单状态', instruction: '验证页面显示订单已创建', expected: '页面显示订单已创建' },
+          { action: 'extract', title: '读取订单编号', instruction: '读取订单编号', target: '订单编号' },
+        ],
+      },
+    });
+
+    const testCase = createTestCaseFromAgentRun({
+      agentRun,
+      groupId: 'group-orders',
+      environmentId: 'env-staging',
+      url: 'https://fallback.example.test',
+      seed: 3,
+    });
+
+    expect(testCase).toEqual(
+      expect.objectContaining({
+        kind: 'scenario',
+        source: 'naturalLanguage',
+        groupId: 'group-orders',
+        environmentId: 'env-staging',
+        name: '提交订单并确认结果',
+        url: 'https://app.example.test/orders',
+        notes: expect.stringContaining('测试数据需要独立清理。'),
+        steps: [
+          expect.objectContaining({ type: 'ai', title: '进入订单页', body: '打开 https://app.example.test/orders' }),
+          expect.objectContaining({ type: 'ai', title: '填写邮箱', body: '在 #email 中输入待确认的值' }),
+          expect.objectContaining({ type: 'ai', title: '提交订单', body: '点击 #submit-order' }),
+          expect.objectContaining({ type: 'aiAssert', title: '确认订单状态', body: '验证页面显示订单已创建' }),
+          expect.objectContaining({ type: 'aiQuery', title: '读取订单编号', body: '提取 订单编号' }),
+        ],
+      }),
+    );
+    expect(testCase?.steps).toHaveLength(5);
+    expect(testCase?.sourceIntent).toBe('使用测试账号提交订单并读取订单编号');
+    expect(testCase?.steps[0]?.execution).toMatchObject({
+      schemaVersion: 2,
+      intent: '进入订单页',
+      reviewStatus: 'needsReview',
+      actionRisk: 'low',
+      action: { kind: 'navigate', url: 'https://app.example.test/orders' },
+      provenance: { source: 'agentRun', runId: agentRun.runId },
+    });
+    expect(testCase?.steps[1]?.execution).toMatchObject({
+      intent: '输入待确认的值到 #email',
+      reviewStatus: 'needsReview',
+      actionRisk: 'medium',
+    });
+    expect(testCase?.steps[1]?.execution?.action).toBeUndefined();
+    expect(testCase?.steps[2]?.execution).toMatchObject({
+      actionRisk: 'high',
+      action: {
+        kind: 'click',
+        locator: { selector: '#submit-order', quality: 'acceptable' },
+      },
+    });
+    expect(testCase?.steps[3]?.execution).toMatchObject({
+      intent: '验证页面显示订单已创建',
+      reviewStatus: 'needsReview',
+      actionRisk: 'low',
+    });
+    expect(testCase?.steps[3]?.execution?.action).toBeUndefined();
+  });
+
+  it('refuses to create a test case from a non-passing natural-language run', () => {
+    const agentRun = createStubAgentRun({
+      mode: 'ai',
+      prompt: '提交订单',
+      runtimeDescription: 'chromium / desktop / headless / https://app.example.test',
+      targetEnvironment: 'staging',
+      verificationStatus: 'failed',
+    });
+
+    expect(
+      createTestCaseFromAgentRun({
+        agentRun,
+        groupId: 'group-orders',
+        environmentId: 'env-staging',
+        url: 'https://app.example.test',
+        seed: 1,
+      }),
+    ).toBeUndefined();
+  });
+
+  it('does not persist sensitive natural-language inputs when creating a test case', () => {
+    const password = 'hunter2';
+    const token = 'token-value-123';
+    const agentRun = createStubAgentRun({
+      mode: 'ai',
+      prompt: `使用密码 ${password} 和 API token ${token} 登录后台`,
+      runtimeDescription: 'chromium / desktop / headless / https://app.example.test',
+      targetEnvironment: 'staging',
+      projectId: 'project-orders',
+      targetUrl: 'https://app.example.test/orders',
+      plannedPlan: {
+        title: `使用密码 ${password} 登录`,
+        summary: `在密码框输入 ${password}。`,
+        risks: [`API token ${token} 需要保护。`],
+        steps: [
+          { action: 'input', title: '填写密码', instruction: `在密码框输入 ${password}`, selector: '#password', value: password },
+          { action: 'select', title: '选择 API token', instruction: `选择 API token ${token}`, selector: '#api-token', value: token },
+        ],
+      },
+    });
+
+    const testCase = createTestCaseFromAgentRun({
+      agentRun,
+      groupId: 'group-orders',
+      environmentId: 'env-staging',
+      url: 'https://fallback.example.test',
+      seed: 5,
+    });
+    const serialized = JSON.stringify(testCase);
+
+    expect(serialized).not.toContain(password);
+    expect(serialized).not.toContain(token);
+    expect(testCase?.sourceIntent).toContain('[已隐藏]');
+    expect(testCase?.steps.map((step) => step.body)).toEqual([
+      '在 #password 中输入敏感值（已隐藏）',
+      '在 #api-token 中选择敏感值（已隐藏）',
+    ]);
+    expect(testCase?.steps.map((step) => step.execution?.action)).toEqual([undefined, undefined]);
+    expect(testCase?.steps.map((step) => studio.getTestStepModelRequirement(step))).toEqual(['required', 'required']);
+  });
+
+  it('redacts credential-bearing URLs from Agent runs before persisting test cases', () => {
+    const unsafeUrl = 'https://user:password@example.test/orders?tab=open&access_token=token#access_token=fragment-token';
+    const safeUrl = 'https://example.test/orders?tab=[已隐藏]&access_token=[已隐藏]';
+    const agentRun = createStubAgentRun({
+      mode: 'ai',
+      prompt: `访问 ${unsafeUrl}`,
+      runtimeDescription: 'chromium / desktop / headless / https://app.example.test',
+      targetEnvironment: 'staging',
+      projectId: 'project-orders',
+      targetUrl: unsafeUrl,
+      plannedPlan: {
+        title: `打开 ${unsafeUrl}`,
+        summary: `确认 ${unsafeUrl} 可访问。`,
+        risks: [`不要泄漏 ${unsafeUrl}。`],
+        steps: [
+          { action: 'navigate', title: `进入 ${unsafeUrl}`, instruction: `打开 ${unsafeUrl}`, url: unsafeUrl },
+        ],
+      },
+    });
+
+    const testCase = createTestCaseFromAgentRun({
+      agentRun,
+      groupId: 'group-orders',
+      environmentId: 'env-staging',
+      url: 'https://fallback.example.test',
+      seed: 8,
+    });
+    const serialized = JSON.stringify(testCase);
+
+    expect(testCase?.url).toBe(safeUrl);
+    expect(testCase?.sourceIntent).toContain(safeUrl);
+    expect(testCase?.name).toContain(safeUrl);
+    expect(testCase?.notes).toContain(safeUrl);
+    expect(testCase?.steps[0]).toMatchObject({
+      title: `进入 ${safeUrl}`,
+      body: `打开 ${safeUrl}`,
+      execution: {
+        intent: `打开 ${safeUrl}`,
+        action: { kind: 'navigate', url: safeUrl },
+      },
+    });
+    ['user:', 'password', 'access_token=token', 'fragment-token', '#'].forEach((secret) => {
+      expect(serialized).not.toContain(secret);
+    });
+  });
+
+  it('removes every valid URL fragment before Agent-run data is persisted', () => {
+    const oauthUrl = 'https://example.test/callback?tab=open#code=oauth-secret';
+    const sessionUrl = 'https://example.test/orders?view=details#sid=x';
+    const agentRun = createStubAgentRun({
+      mode: 'ai',
+      prompt: `检查 ${oauthUrl} 和 ${sessionUrl}`,
+      runtimeDescription: 'chromium / desktop / headless / https://app.example.test',
+      targetEnvironment: 'staging',
+      projectId: 'project-orders',
+      targetUrl: oauthUrl,
+      plannedPlan: {
+        title: `打开 ${oauthUrl}`,
+        summary: `确认 ${sessionUrl} 可访问。`,
+        risks: [`不要保留 ${oauthUrl} 或 ${sessionUrl}。`],
+        steps: [
+          { action: 'navigate', title: `进入 ${oauthUrl}`, instruction: `打开 ${oauthUrl}`, url: oauthUrl },
+          { action: 'navigate', title: `进入 ${sessionUrl}`, instruction: `打开 ${sessionUrl}`, url: sessionUrl },
+        ],
+      },
+    });
+
+    const testCase = createTestCaseFromAgentRun({
+      agentRun,
+      groupId: 'group-orders',
+      environmentId: 'env-staging',
+      url: 'https://fallback.example.test',
+      seed: 9,
+    });
+    const serialized = JSON.stringify(testCase);
+
+    expect(testCase?.url).toBe('https://example.test/callback?tab=[已隐藏]');
+    expect(testCase?.steps.map((step) => step.execution?.action)).toEqual([
+      { kind: 'navigate', url: 'https://example.test/callback?tab=[已隐藏]' },
+      { kind: 'navigate', url: 'https://example.test/orders?view=[已隐藏]' },
+    ]);
+    expect(serialized).not.toContain('#');
+    expect(serialized).not.toContain('oauth-secret');
+    expect(serialized).not.toContain('sid=x');
+  });
+
+  it('omits deterministic actions when their selectors contain redacted URLs', () => {
+    const unsafeUrl = 'https://user:pw@example.test/path?token=x#code=y';
+    const unsafeSelector = `a[href="${unsafeUrl}"]`;
+    const agentRun = createStubAgentRun({
+      mode: 'ai',
+      prompt: `操作 ${unsafeUrl}`,
+      runtimeDescription: 'chromium / desktop / headless / https://app.example.test',
+      targetEnvironment: 'staging',
+      projectId: 'project-orders',
+      targetUrl: 'https://app.example.test/orders',
+      plannedPlan: {
+        title: `操作 ${unsafeUrl}`,
+        summary: `操作 ${unsafeUrl}。`,
+        risks: [],
+        steps: [
+          { action: 'click', title: `点击 ${unsafeUrl}`, instruction: `点击 ${unsafeUrl}`, selector: unsafeSelector },
+          { action: 'wait', title: `等待 ${unsafeUrl}`, instruction: `等待 ${unsafeUrl}`, selector: unsafeSelector },
+          { action: 'scroll', title: `滚动到 ${unsafeUrl}`, instruction: `滚动到 ${unsafeUrl}`, selector: unsafeSelector },
+        ],
+      },
+    });
+
+    const testCase = createTestCaseFromAgentRun({
+      agentRun,
+      groupId: 'group-orders',
+      environmentId: 'env-staging',
+      url: 'https://fallback.example.test',
+      seed: 10,
+    });
+    const serialized = JSON.stringify(testCase);
+
+    expect(testCase?.steps.map((step) => step.execution?.action)).toEqual([undefined, undefined, undefined]);
+    expect(serialized).not.toContain(unsafeUrl);
+    ['user:', 'pw', 'token=x', 'code=y', '#'].forEach((secret) => {
+      expect(serialized).not.toContain(secret);
+    });
+  });
+
+  it('redacts malformed URLs before they are persisted from Agent runs', () => {
+    const unsafeUrl = 'https://user:pw@example.test:bad/path?access_token=raw&tab=open#code=raw2';
+    const safeUrl = 'https://example.test:bad/path?access_token=[已隐藏]&tab=[已隐藏]';
+    const agentRun = createStubAgentRun({
+      mode: 'ai',
+      prompt: `访问 ${unsafeUrl}`,
+      runtimeDescription: 'chromium / desktop / headless / https://app.example.test',
+      targetEnvironment: 'staging',
+      projectId: 'project-orders',
+      targetUrl: unsafeUrl,
+      plannedPlan: {
+        title: `打开 ${unsafeUrl}`,
+        summary: `确认 ${unsafeUrl} 可访问。`,
+        risks: [`不要泄漏 ${unsafeUrl}。`],
+        steps: [
+          { action: 'navigate', title: `进入 ${unsafeUrl}`, instruction: `打开 ${unsafeUrl}`, url: unsafeUrl },
+        ],
+      },
+    });
+
+    const testCase = createTestCaseFromAgentRun({
+      agentRun,
+      groupId: 'group-orders',
+      environmentId: 'env-staging',
+      url: 'https://fallback.example.test',
+      seed: 11,
+    });
+    const serialized = JSON.stringify(testCase);
+
+    expect(testCase?.url).toBe(safeUrl);
+    expect(testCase?.sourceIntent).toContain(safeUrl);
+    expect(testCase?.name).toContain(safeUrl);
+    expect(testCase?.notes).toContain(safeUrl);
+    expect(testCase?.steps[0]).toMatchObject({
+      title: `进入 ${safeUrl}`,
+      body: `打开 ${safeUrl}`,
+      execution: {
+        intent: `打开 ${safeUrl}`,
+        action: { kind: 'navigate', url: safeUrl },
+      },
+    });
+    ['user:', 'pw', 'access_token=raw', 'tab=open', 'code=raw2', '#'].forEach((secret) => {
+      expect(serialized).not.toContain(secret);
+    });
+  });
+
+  it('redacts complete URL query values that contain comma and semicolon separators', () => {
+    const unsafeUrl = 'https://example.test/callback?token=raw,tail;more，中文；更多';
+    const safeUrl = 'https://example.test/callback?token=[已隐藏]';
+    const agentRun = createStubAgentRun({
+      mode: 'ai',
+      prompt: `访问 ${unsafeUrl}`,
+      runtimeDescription: 'chromium / desktop / headless / https://app.example.test',
+      targetEnvironment: 'staging',
+      projectId: 'project-orders',
+      targetUrl: unsafeUrl,
+      plannedPlan: {
+        title: `打开 ${unsafeUrl}`,
+        summary: `确认 ${unsafeUrl} 可访问。`,
+        risks: [`不要泄漏 ${unsafeUrl}。`],
+        steps: [
+          { action: 'navigate', title: `进入 ${unsafeUrl}`, instruction: `打开 ${unsafeUrl}`, url: unsafeUrl },
+        ],
+      },
+    });
+
+    const testCase = createTestCaseFromAgentRun({
+      agentRun,
+      groupId: 'group-orders',
+      environmentId: 'env-staging',
+      url: 'https://fallback.example.test',
+      seed: 13,
+    });
+    const serialized = JSON.stringify(testCase);
+
+    expect(testCase?.url).toBe(safeUrl);
+    expect(testCase?.sourceIntent).toContain(safeUrl);
+    expect(testCase?.steps[0]).toMatchObject({
+      body: `打开 ${safeUrl}`,
+      execution: { action: { kind: 'navigate', url: safeUrl } },
+    });
+    ['raw', 'tail', 'more', '中文', '更多'].forEach((secret) => {
+      expect(serialized).not.toContain(secret);
+    });
+  });
+
+  it('treats punctuation-adjacent URL query tails as one persisted URL fragment', () => {
+    const unsafeUrl = 'https://example.test/callback?token=raw。tail';
+    const safeUrl = 'https://example.test/callback?token=[已隐藏]';
+    const agentRun = createStubAgentRun({
+      mode: 'ai',
+      prompt: `打开 ${unsafeUrl} 后继续`,
+      runtimeDescription: 'chromium / desktop / headless / https://app.example.test',
+      targetEnvironment: 'staging',
+      projectId: 'project-orders',
+      targetUrl: 'https://app.example.test/orders',
+      plannedPlan: {
+        title: `打开 ${unsafeUrl}`,
+        summary: `确认 ${unsafeUrl} 后继续。`,
+        risks: [],
+        steps: [
+          { action: 'navigate', title: `进入 ${unsafeUrl}`, instruction: `打开 ${unsafeUrl}`, url: unsafeUrl },
+        ],
+      },
+    });
+
+    const testCase = createTestCaseFromAgentRun({
+      agentRun,
+      groupId: 'group-orders',
+      environmentId: 'env-staging',
+      url: 'https://fallback.example.test',
+      seed: 14,
+    });
+    const serialized = JSON.stringify(testCase);
+
+    expect(testCase?.sourceIntent).toContain(safeUrl);
+    expect(testCase?.notes).toContain(safeUrl);
+    expect(testCase?.steps[0]).toMatchObject({
+      title: `进入 ${safeUrl}`,
+      body: `打开 ${safeUrl}`,
+      execution: {
+        intent: `打开 ${safeUrl}`,
+        action: { kind: 'navigate', url: safeUrl },
+      },
+    });
+    ['raw', 'tail'].forEach((secret) => {
+      expect(serialized).not.toContain(secret);
+    });
+  });
+
+  it('redacts prior input values from later selector and extraction text before persistence', () => {
+    const secret = 'hunter2';
+    const agentRun = createStubAgentRun({
+      mode: 'ai',
+      prompt: '填写订单并检查结果',
+      runtimeDescription: 'chromium / desktop / headless / https://app.example.test',
+      targetEnvironment: 'staging',
+      projectId: 'project-orders',
+      targetUrl: 'https://app.example.test/orders',
+      plannedPlan: {
+        title: '填写订单并检查结果',
+        summary: '检查提交后的订单状态。',
+        risks: [],
+        steps: [
+          { action: 'input', title: '输入订单值', instruction: '输入订单值', selector: '#password', value: secret },
+          { action: 'click', title: `点击 ${secret}`, instruction: `点击 ${secret}`, selector: `a[data-value="${secret}"]` },
+          { action: 'wait', title: `等待 ${secret}`, instruction: `等待 ${secret}`, selector: `[data-value="${secret}"]` },
+          { action: 'scroll', title: `滚动到 ${secret}`, instruction: `滚动到 ${secret}`, selector: `[data-value="${secret}"]` },
+          { action: 'extract', title: `提取 ${secret}`, instruction: `提取 ${secret}`, target: `订单 ${secret}` },
+        ],
+      },
+    });
+
+    const testCase = createTestCaseFromAgentRun({
+      agentRun,
+      groupId: 'group-orders',
+      environmentId: 'env-staging',
+      url: 'https://fallback.example.test',
+      seed: 15,
+    });
+    const serialized = JSON.stringify(testCase);
+    const laterSteps = testCase?.steps.slice(1) ?? [];
+
+    expect(laterSteps.map((step) => step.execution?.action)).toEqual([undefined, undefined, undefined, undefined]);
+    laterSteps.forEach((step) => {
+      expect(step.title).not.toContain(secret);
+      expect(step.body).not.toContain(secret);
+      expect(step.execution?.intent).not.toContain(secret);
+    });
+    expect(serialized).not.toContain(secret);
+  });
+
+  it('redacts collected input values from URL paths across persisted Agent-run fields', () => {
+    const secret = 'hunter2';
+    const unsafeUrl = `https://example.test/orders/${secret}`;
+    const safeUrl = 'https://example.test/orders/[已隐藏]';
+    const agentRun = createStubAgentRun({
+      mode: 'ai',
+      prompt: `访问 ${unsafeUrl}`,
+      runtimeDescription: 'chromium / desktop / headless / https://app.example.test',
+      targetEnvironment: 'staging',
+      projectId: 'project-orders',
+      targetUrl: unsafeUrl,
+      plannedPlan: {
+        title: `打开 ${unsafeUrl}`,
+        summary: `确认 ${unsafeUrl} 可访问。`,
+        risks: [`不要泄漏 ${unsafeUrl}。`],
+        steps: [
+          { action: 'input', title: '输入订单值', instruction: '输入订单值', selector: '#password', value: secret },
+          { action: 'navigate', title: `进入 ${unsafeUrl}`, instruction: `打开 ${unsafeUrl}`, url: unsafeUrl },
+        ],
+      },
+    });
+
+    const testCase = createTestCaseFromAgentRun({
+      agentRun,
+      groupId: 'group-orders',
+      environmentId: 'env-staging',
+      url: 'https://fallback.example.test',
+      seed: 16,
+    });
+    const serialized = JSON.stringify(testCase);
+
+    expect(testCase?.url).toBe(safeUrl);
+    expect(testCase?.sourceIntent).toContain(safeUrl);
+    expect(testCase?.name).toContain(safeUrl);
+    expect(testCase?.notes).toContain(safeUrl);
+    expect(testCase?.steps[1]).toMatchObject({
+      title: `进入 ${safeUrl}`,
+      body: `打开 ${safeUrl}`,
+      execution: {
+        intent: `打开 ${safeUrl}`,
+        action: { kind: 'navigate', url: safeUrl },
+      },
+    });
+    expect(serialized).not.toContain(secret);
+  });
+
+  it('redacts file URLs and omits selectors that embed them from persisted Agent runs', () => {
+    const unsafeUrl = 'file:///tmp/page.html?token=raw#code=raw2';
+    const safeUrl = 'file:///tmp/page.html?token=[已隐藏]';
+    const agentRun = createStubAgentRun({
+      mode: 'ai',
+      prompt: `打开 ${unsafeUrl}`,
+      runtimeDescription: 'chromium / desktop / headless / file:///tmp/page.html',
+      targetEnvironment: 'staging',
+      projectId: 'project-orders',
+      targetUrl: unsafeUrl,
+      plannedPlan: {
+        title: `打开 ${unsafeUrl}`,
+        summary: `确认 ${unsafeUrl} 可访问。`,
+        risks: [],
+        steps: [
+          { action: 'navigate', title: `进入 ${unsafeUrl}`, instruction: `打开 ${unsafeUrl}`, url: unsafeUrl },
+          { action: 'click', title: `点击 ${unsafeUrl}`, instruction: `点击 ${unsafeUrl}`, selector: `a[href="${unsafeUrl}"]` },
+        ],
+      },
+    });
+
+    const testCase = createTestCaseFromAgentRun({
+      agentRun,
+      groupId: 'group-orders',
+      environmentId: 'env-staging',
+      url: 'https://fallback.example.test',
+      seed: 17,
+    });
+    const serialized = JSON.stringify(testCase);
+
+    expect(testCase?.url).toBe(safeUrl);
+    expect(testCase?.sourceIntent).toContain(safeUrl);
+    expect(testCase?.steps[0]?.execution?.action).toEqual({ kind: 'navigate', url: safeUrl });
+    expect(testCase?.steps[1]?.execution?.action).toBeUndefined();
+    ['raw', 'raw2', '#'].forEach((secret) => {
+      expect(serialized).not.toContain(secret);
+    });
+  });
+
+  it('preserves only the safe about path while redacting opaque URL fragments', () => {
+    const unsafeUrl = 'about:blank#token=raw';
+    const safeUrl = 'about:blank';
+    const agentRun = createStubAgentRun({
+      mode: 'ai',
+      prompt: `打开 ${unsafeUrl}`,
+      runtimeDescription: 'chromium / desktop / headless / about:blank',
+      targetEnvironment: 'staging',
+      projectId: 'project-orders',
+      targetUrl: unsafeUrl,
+      plannedPlan: {
+        title: `打开 ${unsafeUrl}`,
+        summary: `确认 ${unsafeUrl} 可访问。`,
+        risks: [],
+        steps: [
+          { action: 'navigate', title: `进入 ${unsafeUrl}`, instruction: `打开 ${unsafeUrl}`, url: unsafeUrl },
+          { action: 'click', title: `点击 ${unsafeUrl}`, instruction: `点击 ${unsafeUrl}`, selector: `a[href="${unsafeUrl}"]` },
+        ],
+      },
+    });
+
+    const testCase = createTestCaseFromAgentRun({
+      agentRun,
+      groupId: 'group-orders',
+      environmentId: 'env-staging',
+      url: 'https://fallback.example.test',
+      seed: 18,
+    });
+    const serialized = JSON.stringify(testCase);
+
+    expect(testCase?.url).toBe(safeUrl);
+    expect(testCase?.sourceIntent).toContain(safeUrl);
+    expect(testCase?.steps[0]?.execution?.action).toEqual({ kind: 'navigate', url: safeUrl });
+    expect(testCase?.steps[1]?.execution?.action).toBeUndefined();
+    ['raw', '#'].forEach((secret) => {
+      expect(serialized).not.toContain(secret);
+    });
+  });
+
+  it('redacts data URL payloads and gates selectors that embed them', () => {
+    const unsafeUrl = 'data:text/plain,private-value?token=query-secret#token=raw';
+    const safeUrl = 'data:[已隐藏]';
+    const agentRun = createStubAgentRun({
+      mode: 'ai',
+      prompt: `打开 ${unsafeUrl}`,
+      runtimeDescription: 'chromium / desktop / headless / data:text/plain,fixture',
+      targetEnvironment: 'staging',
+      projectId: 'project-orders',
+      targetUrl: unsafeUrl,
+      plannedPlan: {
+        title: `打开 ${unsafeUrl}`,
+        summary: `确认 ${unsafeUrl} 可访问。`,
+        risks: [],
+        steps: [
+          { action: 'navigate', title: `进入 ${unsafeUrl}`, instruction: `打开 ${unsafeUrl}`, url: unsafeUrl },
+          { action: 'click', title: `点击 ${unsafeUrl}`, instruction: `点击 ${unsafeUrl}`, selector: `a[href="${unsafeUrl}"]` },
+        ],
+      },
+    });
+
+    const testCase = createTestCaseFromAgentRun({
+      agentRun,
+      groupId: 'group-orders',
+      environmentId: 'env-staging',
+      url: 'https://fallback.example.test',
+      seed: 19,
+    });
+    const serialized = JSON.stringify(testCase);
+
+    expect(testCase?.url).toBe(safeUrl);
+    expect(testCase?.sourceIntent).toContain(safeUrl);
+    expect(testCase?.steps[0]?.execution?.action).toEqual({ kind: 'navigate', url: safeUrl });
+    expect(testCase?.steps[1]?.execution?.action).toBeUndefined();
+    ['private-value', 'query-secret', 'raw', '#'].forEach((secret) => {
+      expect(serialized).not.toContain(secret);
+    });
+  });
+
+  it('redacts payloads from arbitrary opaque URL schemes', () => {
+    const unsafeUrl = 'custom:secret-value?token=raw#x';
+    const safeUrl = 'custom:[已隐藏]';
+    const agentRun = createStubAgentRun({
+      mode: 'ai',
+      prompt: `打开 ${unsafeUrl}`,
+      runtimeDescription: 'chromium / desktop / headless / custom:fixture',
+      targetEnvironment: 'staging',
+      projectId: 'project-orders',
+      targetUrl: unsafeUrl,
+      plannedPlan: {
+        title: `打开 ${unsafeUrl}`,
+        summary: `确认 ${unsafeUrl} 可访问。`,
+        risks: [`不要泄漏 ${unsafeUrl}。`],
+        steps: [
+          { action: 'navigate', title: `进入 ${unsafeUrl}`, instruction: `打开 ${unsafeUrl}`, url: unsafeUrl },
+        ],
+      },
+    });
+
+    const testCase = createTestCaseFromAgentRun({
+      agentRun,
+      groupId: 'group-orders',
+      environmentId: 'env-staging',
+      url: 'https://fallback.example.test',
+      seed: 20,
+    });
+    const serialized = JSON.stringify(testCase);
+
+    expect(testCase?.url).toBe(safeUrl);
+    expect(testCase?.sourceIntent).toContain(safeUrl);
+    expect(testCase?.notes).toContain(safeUrl);
+    expect(testCase?.steps[0]?.execution?.action).toEqual({ kind: 'navigate', url: safeUrl });
+    ['secret-value', 'raw', '#'].forEach((secret) => {
+      expect(serialized).not.toContain(secret);
+    });
+  });
+
+  it('keeps ordinary sensitive-word prose while redacting explicit secret values', () => {
+    const tokenProse = 'token should be rotated';
+    const passwordProse = 'password must be updated';
+    const password = 'hunter2';
+    const bareSecret = `password ${password}`;
+    const chineseExplicitSecret = `密码为 ${password}`;
+    const agentRun = createStubAgentRun({
+      mode: 'ai',
+      prompt: `${tokenProse}; ${passwordProse}; password: ${password}`,
+      runtimeDescription: 'chromium / desktop / headless / https://app.example.test',
+      targetEnvironment: 'staging',
+      projectId: 'project-orders',
+      targetUrl: 'https://app.example.test/orders',
+      plannedPlan: {
+        title: tokenProse,
+        summary: passwordProse,
+        risks: [`password: ${password}`, bareSecret, chineseExplicitSecret],
+        steps: [
+          { action: 'assert', title: tokenProse, instruction: passwordProse, expected: '凭据轮换已安排' },
+        ],
+      },
+    });
+
+    const testCase = createTestCaseFromAgentRun({
+      agentRun,
+      groupId: 'group-orders',
+      environmentId: 'env-staging',
+      url: 'https://fallback.example.test',
+      seed: 12,
+    });
+    const serialized = JSON.stringify(testCase);
+
+    expect(testCase?.sourceIntent).toContain(tokenProse);
+    expect(testCase?.sourceIntent).toContain(passwordProse);
+    expect(testCase?.name).toBe(tokenProse);
+    expect(testCase?.notes).toContain(passwordProse);
+    expect(testCase?.notes).toContain('密码为 [已隐藏]');
+    expect(testCase?.steps[0]).toMatchObject({
+      title: tokenProse,
+      body: passwordProse,
+      execution: { intent: passwordProse },
+    });
+    expect(serialized).not.toContain(password);
+  });
+
+  it('treats common password field aliases as sensitive even without secret keywords in the prompt', () => {
+    const password = 'hunter2';
+    const token = 'short-token';
+    const agentRun = createStubAgentRun({
+      mode: 'ai',
+      prompt: `登录并输入 ${password} 或 ${token}`,
+      runtimeDescription: 'chromium / desktop / headless / https://app.example.test',
+      targetEnvironment: 'staging',
+      projectId: 'project-orders',
+      targetUrl: 'https://app.example.test/orders',
+      plannedPlan: {
+        title: '登录后台',
+        summary: `填入登录表单 ${password} 或 ${token}。`,
+        risks: [],
+        steps: [
+          { action: 'input', title: '填写登录信息', instruction: '填入登录表单', selector: '#passwd', value: password },
+          { action: 'input', title: '填写登录信息', instruction: '填入登录表单', selector: '#access_token', value: token },
+        ],
+      },
+    });
+
+    const testCase = createTestCaseFromAgentRun({
+      agentRun,
+      groupId: 'group-orders',
+      environmentId: 'env-staging',
+      url: 'https://fallback.example.test',
+      seed: 6,
+    });
+
+    expect(JSON.stringify(testCase)).not.toContain(password);
+    expect(JSON.stringify(testCase)).not.toContain(token);
+    expect(testCase?.steps[0]?.body).toBe('在 #passwd 中输入敏感值（已隐藏）');
+    expect(testCase?.steps[0]?.execution?.action).toBeUndefined();
+    expect(testCase?.steps[1]?.body).toBe('在 #access_token 中输入敏感值（已隐藏）');
+    expect(testCase?.steps[1]?.execution?.action).toBeUndefined();
+  });
+
+  it('redacts input values from filtered runtime-only Agent plan steps', () => {
+    const password = 'runtime-secret';
+    const agentRun = createStubAgentRun({
+      mode: 'ai',
+      prompt: `登录并输入 ${password}`,
+      runtimeDescription: 'chromium / desktop / headless / https://app.example.test',
+      targetEnvironment: 'staging',
+      projectId: 'project-orders',
+      targetUrl: 'https://app.example.test/orders',
+      plannedPlan: {
+        title: `登录 ${password}`,
+        summary: `运行时输入 ${password}。`,
+        risks: [],
+        steps: [
+          { action: 'navigate', title: '进入登录页', instruction: '进入登录页', url: 'https://app.example.test/login' },
+        ],
+      },
+    });
+    agentRun.plan.steps.forEach((step) => {
+      delete step.sourceStepType;
+    });
+    agentRun.plan.steps.find((step) => step.title === '进入登录页')!.sourceStepType = 'ai';
+    agentRun.plan.steps.push({
+      id: 'runtime-password-input',
+      action: 'input',
+      title: '运行时凭据输入',
+      instruction: '输入运行时凭据',
+      selector: '#password',
+      value: password,
+    });
+
+    const testCase = createTestCaseFromAgentRun({
+      agentRun,
+      groupId: 'group-orders',
+      environmentId: 'env-staging',
+      url: 'https://fallback.example.test',
+      seed: 7,
+    });
+
+    expect(testCase?.steps).toHaveLength(1);
+    expect(JSON.stringify(testCase)).not.toContain(password);
+  });
+
+  it('derives model requirements from structured steps and keeps incomplete Agent actions model-backed', () => {
+    expect(studio.getTestStepModelRequirement({
+      id: 'navigate',
+      type: 'ai',
+      title: '打开订单页',
+      body: '打开订单页',
+      execution: {
+        schemaVersion: 2,
+        intent: '进入订单页',
+        reviewStatus: 'confirmed',
+        actionRisk: 'low',
+        action: { kind: 'navigate', url: 'https://example.test/orders' },
+      },
+    })).toBe('none');
+    expect(studio.getTestStepModelRequirement({
+      id: 'semantic-assert',
+      type: 'aiAssert',
+      title: '确认订单状态',
+      body: '验证页面显示订单已创建',
+    })).toBe('required');
+    expect(studio.getTestStepModelRequirement({
+      id: 'explicit-assert',
+      type: 'aiAssert',
+      title: '确认订单状态',
+      body: '页面包含订单已创建',
+      execution: {
+        schemaVersion: 2,
+        intent: '确认订单状态',
+        reviewStatus: 'confirmed',
+        actionRisk: 'low',
+        assertion: { id: 'assert-order-created', version: 1, kind: 'pageContains', expected: '订单已创建' },
+      },
+    })).toBe('none');
+    expect(studio.getTestStepModelRequirement({
+      id: 'manual',
+      type: 'manual',
+      title: '人工确认',
+      body: '确认视觉状态',
+    })).toBe('notApplicable');
+
+    const agentRun = createStubAgentRun({
+      mode: 'ai',
+      prompt: '提交订单',
+      runtimeDescription: 'chromium / desktop / headless / https://app.example.test',
+      targetEnvironment: 'staging',
+      projectId: 'project-orders',
+      targetUrl: 'https://app.example.test/orders',
+      plannedPlan: {
+        title: '提交订单',
+        summary: '尝试点击语义目标。',
+        risks: [],
+        steps: [
+          { action: 'click', title: '提交订单', instruction: '点击提交订单按钮', target: '提交订单按钮' },
+          { action: 'input', title: '填写邮箱', instruction: '填写测试邮箱', value: 'qa@example.test' },
+        ],
+      },
+    });
+    const testCase = createTestCaseFromAgentRun({
+      agentRun,
+      groupId: 'group-orders',
+      environmentId: 'env-staging',
+      url: 'https://fallback.example.test',
+      seed: 4,
+    });
+
+    expect(testCase?.steps.map((step) => step.execution?.action)).toEqual([undefined, undefined]);
+    expect(testCase?.steps.map((step) => studio.getTestStepModelRequirement(step))).toEqual(['required', 'required']);
+  });
+
   it('generates traceable test paths from concrete PRD requirements', () => {
     const document = createPrdDocumentAsset({
       name: 'member-management.md',
@@ -159,6 +996,131 @@ describe('studio state hydration', () => {
     expect(hydrated.selectedProjectId).toBe('project-user');
   });
 
+  it('keeps legacy test steps unchanged and discards malformed V2 execution drafts during hydration', () => {
+    const project = createEmptyProject(8);
+    const legacyStep = {
+      id: 'step-legacy',
+      type: 'ai' as const,
+      title: '旧自然语言步骤',
+      body: '打开订单页并检查列表。',
+    };
+    const validV2Step = {
+      id: 'step-v2-valid',
+      type: 'ai' as const,
+      title: '打开订单页',
+      body: '打开订单页',
+      execution: {
+        schemaVersion: 2 as const,
+        intent: '进入订单页',
+        reviewStatus: 'needsReview' as const,
+        actionRisk: 'low' as const,
+        action: { kind: 'navigate' as const, url: 'https://example.test/orders' },
+      },
+    };
+    const malformedV2Step = {
+      id: 'step-v2-malformed',
+      type: 'ai' as const,
+      title: '保留旧文本',
+      body: '保留旧文本',
+      execution: {
+        schemaVersion: 2,
+        intent: '错误 URL 不能被执行',
+        reviewStatus: 'needsReview',
+        actionRisk: 'low',
+        action: { kind: 'navigate', url: '' },
+      },
+    } as unknown as typeof validV2Step;
+    const malformedAssertionStep = {
+      id: 'step-v2-bad-assertion',
+      type: 'aiAssert' as const,
+      title: '保留断言文本',
+      body: '保留断言文本',
+      execution: {
+        schemaVersion: 2,
+        intent: '错误断言不能被执行',
+        reviewStatus: 'needsReview',
+        actionRisk: 'low',
+        assertion: { id: 'bad-assertion', version: 1, kind: 'pageContains', expected: '' },
+      },
+    } as unknown as typeof validV2Step;
+    const testCase = {
+      id: 'case-v2-hydration',
+      kind: 'scenario' as const,
+      groupId: project.groups[0]!.id,
+      environmentId: project.environments[0]!.id,
+      source: 'manual' as const,
+      name: '兼容性用例',
+      category: '订单',
+      lastEdited: '刚刚',
+      url: project.defaultUrl,
+      notes: '',
+      sourceIntent: 42 as never,
+      steps: [legacyStep, validV2Step, malformedV2Step, malformedAssertionStep],
+    };
+
+    const hydrated = hydrateStudioState({
+      ...createInitialStudioState(),
+      projects: [{ ...project, testCases: [testCase] },],
+      selectedProjectId: project.id,
+    });
+    const steps = hydrated.projects[0]?.testCases[0]?.steps;
+
+    expect(steps?.[0]).toEqual(legacyStep);
+    expect(steps?.[1]?.execution?.action).toEqual({ kind: 'navigate', url: 'https://example.test/orders' });
+    expect(steps?.[2]).toMatchObject({ id: 'step-v2-malformed', body: '保留旧文本' });
+    expect(steps?.[2]?.execution).toBeUndefined();
+    expect(steps?.[3]).toMatchObject({ id: 'step-v2-bad-assertion', body: '保留断言文本' });
+    expect(steps?.[3]?.execution).toBeUndefined();
+    expect(hydrated.projects[0]?.testCases[0]?.sourceIntent).toBeUndefined();
+  });
+
+  it('discards non-object persisted test steps while keeping adjacent legacy and V2 steps', () => {
+    const project = createEmptyProject(9);
+    const legacyStep = {
+      id: 'step-legacy',
+      type: 'ai' as const,
+      title: '旧自然语言步骤',
+      body: '打开订单页并检查列表。',
+    };
+    const validV2Step = {
+      id: 'step-v2-valid',
+      type: 'ai' as const,
+      title: '打开订单页',
+      body: '打开订单页',
+      execution: {
+        schemaVersion: 2 as const,
+        intent: '进入订单页',
+        reviewStatus: 'needsReview' as const,
+        actionRisk: 'low' as const,
+        action: { kind: 'navigate' as const, url: 'https://example.test/orders' },
+      },
+    };
+    const testCase = {
+      id: 'case-invalid-step-hydration',
+      kind: 'scenario' as const,
+      groupId: project.groups[0]!.id,
+      environmentId: project.environments[0]!.id,
+      source: 'manual' as const,
+      name: '兼容性用例',
+      category: '订单',
+      lastEdited: '刚刚',
+      url: project.defaultUrl,
+      notes: '',
+      steps: [null, 'bad', 42, legacyStep, validV2Step],
+    };
+
+    const hydrated = hydrateStudioState({
+      ...createInitialStudioState(),
+      projects: [{ ...project, testCases: [testCase] as unknown as typeof project.testCases }],
+      selectedProjectId: project.id,
+    });
+    const steps = hydrated.projects[0]?.testCases[0]?.steps;
+
+    expect(steps).toHaveLength(2);
+    expect(steps?.[0]).toEqual(legacyStep);
+    expect(steps?.[1]?.execution?.action).toEqual({ kind: 'navigate', url: 'https://example.test/orders' });
+  });
+
   it('prunes invalid PRD triage records while preserving valid local governance notes', () => {
     const project = createEmptyProject(1);
     const document = createPrdDocumentAsset({
@@ -217,6 +1179,66 @@ describe('studio state hydration', () => {
       expect.objectContaining({ testCaseId: failedCase!.id, status: 'failed', latestRun: expect.objectContaining({ id: 'failed-terminal' }) }),
       expect.objectContaining({ testCaseId: unrunCase.id, status: 'neverExecuted' }),
     ]));
+  });
+
+  it('derives a bounded, safe project report from full history and PRD coverage', () => {
+    const project = createDemoStudioState().projects[0]!;
+    const testCase = { ...project.testCases[0]!, id: 'case-report', name: '报告用例' };
+    const document = createPrdDocumentAsset({
+      name: 'report.md', kind: 'markdown', size: 120,
+      sourceText: '# 成员管理\n- 管理员必须能新增成员，并在列表中展示邮箱与状态。',
+    });
+    const path = document.generatedPaths[0]!;
+    const reportProject = {
+      ...project,
+      testCases: [testCase],
+      documents: [document],
+      prdCoverageTriage: [{
+        documentId: document.id,
+        pathId: path.id,
+        target: 'recording' as const,
+        status: 'deferred' as const,
+        note: '等待录制环境',
+        updatedAt: '2026-08-04T00:00:00.000Z',
+      }],
+    };
+    const environmentId = reportProject.environments[0]!.id;
+    const history = Array.from({ length: 22 }, (_, index) => ({
+      id: `run-report-${index}`,
+      name: `历史运行 ${index}`,
+      status: index % 2 ? 'failed' as const : 'neutral' as const,
+      duration: '00:00:01',
+      summary: `摘要 ${index}`,
+      projectId: reportProject.id,
+      testCaseId: testCase.id,
+      environmentId,
+      startedAt: index === 21 ? undefined : `2026-08-${String(index + 1).padStart(2, '0')}T00:00:00.000Z`,
+    }));
+    const report = deriveProjectRunReport(reportProject, history, [{
+      id: 'run-report-20',
+      projectId: reportProject.id,
+      testCaseId: testCase.id,
+      environmentId,
+      title: '历史运行 20',
+      status: 'neutral',
+      startedAt: '2026-08-21T00:00:00.000Z',
+      duration: '00:00:01',
+      summary: '摘要 20',
+      failureReason: '等待人工确认',
+      logs: [],
+      steps: [],
+      artifacts: [{ id: 'artifact-safe', type: 'report', label: '失败报告', path: '/secret/local-path/report.html' }],
+    }], '2026-08-04T00:00:00.000Z');
+
+    expect(report).toMatchObject({
+      projectName: reportProject.name,
+      runStats: { failed: 11, neutral: 11 },
+      prdCoverage: { paths: 1, targets: { recording: { deferred: 1 } } },
+    });
+    expect(report.problemRuns).toHaveLength(20);
+    expect(report.problemRuns[0]).toMatchObject({ id: 'run-report-20', failureReason: '等待人工确认', artifactLabels: ['失败报告'] });
+    expect(JSON.stringify(report)).not.toContain('/secret/local-path');
+    expect(JSON.stringify(report)).not.toContain('credentialRefs');
   });
 
   it('resets persisted browser sessions because they cannot survive an app restart', () => {
@@ -294,6 +1316,285 @@ describe('studio state hydration', () => {
         steps: [{ id: 'step-manual', type: 'manual', title: '人工检查', body: '确认状态' }],
       }),
     ).toBe(false);
+    expect(
+      isAgentRunnableTestCase({
+        ...baseCase,
+        steps: [
+          { id: 'step-legacy-ai', type: 'ai', title: '登录', body: '使用语义步骤登录' },
+          {
+            id: 'step-confirmed-click',
+            type: 'ai',
+            title: '提交订单',
+            body: '点击提交订单',
+            execution: {
+              schemaVersion: 2,
+              intent: '点击提交订单',
+              reviewStatus: 'confirmed',
+              actionRisk: 'medium',
+              action: {
+                kind: 'click',
+                locator: { selector: '#submit-order', quality: 'acceptable' },
+              },
+            },
+          },
+        ],
+      }),
+    ).toBe(false);
+    expect(
+      isAgentRunnableTestCase({
+        ...baseCase,
+        steps: [
+          {
+            id: 'step-confirmed-input',
+            type: 'ai',
+            title: '填写邮箱',
+            body: '填写测试邮箱',
+            execution: {
+              schemaVersion: 2,
+              intent: '填写测试邮箱',
+              reviewStatus: 'confirmed',
+              actionRisk: 'medium',
+              action: {
+                kind: 'input',
+                locator: { selector: '#email', quality: 'acceptable' },
+                value: 'qa@example.test',
+              },
+            },
+          },
+        ],
+      }),
+    ).toBe(false);
+    expect(
+      isAgentRunnableTestCase({
+        ...baseCase,
+        steps: [
+          {
+            id: 'step-confirmed-select',
+            type: 'ai',
+            title: '选择区域',
+            body: '选择测试区域',
+            execution: {
+              schemaVersion: 2,
+              intent: '选择测试区域',
+              reviewStatus: 'confirmed',
+              actionRisk: 'medium',
+              action: {
+                kind: 'select',
+                locator: { selector: '#region', quality: 'acceptable' },
+                value: 'shanghai',
+              },
+            },
+          },
+        ],
+      }),
+    ).toBe(false);
+    expect(
+      isAgentRunnableTestCase({
+        ...baseCase,
+        steps: [
+          {
+            id: 'step-needs-review-input',
+            type: 'ai',
+            title: '填写邮箱',
+            body: '填写测试邮箱',
+            execution: {
+              schemaVersion: 2,
+              intent: '填写测试邮箱',
+              reviewStatus: 'needsReview',
+              actionRisk: 'medium',
+              action: {
+                kind: 'input',
+                locator: { selector: '#email', quality: 'acceptable' },
+                value: 'qa@example.test',
+              },
+            },
+          },
+        ],
+      }),
+    ).toBe(true);
+    [{ kind: 'unknown' }, 'unknown'].forEach((action) => {
+      expect(
+        isAgentRunnableTestCase({
+          ...baseCase,
+          steps: [
+            {
+              id: 'step-confirmed-malformed-action',
+              type: 'ai',
+              title: '确认的畸形步骤',
+              body: '不应通过 Agent Workflow 执行',
+              execution: {
+                schemaVersion: 2,
+                intent: '确认的畸形步骤',
+                reviewStatus: 'confirmed',
+                actionRisk: 'unknown',
+                action: action as never,
+              },
+            },
+          ],
+        }),
+      ).toBe(false);
+    });
+  });
+
+  it('projects confirmed deterministic actions into structured Agent plan steps', () => {
+    const confirmedAction = (action: NonNullable<studio.TestStepDraft['execution']>['action']) => ({
+      id: `step-${action!.kind}`,
+      type: 'ai' as const,
+      title: `${action!.kind} 标题`,
+      body: `${action!.kind} 说明`,
+      execution: {
+        schemaVersion: 2 as const,
+        intent: `${action!.kind} 意图`,
+        reviewStatus: 'confirmed' as const,
+        actionRisk: 'low' as const,
+        action: action!,
+      },
+    });
+
+    expect(
+      getConfirmedDeterministicTestStep(confirmedAction({ kind: 'navigate', url: 'https://example.test/orders' })),
+    ).toEqual({
+      action: 'navigate',
+      title: 'navigate 标题',
+      instruction: 'navigate 说明',
+      url: 'https://example.test/orders',
+    });
+    expect(
+      getConfirmedDeterministicTestStep(
+        confirmedAction({ kind: 'click', locator: { selector: '#submit-order', quality: 'acceptable' } }),
+      ),
+    ).toEqual({
+      action: 'click',
+      title: 'click 标题',
+      instruction: 'click 说明',
+      selector: '#submit-order',
+    });
+    expect(
+      getConfirmedDeterministicTestStep(
+        confirmedAction({
+          kind: 'waitForSelector',
+          locator: { selector: '[data-ready]', quality: 'acceptable' },
+          timeoutMs: 2_000,
+        }),
+      ),
+    ).toEqual({
+      action: 'wait',
+      title: 'waitForSelector 标题',
+      instruction: 'waitForSelector 说明',
+      selector: '[data-ready]',
+      timeoutMs: 2_000,
+    });
+    expect(
+      getConfirmedDeterministicTestStep(confirmedAction({ kind: 'waitForTimeout', timeoutMs: 800 })),
+    ).toEqual({
+      action: 'wait',
+      title: 'waitForTimeout 标题',
+      instruction: 'waitForTimeout 说明',
+      timeoutMs: 800,
+    });
+    expect(
+      getConfirmedDeterministicTestStep(
+        confirmedAction({ kind: 'scrollTo', locator: { selector: '#summary', quality: 'acceptable' } }),
+      ),
+    ).toEqual({
+      action: 'scroll',
+      title: 'scrollTo 标题',
+      instruction: 'scrollTo 说明',
+      selector: '#summary',
+    });
+  });
+
+  it('rejects unconfirmed, unsupported, malformed, and non-AI deterministic steps', () => {
+    const confirmedClick = {
+      id: 'step-click',
+      type: 'ai' as const,
+      title: '提交订单',
+      body: '点击提交订单',
+      execution: {
+        schemaVersion: 2 as const,
+        intent: '点击提交订单',
+        reviewStatus: 'confirmed' as const,
+        actionRisk: 'medium' as const,
+        action: { kind: 'click' as const, locator: { selector: '#submit-order', quality: 'acceptable' as const } },
+      },
+    };
+    const rejectedSteps = [
+      {
+        ...confirmedClick,
+        execution: { ...confirmedClick.execution, reviewStatus: 'needsReview' as const },
+      },
+      {
+        ...confirmedClick,
+        execution: {
+          ...confirmedClick.execution,
+          action: { kind: 'input' as const, locator: { selector: '#email', quality: 'acceptable' as const }, value: 'qa@example.test' },
+        },
+      },
+      {
+        ...confirmedClick,
+        execution: {
+          ...confirmedClick.execution,
+          action: { kind: 'select' as const, locator: { selector: '#region', quality: 'acceptable' as const }, value: 'shanghai' },
+        },
+      },
+      {
+        ...confirmedClick,
+        type: 'aiAssert' as const,
+      },
+      {
+        ...confirmedClick,
+        execution: {
+          ...confirmedClick.execution,
+          action: { kind: 'click' as const, locator: { selector: ' ', quality: 'acceptable' as const } },
+        },
+      },
+    ];
+
+    rejectedSteps.forEach((step) => {
+      expect(getConfirmedDeterministicTestStep(step)).toBeUndefined();
+      expect(isConfirmedDeterministicTestStep(step)).toBe(false);
+    });
+
+    const malformedActionSteps: studio.TestStepDraft[] = [
+      {
+        ...confirmedClick,
+        execution: { ...confirmedClick.execution, action: undefined },
+      },
+      {
+        ...confirmedClick,
+        execution: {
+          ...confirmedClick.execution,
+          action: { kind: 'navigate', url: ' ' },
+        },
+      },
+      {
+        ...confirmedClick,
+        execution: {
+          ...confirmedClick.execution,
+          action: { kind: 'waitForTimeout', timeoutMs: 0 },
+        },
+      },
+      {
+        ...confirmedClick,
+        execution: {
+          ...confirmedClick.execution,
+          action: { kind: 'unknown' } as never,
+        },
+      },
+      {
+        ...confirmedClick,
+        execution: {
+          ...confirmedClick.execution,
+          action: 'unknown' as never,
+        },
+      },
+    ];
+
+    malformedActionSteps.forEach((step) => {
+      expect(() => getConfirmedDeterministicTestStep(step)).not.toThrow();
+      expect(getConfirmedDeterministicTestStep(step)).toBeUndefined();
+      expect(isConfirmedDeterministicTestStep(step)).toBe(false);
+    });
   });
 
   it('recognizes test cases that consist of exactly one recording replay', () => {

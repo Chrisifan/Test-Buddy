@@ -4,8 +4,12 @@ import type {
   ProjectEnvironment,
   RecordingCapturedEvent,
   RunEventPayload,
+  RunRecordingRequest,
+  RunRecordingResponse,
   RunTestCaseRequest,
   RunTestCaseResponse,
+  RunWorkflowRequest,
+  RunWorkflowResponse,
   RuntimeProfile,
 } from '../../shared/studio.js';
 import {
@@ -32,6 +36,9 @@ export interface RuntimeBundle {
   testRunner: TestRunner;
   ensureReady: () => Promise<void>;
   runTestCase: (request: RunTestCaseRequest) => Promise<RunTestCaseResponse>;
+  runRecording: (request: RunRecordingRequest) => Promise<RunRecordingResponse>;
+  runWorkflow: (request: RunWorkflowRequest) => Promise<RunWorkflowResponse>;
+  cancelRun: (runId: string) => boolean;
   close: () => Promise<void>;
 }
 
@@ -82,6 +89,23 @@ export function createRuntimeBundle(options: RuntimeBundleOptions): RuntimeBundl
     recordingRunner,
     studioRuntime,
   );
+  const activeRuns = new Map<string, AbortController>();
+
+  const withActiveRun = async <T>(
+    runId: string,
+    execute: (cancellationSignal: AbortSignal) => Promise<T>,
+  ): Promise<T> => {
+    if (activeRuns.has(runId)) {
+      throw new Error(`运行 ${runId} 已在执行中。`);
+    }
+    const controller = new AbortController();
+    activeRuns.set(runId, controller);
+    try {
+      return await execute(controller.signal);
+    } finally {
+      activeRuns.delete(runId);
+    }
+  };
 
   return {
     artifactManager,
@@ -91,6 +115,8 @@ export function createRuntimeBundle(options: RuntimeBundleOptions): RuntimeBundl
     testRunner,
     ensureReady: () => artifactManager.ensureReady(),
     runTestCase: async (request) => {
+      const runId = request.runId ?? `run-${Date.now()}`;
+      return withActiveRun(runId, async (cancellationSignal) => {
       const recordingId = getExclusiveRecordingReplayId(request.testCase);
       const documentId = request.testCase.prdPath?.documentId;
       const recording = recordingId
@@ -99,6 +125,9 @@ export function createRuntimeBundle(options: RuntimeBundleOptions): RuntimeBundl
 
       if (recording) {
         return recordingRunner.run({
+          ...request,
+          runId,
+          cancellationSignal,
           project: request.project,
           environment: request.environment,
           recording,
@@ -109,6 +138,8 @@ export function createRuntimeBundle(options: RuntimeBundleOptions): RuntimeBundl
 
       if (isAgentRunnableTestCase(request.testCase)) {
         return studioRuntime.runWorkflow({
+          runId,
+          cancellationSignal,
           workflow: testCaseToWorkflow(request.testCase),
           targetEnvironment: request.environment.name,
           runtimeProfile: resolveRuntimeProfile(request.runtimeProfile, request.environment),
@@ -121,7 +152,28 @@ export function createRuntimeBundle(options: RuntimeBundleOptions): RuntimeBundl
         });
       }
 
-      return testRunner.run(request);
+      return testRunner.run({ ...request, runId, cancellationSignal });
+      });
+    },
+    runRecording: async (request) => {
+      const runId = request.runId ?? `agent-run-recording-${Date.now()}`;
+      return withActiveRun(runId, (cancellationSignal) =>
+        recordingRunner.run({ ...request, runId, cancellationSignal }),
+      );
+    },
+    runWorkflow: async (request) => {
+      const runId = request.runId ?? `agent-run-workflow-${Date.now()}`;
+      return withActiveRun(runId, (cancellationSignal) =>
+        studioRuntime.runWorkflow({ ...request, runId, cancellationSignal }),
+      );
+    },
+    cancelRun: (runId) => {
+      const controller = activeRuns.get(runId);
+      if (!controller || controller.signal.aborted) {
+        return false;
+      }
+      controller.abort();
+      return true;
     },
     close: () => browserRuntime.close(),
   };

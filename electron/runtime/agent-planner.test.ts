@@ -155,4 +155,40 @@ describe('OpenAICompatibleAgentPlanner', () => {
       }),
     ).rejects.toThrow('Planner 返回的 steps 不能为空');
   });
+
+  it('aborts the model request when the enclosing run is cancelled', async () => {
+    let receivedSignal: AbortSignal | undefined;
+    const fetchImpl = vi.fn<typeof fetch>((_input, init) => {
+      receivedSignal = init?.signal ?? undefined;
+      return new Promise<Response>((_resolve, reject) => {
+        receivedSignal?.addEventListener(
+          'abort',
+          () => reject(Object.assign(new Error('The operation was aborted.'), { name: 'AbortError' })),
+          { once: true },
+        );
+      });
+    });
+    const planner = new OpenAICompatibleAgentPlanner(fetchImpl);
+    const cancellation = new AbortController();
+    const pending = planner.createPlan({
+      config: {
+        modelBaseUrl: 'https://models.example.test/v1',
+        modelApiKey: 'planner-secret',
+        modelName: 'planner-large',
+        modelFamily: 'openai',
+        temperature: '0.2',
+      },
+      cancellationSignal: cancellation.signal,
+      mode: 'ai',
+      prompt: '执行登录测试',
+      targetEnvironment: 'Staging',
+      targetUrl: 'https://app.example.test',
+    });
+
+    expect(receivedSignal?.aborted).toBe(false);
+    cancellation.abort();
+
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    expect(receivedSignal?.aborted).toBe(true);
+  });
 });

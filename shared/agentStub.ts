@@ -30,6 +30,8 @@ export interface AgentStubRequest {
   runtimeDescription: string;
   targetEnvironment: string;
   projectId?: string;
+  groupId?: string;
+  environmentId?: string;
   testCaseId?: string;
   documentId?: string;
   targetUrl?: string;
@@ -145,6 +147,8 @@ export interface PlannedAgentRunRequest {
   targetEnvironment: string;
   targetUrl?: string;
   projectId?: string;
+  groupId?: string;
+  environmentId?: string;
   testCaseId?: string;
   documentId?: string;
   plannedPlan: AgentPlanDraft;
@@ -204,6 +208,8 @@ export function createStubAgentRun(request: AgentStubRequest): AgentRunResult {
     prompt: request.prompt,
     page: 'nl',
     ...(request.projectId ? { projectId: request.projectId } : {}),
+    ...(request.groupId ? { groupId: request.groupId } : {}),
+    ...(request.environmentId ? { environmentId: request.environmentId } : {}),
     ...(request.testCaseId ? { testCaseId: request.testCaseId } : {}),
     ...(request.documentId ? { documentId: request.documentId } : {}),
     ...(request.targetUrl ? { targetUrl: request.targetUrl } : {}),
@@ -455,6 +461,8 @@ export function createPlannedAgentRun(request: PlannedAgentRunRequest): AgentRun
     page: 'nl',
     ...(request.targetUrl ? { targetUrl: request.targetUrl } : {}),
     ...(request.projectId ? { projectId: request.projectId } : {}),
+    ...(request.groupId ? { groupId: request.groupId } : {}),
+    ...(request.environmentId ? { environmentId: request.environmentId } : {}),
     ...(request.testCaseId ? { testCaseId: request.testCaseId } : {}),
     ...(request.documentId ? { documentId: request.documentId } : {}),
   });

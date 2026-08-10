@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 
-import type { RunArtifact } from '../../shared/studio.js';
+import type { ProjectReportLocale, ProjectRunReport, RunArtifact } from '../../shared/studio.js';
 
 export class ArtifactManager {
   private readonly artifactsDir: string;
@@ -113,6 +113,90 @@ export class ArtifactManager {
       },
     };
   }
+
+  async createProjectRunReport(report: ProjectRunReport, locale: ProjectReportLocale): Promise<string> {
+    await this.ensureReady();
+    const artifactPath = path.join(this.artifactsDir, `project-report-${Date.now()}-${randomUUID()}.html`);
+    await fs.writeFile(artifactPath, renderProjectRunReportHtml(report, locale), 'utf8');
+    return artifactPath;
+  }
+
+  async removeArtifact(artifactPath: string): Promise<void> {
+    if (!this.isManagedArtifactPath(artifactPath)) {
+      throw new Error('只能清理应用生成的证据文件。');
+    }
+    await fs.rm(artifactPath, { force: true });
+  }
+}
+
+export function renderProjectRunReportHtml(report: ProjectRunReport, locale: ProjectReportLocale): string {
+  const labels = projectReportLabels(locale);
+  const stats = (Object.entries(report.runStats) as Array<[keyof ProjectRunReport['runStats'], number]>)
+    .map(([status, count]) => `<li><span>${escapeXml(labels.status[status])}</span><strong>${count}</strong></li>`)
+    .join('');
+  const risks = report.coverageRisk.risks.length
+    ? report.coverageRisk.risks
+        .map((risk) => `<tr><td>${escapeXml(risk.testCaseName)}</td><td>${escapeXml(risk.groupName)}</td><td>${escapeXml(risk.environmentName)}</td><td>${escapeXml(labels.risk[risk.status])}</td></tr>`)
+        .join('')
+    : `<tr><td colspan="4" class="muted">${escapeXml(labels.noRisks)}</td></tr>`;
+  const triageRows = (['case', 'recording'] as const)
+    .map((target) => {
+      const statuses = report.prdCoverage.targets[target];
+      return `<tr><td>${escapeXml(labels.target[target])}</td><td>${statuses.pending}</td><td>${statuses.deferred}</td><td>${statuses.ignored}</td><td>${statuses.resolved}</td></tr>`;
+    })
+    .join('');
+  const problemRuns = report.problemRuns.length
+    ? report.problemRuns
+        .map((run) => `<article class="problem"><div><strong>${escapeXml(run.testCaseName)}</strong><span>${escapeXml(run.environmentName)} · ${escapeXml(labels.status[run.status])}</span></div><p>${escapeXml(run.failureReason || run.summary)}</p><small>${escapeXml(run.startedAt || labels.unknownTime)} · ${escapeXml(run.duration)}${run.artifactLabels.length ? ` · ${escapeXml(run.artifactLabels.join(' / '))}` : ''}</small></article>`)
+        .join('')
+    : `<p class="muted">${escapeXml(labels.noProblemRuns)}</p>`;
+
+  return `<!doctype html>
+<html lang="${locale}">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>${escapeXml(labels.title)} · ${escapeXml(report.projectName)}</title>
+  <style>
+    :root { color-scheme: light; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #172033; background: #f6f8fb; }
+    body { margin: 0; padding: 32px; background: #f6f8fb; }
+    main { max-width: 960px; margin: 0 auto; background: #fff; border: 1px solid #dfe5ee; padding: 36px; }
+    h1 { margin: 0; font-size: 28px; } h2 { margin: 32px 0 12px; font-size: 16px; } p { line-height: 1.6; }
+    .meta, .muted, small { color: #667085; } .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; padding: 0; list-style: none; }
+    .grid li { border: 1px solid #dfe5ee; padding: 14px; display: flex; justify-content: space-between; gap: 12px; } strong { color: #172033; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; } th, td { padding: 10px; border-bottom: 1px solid #e8edf4; text-align: left; vertical-align: top; }
+    th { color: #667085; font-weight: 600; } .problem { border: 1px solid #dfe5ee; padding: 14px; margin-bottom: 10px; } .problem div { display: flex; justify-content: space-between; gap: 12px; } .problem div span { color: #667085; font-size: 13px; }
+  </style>
+</head>
+<body><main>
+  <h1>${escapeXml(labels.title)}</h1>
+  <p class="meta">${escapeXml(report.projectName)} · ${escapeXml(labels.generatedAt)} ${escapeXml(report.generatedAt)}</p>
+  <h2>${escapeXml(labels.runSummary)}</h2><ul class="grid">${stats}</ul>
+  <h2>${escapeXml(labels.coverageRisk)}</h2><p class="meta">${escapeXml(labels.verified)} ${report.coverageRisk.verified} / ${report.coverageRisk.total}</p>
+  <table><thead><tr><th>${escapeXml(labels.testCase)}</th><th>${escapeXml(labels.group)}</th><th>${escapeXml(labels.environment)}</th><th>${escapeXml(labels.riskStatus)}</th></tr></thead><tbody>${risks}</tbody></table>
+  <h2>${escapeXml(labels.prdCoverage)}</h2><p class="meta">${escapeXml(labels.prdPaths)} ${report.prdCoverage.paths}</p>
+  <table><thead><tr><th>${escapeXml(labels.targetLabel)}</th><th>${escapeXml(labels.triage.pending)}</th><th>${escapeXml(labels.triage.deferred)}</th><th>${escapeXml(labels.triage.ignored)}</th><th>${escapeXml(labels.triage.resolved)}</th></tr></thead><tbody>${triageRows}</tbody></table>
+  <h2>${escapeXml(labels.problemRuns)}</h2>${problemRuns}
+</main></body></html>`;
+}
+
+function projectReportLabels(locale: ProjectReportLocale) {
+  if (locale === 'en-US') {
+    return {
+      title: 'TestBuddy Project Report', generatedAt: 'Generated at', runSummary: 'Run summary', coverageRisk: 'Coverage risk', verified: 'Verified', testCase: 'Test case', group: 'Group', environment: 'Environment', riskStatus: 'Risk', noRisks: 'No coverage risks.', prdCoverage: 'PRD coverage governance', prdPaths: 'Requirement paths', targetLabel: 'Target', problemRuns: 'Recent failed or pending runs', noProblemRuns: 'No failed or pending runs.', unknownTime: 'Unknown time',
+      status: { running: 'Running', passed: 'Passed', failed: 'Failed', neutral: 'Pending' },
+      risk: { neverExecuted: 'Never executed', failed: 'Last run failed', neutral: 'Last run pending' },
+      target: { case: 'Test case', recording: 'Recording' },
+      triage: { pending: 'Pending', deferred: 'Deferred', ignored: 'Ignored', resolved: 'Resolved' },
+    };
+  }
+  return {
+    title: 'TestBuddy 项目报告', generatedAt: '生成时间', runSummary: '运行汇总', coverageRisk: '覆盖风险', verified: '已验证', testCase: '用例', group: '分组', environment: '环境', riskStatus: '风险', noRisks: '当前没有覆盖风险。', prdCoverage: 'PRD 覆盖治理', prdPaths: '需求路径', targetLabel: '目标', problemRuns: '最近失败或等待运行', noProblemRuns: '当前没有失败或等待运行。', unknownTime: '未知时间',
+    status: { running: '运行中', passed: '通过', failed: '失败', neutral: '等待' },
+    risk: { neverExecuted: '从未执行', failed: '最近失败', neutral: '最近等待' },
+    target: { case: '用例', recording: '录制' },
+    triage: { pending: '待处理', deferred: '延后', ignored: '忽略', resolved: '已解决' },
+  };
 }
 
 function getSafeExtension(sourceName: string): string {

@@ -119,4 +119,38 @@ describe('OpenAICompatibleAgentVerifier', () => {
       }),
     ).rejects.toThrow('Verifier 返回的 summary/evidence 不能为空');
   });
+
+  it('aborts the model request when the enclosing run is cancelled', async () => {
+    let receivedSignal: AbortSignal | undefined;
+    const fetchImpl = vi.fn<typeof fetch>((_input, init) => {
+      receivedSignal = init?.signal ?? undefined;
+      return new Promise<Response>((_resolve, reject) => {
+        receivedSignal?.addEventListener(
+          'abort',
+          () => reject(Object.assign(new Error('The operation was aborted.'), { name: 'AbortError' })),
+          { once: true },
+        );
+      });
+    });
+    const verifier = new OpenAICompatibleAgentVerifier(fetchImpl);
+    const cancellation = new AbortController();
+    const pending = verifier.verify({
+      config: {
+        modelBaseUrl: 'https://verifier.example.test/v1',
+        modelApiKey: 'verifier-secret',
+        modelName: 'verifier-large',
+        modelFamily: 'openai',
+        temperature: '0',
+      },
+      cancellationSignal: cancellation.signal,
+      assertion: '验证图表趋势',
+      prompt: '验证图表趋势',
+    });
+
+    expect(receivedSignal?.aborted).toBe(false);
+    cancellation.abort();
+
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    expect(receivedSignal?.aborted).toBe(true);
+  });
 });

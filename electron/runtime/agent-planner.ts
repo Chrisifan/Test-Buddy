@@ -8,6 +8,7 @@ import type {
   AgentUsageBucket,
 } from '../../shared/agent.js';
 import type { CommandMode } from '../../shared/studio.js';
+import { createLinkedAbortController } from './run-cancellation.js';
 
 export interface AgentPlannerModelConfig {
   modelBaseUrl: string;
@@ -19,6 +20,7 @@ export interface AgentPlannerModelConfig {
 
 export interface AgentPlannerRequest {
   config: AgentPlannerModelConfig;
+  cancellationSignal?: AbortSignal;
   mode: CommandMode;
   prompt: string;
   targetEnvironment: string;
@@ -178,7 +180,8 @@ export class OpenAICompatibleAgentPlanner implements AgentPlanner {
 
   async createPlan(request: AgentPlannerRequest): Promise<AgentPlannerResult> {
     const startedAt = Date.now();
-    const controller = new AbortController();
+    const linkedAbort = createLinkedAbortController(request.cancellationSignal);
+    const { controller } = linkedAbort;
     const timeout = setTimeout(() => controller.abort(), 30_000);
     let response: Response;
 
@@ -216,6 +219,7 @@ export class OpenAICompatibleAgentPlanner implements AgentPlanner {
       });
     } finally {
       clearTimeout(timeout);
+      linkedAbort.dispose();
     }
 
     if (!response.ok) {

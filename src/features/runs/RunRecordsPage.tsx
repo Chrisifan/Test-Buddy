@@ -292,6 +292,8 @@ export function RunRecordsPage({
   selectedRunId,
   onSelectRun,
   onCreateReporterFixDraft,
+  onExportProjectReport,
+  onCancelRun,
   onRerunTestCase,
   isRunning = false,
   onAttachManualEvidence,
@@ -304,6 +306,8 @@ export function RunRecordsPage({
   selectedRunId: string;
   onSelectRun: (runId: string) => void;
   onCreateReporterFixDraft?: (run: RunDetail, reporter: AgentReporterSummary) => void;
+  onExportProjectReport?: () => Promise<void>;
+  onCancelRun?: (runId: string) => Promise<void>;
   onRerunTestCase?: (run: RunDetail) => void;
   isRunning?: boolean;
   onAttachManualEvidence?: (runId: string, stepId: string) => Promise<RunArtifact | undefined>;
@@ -330,6 +334,8 @@ export function RunRecordsPage({
   const [manualEvidenceAttachments, setManualEvidenceAttachments] = useState<Record<string, RunArtifact[]>>({});
   const [attachingManualEvidence, setAttachingManualEvidence] = useState<Record<string, boolean>>({});
   const [capturingManualEvidence, setCapturingManualEvidence] = useState<Record<string, boolean>>({});
+  const [isExportingProjectReport, setIsExportingProjectReport] = useState(false);
+  const [cancellingRunId, setCancellingRunId] = useState<string>('');
   const projectRuns = project
     ? recentRuns.filter((run) => !run.projectId || run.projectId === project.id)
     : recentRuns;
@@ -357,6 +363,7 @@ export function RunRecordsPage({
   const selectedRun =
     runDetails.find((run) => run.id === selectedRunId) ??
     runDetails.find((run) => run.id === visibleRuns[0]?.id);
+  const activeRun = projectRuns.find((run) => run.status === 'running');
   const selectedPrdDocumentName = selectedRun ? getRunPrdDocumentName(project, selectedRun) : undefined;
   const rerunTestCase = selectedRun
     ? project?.testCases.find((testCase) => testCase.id === selectedRun.testCaseId)
@@ -484,8 +491,42 @@ export function RunRecordsPage({
     <PageShell>
       <PageHeader
         action={
-          selectedRun && onRerunTestCase && isSelectedRunRerunnable ? (
-            <button
+          onExportProjectReport || (activeRun && onCancelRun) || (selectedRun && onRerunTestCase && isSelectedRunRerunnable) ? (
+            <div className="flex items-center gap-2">
+              {onExportProjectReport ? (
+                <button
+                  aria-label={t('runs.exportProjectReport')}
+                  className="inline-flex h-8 items-center gap-1.5 rounded-[4px] border border-border px-2.5 text-xs font-medium text-foreground transition-colors hover:bg-accent disabled:pointer-events-none disabled:opacity-45"
+                  disabled={isExportingProjectReport}
+                  onClick={() => {
+                    setIsExportingProjectReport(true);
+                    void onExportProjectReport().finally(() => setIsExportingProjectReport(false));
+                  }}
+                  title={t('runs.exportProjectReport')}
+                  type="button"
+                >
+                  <Download className="h-3.5 w-3.5" />
+                  {isExportingProjectReport ? t('runs.exportProjectReportWorking') : t('runs.exportProjectReport')}
+                </button>
+              ) : null}
+              {activeRun && onCancelRun ? (
+                <button
+                  aria-label={t('runs.cancelRun')}
+                  className="inline-flex h-8 items-center gap-1.5 rounded-[4px] border border-destructive/35 px-2.5 text-xs font-medium text-destructive transition-colors hover:bg-destructive/10 disabled:pointer-events-none disabled:opacity-45"
+                  disabled={Boolean(cancellingRunId)}
+                  onClick={() => {
+                    setCancellingRunId(activeRun.id);
+                    void onCancelRun(activeRun.id).finally(() => setCancellingRunId(''));
+                  }}
+                  title={t('runs.cancelRun')}
+                  type="button"
+                >
+                  <X className="h-3.5 w-3.5" />
+                  {cancellingRunId === activeRun.id ? t('runs.cancelRunWorking') : t('runs.cancelRun')}
+                </button>
+              ) : null}
+              {selectedRun && onRerunTestCase && isSelectedRunRerunnable ? (
+                <button
               aria-label={t('runs.rerun')}
               className="inline-flex h-8 items-center gap-1.5 rounded-[4px] border border-border px-2.5 text-xs font-medium text-foreground transition-colors hover:bg-accent disabled:pointer-events-none disabled:opacity-45"
               disabled={isRunning || selectedRun.status === 'running'}
@@ -496,6 +537,8 @@ export function RunRecordsPage({
               <RefreshCcw className="h-3.5 w-3.5" />
               {t('runs.rerun')}
             </button>
+              ) : null}
+            </div>
           ) : undefined
         }
         meta={[

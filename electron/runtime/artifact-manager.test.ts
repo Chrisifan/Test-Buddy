@@ -4,7 +4,7 @@ import path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { ArtifactManager } from './artifact-manager.js';
+import { ArtifactManager, renderProjectRunReportHtml } from './artifact-manager.js';
 
 describe('ArtifactManager', () => {
   it('persists reporter markdown and html reports under the artifacts directory', async () => {
@@ -47,6 +47,31 @@ describe('ArtifactManager', () => {
     expect(artifacts.isManagedArtifactPath(path.join(rootDir, 'studio-data', 'state.json'))).toBe(false);
     expect(artifacts.isManagedArtifactPath(path.join(rootDir, 'studio-data', 'artifacts-copy', 'report.html'))).toBe(false);
     expect(artifacts.isManagedArtifactPath('/tmp/unrelated-report.html')).toBe(false);
+  });
+
+  it('renders an escaped project management report without local artifact paths', async () => {
+    const html = renderProjectRunReportHtml({
+      generatedAt: '2026-08-04T00:00:00.000Z',
+      projectName: '订单 <回归>',
+      runStats: { running: 0, passed: 1, failed: 1, neutral: 0 },
+      coverageRisk: { total: 1, verified: 0, risks: [{ testCaseName: '支付 <确认>', groupName: '交易', environmentName: 'Staging', status: 'failed' }] },
+      prdCoverage: {
+        paths: 1,
+        targets: {
+          case: { pending: 0, deferred: 0, ignored: 0, resolved: 1 },
+          recording: { pending: 1, deferred: 0, ignored: 0, resolved: 0 },
+        },
+      },
+      problemRuns: [{
+        id: 'run-1', testCaseName: '支付 <确认>', environmentName: 'Staging', status: 'failed', startedAt: '2026-08-04T00:00:00.000Z', duration: '00:00:01', summary: '失败 <详情>', artifactLabels: ['报告 <HTML>'],
+      }],
+    }, 'zh-CN');
+
+    expect(html).toContain('订单 &lt;回归&gt;');
+    expect(html).toContain('支付 &lt;确认&gt;');
+    expect(html).toContain('报告 &lt;HTML&gt;');
+    expect(html).not.toContain('artifact.path');
+    expect(html).not.toContain('modelApiKey');
   });
 
   it('allocates trace archives only inside managed artifact storage', async () => {

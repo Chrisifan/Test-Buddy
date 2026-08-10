@@ -15,6 +15,8 @@ contextBridge.exposeInMainWorld('desktopApi', {
   captureBrowserSnapshot: () => ipcRenderer.invoke('runtime:capture-browser-snapshot'),
   runTestCase: (request: unknown) => ipcRenderer.invoke('runtime:run-test-case', request),
   runRecording: (request: unknown) => ipcRenderer.invoke('runtime:run-recording', request),
+  cancelRun: (runId: string) => ipcRenderer.invoke('runtime:cancel-run', runId),
+  exportProjectReport: (request: unknown) => ipcRenderer.invoke('runtime:export-project-report', request),
   loadRunDetail: (runId: string) => ipcRenderer.invoke('runtime:load-run-detail', runId),
   openArtifact: (artifactPath: string) => ipcRenderer.invoke('runtime:open-artifact', artifactPath),
   exportArtifact: (artifactPath: string) => ipcRenderer.invoke('runtime:export-artifact', artifactPath),

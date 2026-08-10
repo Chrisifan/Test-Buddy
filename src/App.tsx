@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import {
   ClipboardList,
   FileText,
@@ -21,6 +21,7 @@ import {
   createEmptyProject,
   createEmptyRecordingAsset,
   createEmptyTestCase,
+  createTestCaseFromAgentRun,
   createReporterFixDraft,
   createInitialStudioState,
   createPrdDocumentAsset,
@@ -77,16 +78,9 @@ import { NavButton } from './components/NavButton.js';
 import { StatusPill } from './components/StatusPill.js';
 import { Button } from './components/ui/button.js';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from './components/ui/dialog.js';
-import { TestCaseManagementPage } from './features/cases/TestCaseManagementPage.js';
-import { DocumentAnalysisPage } from './features/documents/DocumentAnalysisPage.js';
 import { HomePage } from './features/home/HomePage.js';
-import { NaturalLanguagePage } from './features/natural-language/NaturalLanguagePage.js';
-import { ProjectManagementPage } from './features/project/ProjectManagementPage.js';
-import { RecordingPage } from './features/recording/RecordingPage.js';
-import { RunRecordsPage } from './features/runs/RunRecordsPage.js';
-import { SettingsModal, type SettingsSectionId } from './features/settings/SettingsModal.js';
+import type { SettingsSectionId } from './features/settings/SettingsModal.js';
 import { StartupPage } from './features/startup/StartupPage.js';
-import { WorkflowPage } from './features/workflow/WorkflowPage.js';
 import { createTranslator, I18nProvider, resolveLocale } from './i18n';
 import { getRuntimeInfo, loadStudioState, saveStudioState } from './lib/persistence';
 import { formatRunDuration } from './lib/duration.js';
@@ -94,7 +88,9 @@ import {
   attachManualEvidence,
   analyzePrdDocument,
   captureBrowserSnapshot,
+  cancelRun,
   endSession,
+  exportProjectReport,
   navigateBrowserSession,
   onRunEvent,
   onRecordingEvent,
@@ -112,6 +108,30 @@ const initialState = createInitialStudioState();
 const PAGE_EXIT_DURATION_MS = 120;
 const SAVE_DEBOUNCE_MS = 350;
 const initialTranslator = createTranslator(resolveLocale(initialState.appearance.localeMode));
+const ProjectManagementPage = lazy(() =>
+  import('./features/project/ProjectManagementPage.js').then(({ ProjectManagementPage: Page }) => ({ default: Page })),
+);
+const DocumentAnalysisPage = lazy(() =>
+  import('./features/documents/DocumentAnalysisPage.js').then(({ DocumentAnalysisPage: Page }) => ({ default: Page })),
+);
+const TestCaseManagementPage = lazy(() =>
+  import('./features/cases/TestCaseManagementPage.js').then(({ TestCaseManagementPage: Page }) => ({ default: Page })),
+);
+const RunRecordsPage = lazy(() =>
+  import('./features/runs/RunRecordsPage.js').then(({ RunRecordsPage: Page }) => ({ default: Page })),
+);
+const NaturalLanguagePage = lazy(() =>
+  import('./features/natural-language/NaturalLanguagePage.js').then(({ NaturalLanguagePage: Page }) => ({ default: Page })),
+);
+const WorkflowPage = lazy(() =>
+  import('./features/workflow/WorkflowPage.js').then(({ WorkflowPage: Page }) => ({ default: Page })),
+);
+const RecordingPage = lazy(() =>
+  import('./features/recording/RecordingPage.js').then(({ RecordingPage: Page }) => ({ default: Page })),
+);
+const SettingsModal = lazy(() =>
+  import('./features/settings/SettingsModal.js').then(({ SettingsModal: Modal }) => ({ default: Modal })),
+);
 
 type SaveMode = 'debounced' | 'immediate';
 type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
@@ -119,6 +139,10 @@ type PendingDeletion =
   | { kind: 'project'; id: string; description: string }
   | { kind: 'group'; id: string; description: string }
   | { kind: 'recording'; id: string; description: string };
+
+function RouteLoadingPlaceholder() {
+  return <div aria-busy="true" className="h-full min-h-0 animate-pulse rounded-[var(--panel-radius)] bg-muted/30" />;
+}
 
 function createTimestampLabel(): string {
   const now = new Date();
@@ -222,6 +246,11 @@ export function App() {
   const workflows = selectedProject?.testCases.map(testCaseToWorkflow) ?? [];
   const selectedWorkflow = selectedTestCase ? testCaseToWorkflow(selectedTestCase) : workflows[0];
   const recentChatEntries = chatEntries.slice(-6);
+  const latestNaturalLanguageAgentRun = runDetails.find(
+    (detail) =>
+      detail.agentRun?.intent.source === 'naturalLanguage' &&
+      detail.agentRun.intent.projectId === selectedProject?.id,
+  )?.agentRun;
   const midsceneReady = isMidsceneConfigured(midsceneConfig);
   const effectiveTheme =
     appearance.themeMode === 'system'
@@ -1936,8 +1965,11 @@ export function App() {
   }
 
   function appendAgentRunResult(agentRun: AgentRunResult) {
-    const environmentId = selectedEnvironment?.id ?? targetEnvironment;
-    const environmentName = selectedEnvironment?.name ?? targetEnvironment;
+    const environment = selectedProject?.environments.find(
+      (candidate) => candidate.id === agentRun.intent.environmentId,
+    );
+    const environmentId = agentRun.intent.environmentId ?? selectedEnvironment?.id ?? targetEnvironment;
+    const environmentName = environment?.name ?? selectedEnvironment?.name ?? targetEnvironment;
     const projectId = agentRun.intent.projectId ?? selectedProject?.id ?? '';
     const testCaseId = agentRun.intent.testCaseId ?? selectedTestCase?.id ?? '';
     const documentId = agentRun.intent.documentId;
@@ -2026,6 +2058,8 @@ export function App() {
         ...(selectedProject ? { project: selectedProject } : {}),
         ...(selectedEnvironment ? { environment: selectedEnvironment } : {}),
         projectId: selectedProject?.id,
+        ...(selectedGroup ? { groupId: selectedGroup.id } : {}),
+        ...(selectedEnvironment ? { environmentId: selectedEnvironment.id } : {}),
         testCaseId: selectedTestCase?.id,
       });
 
@@ -2080,6 +2114,45 @@ export function App() {
         },
       ],
     }));
+  }
+
+  function handleSaveLatestRunAsTestCase() {
+    if (
+      !selectedProject ||
+      !selectedGroup ||
+      !selectedEnvironment ||
+      !latestNaturalLanguageAgentRun ||
+      latestNaturalLanguageAgentRun.status !== 'passed' ||
+      latestNaturalLanguageAgentRun.intent.projectId !== selectedProject.id
+    ) {
+      return;
+    }
+
+    const environment =
+      selectedProject.environments.find(
+        (candidate) => candidate.id === latestNaturalLanguageAgentRun.intent.environmentId,
+      ) ?? selectedEnvironment;
+    const group =
+      selectedProject.groups.find((candidate) => candidate.id === latestNaturalLanguageAgentRun.intent.groupId) ??
+      selectedGroup;
+    const testCase = createTestCaseFromAgentRun({
+      agentRun: latestNaturalLanguageAgentRun,
+      groupId: group.id,
+      environmentId: environment.id,
+      url: environment.url || selectedProject.defaultUrl,
+      seed: selectedProject.testCases.length + 1,
+    });
+    if (!testCase) {
+      return;
+    }
+
+    updateSelectedProject((project) => ({
+      ...project,
+      testCases: [testCase, ...project.testCases],
+    }));
+    setSelectedGroupId(testCase.groupId);
+    setSelectedTestCaseId(testCase.id);
+    switchPage('cases');
   }
 
   async function handleRunWorkflow() {
@@ -2232,6 +2305,27 @@ export function App() {
     setSelectedTestCaseId(testCase.id);
     setSelectedGroupId(testCase.groupId);
     void handleRunTestCase(testCase, environment);
+  }
+
+  async function handleExportProjectReport() {
+    if (!selectedProject) {
+      return;
+    }
+    try {
+      const exported = await exportProjectReport({ projectId: selectedProject.id, locale: effectiveLocale });
+      appendSystemMessage(t(exported ? 'app.runtime.projectReportExported' : 'app.runtime.projectReportExportCancelled'));
+    } catch {
+      appendSystemMessage(t('app.runtime.projectReportExportFailed'));
+    }
+  }
+
+  async function handleCancelRun(activeRunId: string) {
+    try {
+      const cancelled = await cancelRun(activeRunId);
+      appendSystemMessage(t(cancelled ? 'app.runtime.runCancelled' : 'app.runtime.runCancelUnavailable'));
+    } catch {
+      appendSystemMessage(t('app.runtime.runCancelFailed'));
+    }
   }
 
   function handleCreateReporterFixDraft(run: RunDetail, reporter: AgentReporterSummary) {
@@ -2387,6 +2481,7 @@ export function App() {
             isPageExiting ? 'is-page-exiting' : ''
           }`}
         >
+          <Suspense fallback={<RouteLoadingPlaceholder />}>
           {activePage === 'home' ? (
             <HomePage
               browserSession={browserSession}
@@ -2465,8 +2560,10 @@ export function App() {
               isRunning={isRunning}
               onAttachManualEvidence={runtimeInfo.platform === 'desktop' ? handleAttachManualEvidence : undefined}
               onCaptureManualEvidence={handleCaptureManualEvidence}
+              onCancelRun={runtimeInfo.platform === 'desktop' ? handleCancelRun : undefined}
               onConfirmManualStep={handleConfirmManualStep}
               onCreateReporterFixDraft={handleCreateReporterFixDraft}
+              onExportProjectReport={runtimeInfo.platform === 'desktop' ? handleExportProjectReport : undefined}
               onRerunTestCase={handleRerunTestCase}
               onSelectRun={setSelectedRunId}
               project={selectedProject}
@@ -2490,6 +2587,8 @@ export function App() {
               onChangeDeepLocate={setDeepLocate}
               onChangeDeepThink={setDeepThink}
               onChangeTargetEnvironment={setTargetEnvironment}
+              latestAgentRun={latestNaturalLanguageAgentRun}
+              onSaveLatestRunAsTestCase={handleSaveLatestRunAsTestCase}
               onSavePromptAsStep={handleSavePromptAsStep}
               onSendMessage={handleSendMessage}
               onToggleSession={handleToggleSession}
@@ -2550,7 +2649,7 @@ export function App() {
               recording={selectedRecording}
             />
           ) : null}
-
+          </Suspense>
         </main>
         <footer className="app-runtimebar flex items-center justify-between gap-4 px-6 font-mono text-[11px] max-md:hidden">
           <div className="flex min-w-0 items-center gap-3">
@@ -2571,25 +2670,27 @@ export function App() {
         </footer>
       </div>
 
-      <SettingsModal
-        agentModelConfig={agentModelConfig}
-        appearance={appearance}
-        effectiveTheme={effectiveTheme}
-        initialSection={settingsInitialSection}
-        locale={effectiveLocale}
-        midsceneConfig={midsceneConfig}
-        midsceneReady={midsceneReady}
-        onClose={closeSettings}
-        onSave={handleSaveSettings}
-        onTestMidsceneConnection={testMidsceneConnection}
-        onUpdateAgentModelConfig={updateAgentModelConfig}
-        onUpdateAppearance={updateAppearance}
-        onUpdateMidsceneConfig={updateMidsceneConfig}
-        onUpdateRuntimeProfile={updateRuntimeProfile}
-        open={isSettingsOpen}
-        requiresMidsceneBeforeSave={pendingPage ? isGatedFeaturePage(pendingPage) : false}
-        runtimeProfile={runtimeProfile}
-      />
+      <Suspense fallback={null}>
+        <SettingsModal
+          agentModelConfig={agentModelConfig}
+          appearance={appearance}
+          effectiveTheme={effectiveTheme}
+          initialSection={settingsInitialSection}
+          locale={effectiveLocale}
+          midsceneConfig={midsceneConfig}
+          midsceneReady={midsceneReady}
+          onClose={closeSettings}
+          onSave={handleSaveSettings}
+          onTestMidsceneConnection={testMidsceneConnection}
+          onUpdateAgentModelConfig={updateAgentModelConfig}
+          onUpdateAppearance={updateAppearance}
+          onUpdateMidsceneConfig={updateMidsceneConfig}
+          onUpdateRuntimeProfile={updateRuntimeProfile}
+          open={isSettingsOpen}
+          requiresMidsceneBeforeSave={pendingPage ? isGatedFeaturePage(pendingPage) : false}
+          runtimeProfile={runtimeProfile}
+        />
+      </Suspense>
 
       <Dialog onOpenChange={(open) => !open && setPendingDeletion(null)} open={Boolean(pendingDeletion)}>
         <DialogContent aria-describedby={undefined} className="max-w-md" showCloseButton>

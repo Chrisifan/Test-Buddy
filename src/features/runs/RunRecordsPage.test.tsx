@@ -254,6 +254,102 @@ describe('RunRecordsPage', () => {
     expect(onRerunTestCase).toHaveBeenCalledWith(detail);
   });
 
+  it('shows cancellation only for the active desktop run and prevents repeat submissions', async () => {
+    const state = createDemoStudioState();
+    const project = state.projects[0]!;
+    const activeRun = {
+      id: 'run-active',
+      name: '正在执行的用例',
+      status: 'running' as const,
+      duration: '00:00:03',
+      summary: '正在等待页面数据。',
+      projectId: project.id,
+      testCaseId: project.testCases[0]!.id,
+      environmentId: project.environments[0]!.id,
+    };
+    let resolveCancellation: () => void = () => undefined;
+    const cancellation = new Promise<void>((resolve) => {
+      resolveCancellation = resolve;
+    });
+    const onCancelRun = vi.fn(() => cancellation);
+
+    const { rerender } = render(
+      <RunRecordsPage
+        onCancelRun={onCancelRun}
+        onSelectRun={vi.fn()}
+        project={project}
+        recentRuns={[activeRun]}
+        runDetails={[]}
+        selectedRunId={activeRun.id}
+      />,
+    );
+
+    const cancelButton = screen.getByRole('button', { name: '取消运行' });
+    fireEvent.click(cancelButton);
+
+    expect(onCancelRun).toHaveBeenCalledWith(activeRun.id);
+    expect(cancelButton).toBeDisabled();
+    expect(cancelButton).toHaveTextContent('正在取消');
+
+    resolveCancellation();
+    await waitFor(() => expect(screen.getByRole('button', { name: '取消运行' })).toBeEnabled());
+
+    rerender(
+      <RunRecordsPage
+        onSelectRun={vi.fn()}
+        project={project}
+        recentRuns={[activeRun]}
+        runDetails={[]}
+        selectedRunId={activeRun.id}
+      />,
+    );
+
+    expect(screen.queryByRole('button', { name: '取消运行' })).not.toBeInTheDocument();
+  });
+
+  it('shows project report export only when the desktop command is available', async () => {
+    const state = createDemoStudioState();
+    const project = state.projects[0]!;
+    let resolveExport: () => void = () => undefined;
+    const exportPromise = new Promise<void>((resolve) => {
+      resolveExport = resolve;
+    });
+    const onExportProjectReport = vi.fn(() => exportPromise);
+
+    const { rerender } = render(
+      <RunRecordsPage
+        onExportProjectReport={onExportProjectReport}
+        onSelectRun={vi.fn()}
+        project={project}
+        recentRuns={[]}
+        runDetails={[]}
+        selectedRunId=""
+      />,
+    );
+
+    const exportButton = screen.getByRole('button', { name: '导出项目报告' });
+    fireEvent.click(exportButton);
+
+    expect(onExportProjectReport).toHaveBeenCalledOnce();
+    expect(exportButton).toBeDisabled();
+    expect(exportButton).toHaveTextContent('正在导出');
+
+    resolveExport();
+    await waitFor(() => expect(screen.getByRole('button', { name: '导出项目报告' })).toBeEnabled());
+
+    rerender(
+      <RunRecordsPage
+        onSelectRun={vi.fn()}
+        project={project}
+        recentRuns={[]}
+        runDetails={[]}
+        selectedRunId=""
+      />,
+    );
+
+    expect(screen.queryByRole('button', { name: '导出项目报告' })).not.toBeInTheDocument();
+  });
+
   it('exposes persisted Reporter fixes as an explicit fix-draft action', () => {
     const state = createDemoStudioState();
     const project = state.projects[0]!;

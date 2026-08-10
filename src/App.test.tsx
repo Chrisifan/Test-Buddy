@@ -1,6 +1,7 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { createEmptyProject, createInitialStudioState } from '../shared/studio.js';
 import { App } from './App.js';
 
 describe('App shell', () => {
@@ -62,5 +63,43 @@ describe('App shell', () => {
 
     expect(await screen.findByLabelText('空态首页')).toBeInTheDocument();
     nativeConfirm.mockRestore();
+  });
+
+  it('keeps the natural-language run bound to the group and environment selected at send time', async () => {
+    const project = createEmptyProject(1);
+    const state = createInitialStudioState();
+    const environment = project.environments[0]!;
+    state.projects = [project];
+    state.selectedProjectId = project.id;
+    state.selectedGroupId = project.groups[0]!.id;
+    state.selectedTestCaseId = '';
+    state.selectedRecordingId = '';
+    state.startupGuide.completed = true;
+    state.midsceneConfig = {
+      ...state.midsceneConfig,
+      modelBaseUrl: 'https://models.example.test/v1',
+      modelApiKey: 'test-key',
+      modelName: 'ui-agent',
+      modelFamily: 'openai',
+    };
+    window.localStorage.setItem('midscene-studio-state-v2', JSON.stringify(state));
+
+    render(<App />);
+
+    await waitFor(() => expect(screen.queryByLabelText('空态首页')).not.toBeInTheDocument());
+    const navigation = await screen.findByRole('navigation', { name: '主导航' });
+    fireEvent.click(within(navigation).getByRole('button', { name: '自然语言' }));
+    const command = await screen.findByPlaceholderText('输入命令，例如：提取所有图表图例');
+    fireEvent.change(command, { target: { value: '点击 #create-order' } });
+    fireEvent.click(within(command.parentElement!).getByRole('button'));
+
+    await waitFor(() => {
+      const persisted = JSON.parse(window.localStorage.getItem('midscene-studio-state-v2') ?? '{}');
+      expect(persisted.runDetails[0]?.agentRun?.intent).toMatchObject({
+        projectId: project.id,
+        groupId: project.groups[0]!.id,
+        environmentId: environment.id,
+      });
+    });
   });
 });

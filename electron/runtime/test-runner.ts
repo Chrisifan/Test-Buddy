@@ -1,5 +1,6 @@
 import type {
   RunDetail,
+  RunArtifact,
   RunEventPayload,
   RunStepLog,
   RunTestCaseRequest,
@@ -13,6 +14,12 @@ import type {
   TestStepDraft,
 } from '../../shared/studio.js';
 import type { AgentRunResult } from '../../shared/agent.js';
+import {
+  awaitWithRunCancellation,
+  createUserRunCancellation,
+  isRunCancelled,
+  throwIfRunCancelled,
+} from './run-cancellation.js';
 import { createTestCaseAgentRun } from '../../shared/agentStub.js';
 import { ArtifactManager } from './artifact-manager.js';
 import { BrowserRuntime } from './browser-runtime.js';
@@ -35,7 +42,7 @@ export class TestRunner {
   ) {}
 
   async run(request: RunTestCaseRequest): Promise<RunTestCaseResponse> {
-    const runId = `run-${Date.now()}`;
+    const runId = request.runId ?? `run-${Date.now()}`;
     const startedAt = new Date();
     const title = request.testCase.name;
     const logs = [
@@ -53,17 +60,32 @@ export class TestRunner {
 
     logs.forEach((line) => this.emitRunEvent({ runId, title, type: 'log', line }));
 
-    const session = await this.browserRuntime.start({
-      project: request.project,
-      environment: request.environment,
-      record: false,
-    });
-    const artifact = await this.artifacts.createSnapshot(
-      runId,
-      '运行起始快照',
-      request.testCase.name,
-      session.currentUrl || request.environment.url,
-    );
+    let artifact: RunArtifact;
+    try {
+      throwIfRunCancelled(request.cancellationSignal);
+      const session = await awaitWithRunCancellation(
+        this.browserRuntime.start({
+          project: request.project,
+          environment: request.environment,
+          record: false,
+        }),
+        request.cancellationSignal,
+      );
+      artifact = await awaitWithRunCancellation(
+        this.artifacts.createSnapshot(
+          runId,
+          '运行起始快照',
+          request.testCase.name,
+          session.currentUrl || request.environment.url,
+        ),
+        request.cancellationSignal,
+      );
+    } catch (error) {
+      if (!isRunCancelled(error)) {
+        throw error;
+      }
+      return this.createCancelledResponse(request, runId, title, startedAt, logs, []);
+    }
 
     const artifacts = [artifact];
     const steps: RunStepLog[] = [];
@@ -73,8 +95,15 @@ export class TestRunner {
     let hasFailure = false;
     let hasNeutral = false;
     let failureReason = '';
+    let cancellation: RunDetail['cancellation'];
 
     for (const [index, step] of request.testCase.steps.entries()) {
+      if (request.cancellationSignal?.aborted) {
+        cancellation = createUserCancellation();
+        hasNeutral = true;
+        appendUnexecutedSteps(steps, request, index, runId, artifact.path, cancellation.message);
+        break;
+      }
       const replayStep = step.type === 'recordingReplay';
 
       if (replayStep) {
@@ -106,6 +135,7 @@ export class TestRunner {
                 ? { documentId: recording.prdPath.documentId }
                 : {}),
             parentRunId: runId,
+            ...(request.cancellationSignal ? { cancellationSignal: request.cancellationSignal } : {}),
           });
           if (isAgentRunResult(replay.agentRun)) {
             agentRuns.push(replay.agentRun);
@@ -130,6 +160,9 @@ export class TestRunner {
           });
 
           if (replay.detail.status !== 'passed') {
+            if (replay.detail.cancellation) {
+              cancellation = replay.detail.cancellation;
+            }
             if (replay.detail.status === 'failed') {
               hasFailure = true;
               failureReason = replay.detail.failureReason ?? replay.detail.summary;
@@ -142,7 +175,33 @@ export class TestRunner {
           continue;
         }
 
-        const replayResults = await this.browserRuntime.replayRecordingSteps(recording.steps, `${runId}-${index}`);
+        let replayResults: Awaited<ReturnType<BrowserRuntime['replayRecordingSteps']>>;
+        try {
+          const replay = request.cancellationSignal
+            ? this.browserRuntime.replayRecordingSteps(
+                recording.steps,
+                `${runId}-${index}`,
+                request.cancellationSignal,
+              )
+            : this.browserRuntime.replayRecordingSteps(recording.steps, `${runId}-${index}`);
+          replayResults = await awaitWithRunCancellation(replay, request.cancellationSignal);
+        } catch (error) {
+          if (!isRunCancelled(error)) {
+            throw error;
+          }
+          cancellation = createUserCancellation();
+          hasNeutral = true;
+          steps.push({
+            id: `run-step-${runId}-${index}`,
+            stepId: step.id,
+            title: step.title,
+            status: 'neutral',
+            message: cancellation.message,
+            screenshotPath: artifact.path,
+          });
+          appendUnexecutedSteps(steps, request, index + 1, runId, artifact.path, cancellation.message);
+          break;
+        }
         replayResults.forEach((result, replayIndex) => {
           if (result.screenshotPath) {
             artifacts.push({
@@ -211,6 +270,7 @@ export class TestRunner {
           ...(request.testCase.prdPath?.documentId ? { documentId: request.testCase.prdPath.documentId } : {}),
           parentRunId: runId,
           preserveCurrentPage: index > 0,
+          ...(request.cancellationSignal ? { cancellationSignal: request.cancellationSignal } : {}),
         });
         if (isAgentRunResult(workflow.agentRun)) {
           agentRuns.push(workflow.agentRun);
@@ -236,6 +296,9 @@ export class TestRunner {
         });
 
         if (workflow.detail.status !== 'passed') {
+          if (workflow.detail.cancellation) {
+            cancellation = workflow.detail.cancellation;
+          }
           if (workflow.detail.status === 'failed') {
             hasFailure = true;
             failureReason = workflow.detail.failureReason ?? workflow.detail.summary;
@@ -287,11 +350,13 @@ export class TestRunner {
       ...(request.testCase.prdPath?.documentId ? { documentId: request.testCase.prdPath.documentId } : {}),
       environmentId: request.environment.id,
       title,
-      status: hasFailure ? 'failed' : hasNeutral ? 'neutral' : 'passed',
+      status: cancellation ? 'neutral' : hasFailure ? 'failed' : hasNeutral ? 'neutral' : 'passed',
       startedAt: startedAt.toISOString(),
       endedAt: endedAt.toISOString(),
       duration: `00:00:${String(Math.max(1, request.testCase.steps.length * 2)).padStart(2, '0')}`,
-      summary: hasFailure
+      summary: cancellation
+        ? cancellation.message
+        : hasFailure
         ? `执行失败：${failureReason}`
         : hasNeutral
           ? `已完成录制回放并保留 ${request.testCase.steps.length} 个步骤，其中部分步骤等待 Agent Runtime 或人工检查。`
@@ -301,7 +366,8 @@ export class TestRunner {
       artifacts,
       ...(agentRun ? { agentRun } : {}),
       ...(agentRuns.length ? { agentRuns } : {}),
-      failureReason: hasFailure ? failureReason : undefined,
+      ...(hasFailure && !cancellation ? { failureReason } : {}),
+      ...(cancellation ? { cancellation } : {}),
     };
 
     this.emitRunEvent({
@@ -316,6 +382,54 @@ export class TestRunner {
 
     return { runId, title, detail };
   }
+
+  private createCancelledResponse(
+    request: RunTestCaseRequest,
+    runId: string,
+    title: string,
+    startedAt: Date,
+    logs: string[],
+    artifacts: RunArtifact[],
+  ): RunTestCaseResponse {
+    const cancellation = createUserCancellation();
+    const detail: RunDetail = {
+      id: runId,
+      projectId: request.project.id,
+      testCaseId: request.testCase.id,
+      ...(request.testCase.prdPath?.documentId ? { documentId: request.testCase.prdPath.documentId } : {}),
+      environmentId: request.environment.id,
+      title,
+      status: 'neutral',
+      startedAt: startedAt.toISOString(),
+      endedAt: cancellation.cancelledAt,
+      duration: '00:00:00',
+      summary: cancellation.message,
+      logs: [...logs, `[${timeLabel(new Date())}] ${cancellation.message}`],
+      steps: request.testCase.steps.map((step, index) => ({
+        id: `run-step-${runId}-${index}`,
+        stepId: step.id,
+        title: step.title,
+        status: 'neutral',
+        message: cancellation.message,
+      })),
+      artifacts,
+      cancellation,
+    };
+    this.emitRunEvent({
+      runId,
+      title,
+      type: 'complete',
+      status: detail.status,
+      duration: detail.duration,
+      summary: detail.summary,
+      detail,
+    });
+    return { runId, title, detail };
+  }
+}
+
+function createUserCancellation(): NonNullable<RunDetail['cancellation']> {
+  return createUserRunCancellation();
 }
 
 function appendUnexecutedSteps(

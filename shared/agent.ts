@@ -85,6 +85,8 @@ export interface AgentPlan {
 
 export interface AgentTableObservation {
   index: number;
+  /** Whether the observed rows represent a complete, partial, or indeterminate data set. */
+  evidenceCompleteness?: 'complete' | 'partial' | 'unknown';
   caption?: string;
   rowCount: number;
   columnCount: number;
@@ -112,6 +114,8 @@ export interface AgentTableObservation {
 
 export interface AgentChartObservation {
   index: number;
+  /** Whether chart values/trends are supported by complete structured evidence. */
+  evidenceCompleteness?: 'complete' | 'partial' | 'unknown';
   title?: string;
   kind: 'canvas' | 'svg' | 'image' | 'container';
   width?: number;
@@ -257,6 +261,13 @@ export interface AgentReporterSummary {
   modelName: string;
 }
 
+export interface AgentRunCancellation {
+  source: 'user';
+  reason: 'userCancelled';
+  message: string;
+  cancelledAt: string;
+}
+
 export type AgentRecoveryPlanStrategy =
   | 'waitForResponse'
   | 'waitForSelector'
@@ -304,6 +315,7 @@ export type AgentRunEventType =
   | 'agent:assertion-result'
   | 'agent:artifact-created'
   | 'agent:step-failed'
+  | 'agent:run-cancelled'
   | 'agent:run-finished';
 
 export interface AgentRunEvent {
@@ -322,6 +334,7 @@ export interface AgentRunEvent {
   dynamicWait?: AgentDynamicWaitAttempt;
   retryAttempt?: AgentRetryAttempt;
   selectorFallback?: AgentSelectorFallbackAttempt;
+  cancellation?: AgentRunCancellation;
   /** Metrics emitted by the model operation associated with this event. */
   metrics?: AgentExecutionMetrics;
   createdAt: string;
@@ -341,6 +354,7 @@ export interface AgentRunResult {
   startedAt: string;
   endedAt?: string;
   failureReason?: string;
+  cancellation?: AgentRunCancellation;
 }
 
 function lastFailureEvent(events: AgentRunEvent[]): AgentRunEvent | undefined {

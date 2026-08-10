@@ -86,6 +86,7 @@ describe('BrowserRuntime page access', () => {
     expect(observation.tables).toEqual([
       {
         index: 1,
+        evidenceCompleteness: 'partial',
         caption: '订单列表',
         rowCount: 2,
         columnCount: 3,
@@ -106,6 +107,7 @@ describe('BrowserRuntime page access', () => {
     expect(observation.charts).toEqual([
       expect.objectContaining({
         index: 1,
+        evidenceCompleteness: 'unknown',
         title: '成交趋势',
         kind: 'canvas',
         width: 640,
@@ -121,6 +123,7 @@ describe('BrowserRuntime page access', () => {
       }),
       expect.objectContaining({
         index: 2,
+        evidenceCompleteness: 'unknown',
         title: '资产分布',
         kind: 'svg',
         width: 320,
@@ -233,6 +236,7 @@ describe('BrowserRuntime page access', () => {
     expect(observation.tables).toEqual([
       {
         index: 1,
+        evidenceCompleteness: 'partial',
         caption: '会员列表',
         rowCount: 2,
         columnCount: 3,
@@ -287,6 +291,7 @@ describe('BrowserRuntime page access', () => {
     expect(observation.tables).toEqual([
       {
         index: 1,
+        evidenceCompleteness: 'partial',
         caption: '订单列表',
         rowCount: 2,
         columnCount: 2,
@@ -302,6 +307,7 @@ describe('BrowserRuntime page access', () => {
     expect(observation.charts).toEqual([
       expect.objectContaining({
         index: 1,
+        evidenceCompleteness: 'unknown',
         title: '销售趋势',
         kind: 'canvas',
         width: 640,
@@ -361,6 +367,7 @@ describe('BrowserRuntime page access', () => {
     expect(observation.tables).toEqual([
       {
         index: 1,
+        evidenceCompleteness: 'partial',
         caption: '结算列表',
         rowCount: 2,
         columnCount: 2,

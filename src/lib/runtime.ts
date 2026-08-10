@@ -9,6 +9,7 @@ import type {
   MidsceneConnectionTestResult,
   PrdSemanticAnalysisRequest,
   PrdSemanticAnalysisResponse,
+  ProjectReportExportRequest,
   RunDetail,
   RuntimeProfile,
   RunEventPayload,
@@ -71,6 +72,24 @@ export async function exportArtifact(artifactPath: string): Promise<boolean> {
   }
 
   return desktopApi.exportArtifact(artifactPath);
+}
+
+export async function exportProjectReport(request: ProjectReportExportRequest): Promise<boolean> {
+  const desktopApi = getDesktopApi();
+  if (!desktopApi) {
+    return false;
+  }
+
+  return desktopApi.exportProjectReport(request);
+}
+
+export async function cancelRun(runId: string): Promise<boolean> {
+  const desktopApi = getDesktopApi();
+  if (!desktopApi) {
+    return false;
+  }
+
+  return desktopApi.cancelRun(runId);
 }
 
 export async function attachManualEvidence(): Promise<RunArtifact | undefined> {
@@ -367,6 +386,8 @@ export async function sendChatCommand(
         }
       : {}),
     ...(request.projectId ? { projectId: request.projectId } : {}),
+    ...(request.groupId ? { groupId: request.groupId } : {}),
+    ...(request.environmentId ? { environmentId: request.environmentId } : {}),
     ...(request.testCaseId ? { testCaseId: request.testCaseId } : {}),
   });
 

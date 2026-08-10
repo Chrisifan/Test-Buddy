@@ -109,6 +109,10 @@ describe('agent contract helpers', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-07-03T08:00:00.000Z'));
 
+    const runContext = {
+      groupId: 'group-quality',
+      environmentId: 'env-staging',
+    };
     const run = createStubAgentRun({
       mode: 'aiAssert',
       prompt: '验证图表刷新成功',
@@ -117,6 +121,7 @@ describe('agent contract helpers', () => {
       projectId: 'project-1',
       testCaseId: 'case-1',
       targetUrl: 'https://example.test',
+      ...runContext,
       browserSession: {
         status: 'ready',
         currentUrl: 'https://example.test/dashboard',
@@ -127,6 +132,8 @@ describe('agent contract helpers', () => {
 
     expect(run.intent.source).toBe('naturalLanguage');
     expect(run.intent.projectId).toBe('project-1');
+    expect(run.intent.groupId).toBe('group-quality');
+    expect(run.intent.environmentId).toBe('env-staging');
     expect(run.plan.steps).toHaveLength(3);
     expect(run.plan.steps[1]?.action).toBe('assert');
     expect(run.events.map((event) => event.type)).toEqual([
@@ -231,12 +238,17 @@ describe('agent contract helpers', () => {
   });
 
   it('aggregates every completed Planner step into one passed Agent run', () => {
+    const runContext = {
+      groupId: 'group-reports',
+      environmentId: 'env-staging',
+    };
     const run = createPlannedAgentRun({
       mode: 'ai',
       prompt: '打开报表并检查标题',
       targetEnvironment: 'Staging',
       runtimeDescription: 'chromium / desktop',
       targetUrl: 'https://example.test',
+      ...runContext,
       plannedPlan: {
         title: '报表检查',
         summary: '打开报表并检查标题。',
@@ -282,6 +294,8 @@ describe('agent contract helpers', () => {
     });
 
     expect(run.status).toBe('passed');
+    expect(run.intent.groupId).toBe('group-reports');
+    expect(run.intent.environmentId).toBe('env-staging');
     expect(run.plan.steps.map((step) => step.title)).toEqual([
       '准备执行上下文',
       '打开报表',

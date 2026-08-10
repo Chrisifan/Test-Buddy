@@ -4,11 +4,13 @@ import type {
   AgentUsageBucket,
 } from '../../shared/agent.js';
 import type { AgentPlannerModelConfig } from './agent-planner.js';
+import { createLinkedAbortController } from './run-cancellation.js';
 
 export type AgentReporterModelConfig = AgentPlannerModelConfig;
 
 export interface AgentReporterRequest {
   config: AgentReporterModelConfig;
+  cancellationSignal?: AbortSignal;
   run: Pick<AgentRunResult, 'status' | 'summary' | 'failureReason' | 'intent' | 'plan' | 'events' | 'artifacts'>;
 }
 
@@ -95,7 +97,8 @@ export class OpenAICompatibleAgentReporter implements AgentReporter {
 
   async report(request: AgentReporterRequest): Promise<AgentReporterResult> {
     const startedAt = Date.now();
-    const controller = new AbortController();
+    const linkedAbort = createLinkedAbortController(request.cancellationSignal);
+    const { controller } = linkedAbort;
     const timeout = setTimeout(() => controller.abort(), 30_000);
     let response: Response;
 
@@ -139,6 +142,7 @@ export class OpenAICompatibleAgentReporter implements AgentReporter {
       });
     } finally {
       clearTimeout(timeout);
+      linkedAbort.dispose();
     }
 
     if (!response.ok) {

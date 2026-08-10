@@ -68,6 +68,13 @@ import type {
   AgentVerifierResult,
 } from './runtime/agent-verifier.js';
 import type { SemanticActionResult, SemanticActionRuntime } from './runtime/semantic-action-runtime.js';
+import {
+  awaitWithRunCancellation,
+  createUserRunCancellation,
+  isRunCancelled,
+  markAgentRunCancelled,
+  throwIfRunCancelled,
+} from './runtime/run-cancellation.js';
 
 interface BrowserObserver {
   start: (request: BrowserSessionRequest) => Promise<BrowserSessionState>;
@@ -960,6 +967,50 @@ function formatChartTrend(trend: NonNullable<ExplicitAssertionIntent['chartTrend
   return trend === 'rising' ? '上升' : trend === 'falling' ? '下降' : trend === 'flat' ? '平稳' : 'mixed';
 }
 
+function evidenceCompletenessLabel(value: 'complete' | 'partial' | 'unknown' | undefined): string {
+  return value === 'complete' ? '完整' : value === 'partial' ? '局部/虚拟化' : '未知';
+}
+
+function requireCompleteTableEvidence(
+  assertion: ExplicitAssertionIntent,
+  tables: NonNullable<AgentObservation['tables']>,
+): { tables: NonNullable<AgentObservation['tables']> } | { pending: AssertionEvaluation } {
+  const completeTables = tables.filter((table) => table.evidenceCompleteness === 'complete');
+  if (completeTables.length) {
+    return { tables: completeTables };
+  }
+  const evidence = tables.length
+    ? tables.map((table) => `${table.caption || `表格 #${table.index}`}：证据${evidenceCompletenessLabel(table.evidenceCompleteness)}`).join('；')
+    : '未观察到表格';
+  return {
+    pending: {
+      status: 'neutral',
+      summary: `${assertion.label}缺少完整表格证据，暂不判定。`,
+      evidence,
+    },
+  };
+}
+
+function requireCompleteChartEvidence(
+  assertion: ExplicitAssertionIntent,
+  charts: NonNullable<AgentObservation['charts']>,
+): { charts: NonNullable<AgentObservation['charts']> } | { pending: AssertionEvaluation } {
+  const completeCharts = charts.filter((chart) => chart.evidenceCompleteness === 'complete');
+  if (completeCharts.length) {
+    return { charts: completeCharts };
+  }
+  const evidence = charts.length
+    ? charts.map((chart) => `${chart.title || `图表 #${chart.index}`}：证据${evidenceCompletenessLabel(chart.evidenceCompleteness)}`).join('；')
+    : '未观察到图表';
+  return {
+    pending: {
+      status: 'neutral',
+      summary: `${assertion.label}缺少完整图表证据，暂不判定。`,
+      evidence,
+    },
+  };
+}
+
 function evaluateChartCountAssertion(
   assertion: ExplicitAssertionIntent,
   charts: NonNullable<AgentObservation['charts']>,
@@ -1082,6 +1133,13 @@ function evaluateChartEvidenceAssertion(
   assertion: ExplicitAssertionIntent,
   charts: NonNullable<AgentObservation['charts']>,
 ): AssertionEvaluation {
+  if (assertion.kind === 'chartSeriesTrend' || assertion.kind === 'chartTrend') {
+    const completeness = requireCompleteChartEvidence(assertion, charts);
+    if ('pending' in completeness) {
+      return completeness.pending;
+    }
+    charts = completeness.charts;
+  }
   const chartLabel = (chart: NonNullable<AgentObservation['charts']>[number]) => chart.title || `图表 #${chart.index}`;
   const formatDataPoint = (point: { series?: string; label?: string; value: number }) =>
     `${point.series ? `${point.series} / ` : ''}${point.label ? `${point.label} = ` : ''}${formatNumber(point.value)}`;
@@ -1307,26 +1365,28 @@ function evaluateTableColumnSumAssertion(
   assertion: ExplicitAssertionIntent,
   tables: NonNullable<AgentObservation['tables']>,
 ): AssertionEvaluation {
+  const completeness = requireCompleteTableEvidence(assertion, tables);
+  if ('pending' in completeness) {
+    return completeness.pending;
+  }
+  tables = completeness.tables;
   const columnName = assertion.columnName ?? '';
   const expectedText = assertion.expected.replace(`${columnName} 合计 `, '');
   const expectedSum = Number.parseFloat(expectedText);
-  const sums = tables.flatMap((table) => {
-    const columnIndex = table.headers.findIndex((header) => header === columnName);
-    if (columnIndex < 0) {
-      return [];
-    }
-
-    const values = table.sampleRows.map((row) => row[columnIndex]).filter((value): value is string => Boolean(value));
-    const numericValues = values.map(parseNumericCell).filter((value): value is number => value !== undefined);
-    const sum = numericValues.reduce((total, value) => total + value, 0);
-    return [
-      {
-        label: `${table.caption || `表格 #${table.index}`}：${columnName} 合计 ${formatNumber(sum)} (${values.join(' / ')})`,
-        sum,
-      },
-    ];
-  });
-  const evidence = sums.length ? sums.map((item) => item.label).join('；') : `未观察到可合计表格列：${columnName}`;
+  const sums = tables.flatMap((table) =>
+    (table.aggregates ?? []).flatMap((aggregate) => {
+      if (aggregate.label !== columnName) {
+        return [];
+      }
+      const sum = parseNumericCell(aggregate.value);
+      return sum === undefined
+        ? []
+        : [{ label: `${table.caption || `表格 #${table.index}`}：${columnName} 合计 ${aggregate.value}`, sum }];
+    }),
+  );
+  const evidence = sums.length
+    ? sums.map((item) => item.label).join('；')
+    : `未观察到完整表格的显式合计：${columnName}`;
   const passed = Number.isFinite(expectedSum) && sums.some((item) => Math.abs(item.sum - expectedSum) < 0.000001);
 
   if (passed) {
@@ -1363,20 +1423,30 @@ function evaluateTableSortAssertion(
   assertion: ExplicitAssertionIntent,
   tables: NonNullable<AgentObservation['tables']>,
 ): AssertionEvaluation {
+  const completeness = requireCompleteTableEvidence(assertion, tables);
+  if ('pending' in completeness) {
+    return completeness.pending;
+  }
+  tables = completeness.tables;
   const sortColumn = assertion.sortColumn ?? '';
   const sortDirection = assertion.sortDirection;
   const sortEvidence = tables.flatMap((table) =>
     (table.sortStates ?? []).map((state) => `${table.caption || `表格 #${table.index}`}：${state.column} ${state.direction}`),
   );
-  const inferredEvidence = tables.flatMap((table) => inferTableSortEvidence(table, sortColumn));
-  const evidence = [...sortEvidence, ...inferredEvidence].length
-    ? [...sortEvidence, ...inferredEvidence].join('；')
+  const evidence = sortEvidence.length
+    ? sortEvidence.join('；')
     : '未观察到表格排序状态';
+  if (!sortEvidence.length) {
+    return {
+      status: 'neutral',
+      summary: `${assertion.label}缺少显式排序状态，暂不判定。`,
+      evidence,
+    };
+  }
   const explicitPassed = tables.some((table) =>
     (table.sortStates ?? []).some((state) => state.column === sortColumn && state.direction === sortDirection),
   );
-  const inferredPassed = tables.some((table) => inferTableSortDirection(table, sortColumn) === sortDirection);
-  const passed = explicitPassed || inferredPassed;
+  const passed = explicitPassed;
 
   if (passed) {
     return {
@@ -1450,6 +1520,13 @@ function evaluateTableCountAssertion(
 ): AssertionEvaluation {
   const expectedCount = Number.parseInt(assertion.expected, 10);
   const isRowCount = assertion.kind === 'tableRowCount';
+  if (isRowCount) {
+    const completeness = requireCompleteTableEvidence(assertion, tables);
+    if ('pending' in completeness) {
+      return completeness.pending;
+    }
+    tables = completeness.tables;
+  }
   const evidence = tables.length
     ? tables
         .map((table) => `${table.caption || `表格 #${table.index}`}：${isRowCount ? table.rowCount : table.columnCount} ${isRowCount ? '行' : '列'}`)
@@ -1492,6 +1569,11 @@ function evaluateTableStateAssertion(
             : undefined;
 
   if (paginationKey) {
+    const completeness = requireCompleteTableEvidence(assertion, tables);
+    if ('pending' in completeness) {
+      return completeness.pending;
+    }
+    tables = completeness.tables;
     const expected = Number.parseInt(assertion.expected, 10);
     const evidence = tables.length
       ? tables
@@ -1534,6 +1616,11 @@ function evaluateTableStateAssertion(
   }
 
   const aggregateName = assertion.aggregateName ?? '';
+  const completeness = requireCompleteTableEvidence(assertion, tables);
+  if ('pending' in completeness) {
+    return completeness.pending;
+  }
+  tables = completeness.tables;
   const expectedValue = assertion.expected.replace(`${aggregateName} = `, '');
   const evidence = tables.length
     ? tables
@@ -1811,6 +1898,13 @@ function shouldTrySelectorFallback(
 
 function canReplanFailedStep(step: AgentPlanStepDraft): boolean {
   return ['navigate', 'click', 'input', 'wait', 'scroll', 'select', 'observe'].includes(step.action);
+}
+
+function shouldReplanFailedExecution(
+  step: AgentPlanStepDraft,
+  execution: PlannedAgentStepExecution,
+): boolean {
+  return canReplanFailedStep(step) && execution.recoveryStrategy !== 'stopAndReport';
 }
 
 function completedActionIdentity(step: AgentPlanStepDraft): string | undefined {
@@ -2491,6 +2585,7 @@ export class StudioRuntime {
     step: AgentPlanStepDraft,
     stepIndex: number,
     previousExecution: PlannedAgentStepExecution,
+    cancellationSignal?: AbortSignal,
   ): Promise<
     | {
         execution: PlannedAgentStepExecution;
@@ -2503,7 +2598,7 @@ export class StudioRuntime {
       return undefined;
     }
 
-    const observation = previousExecution.observation ?? (await this.captureBrowserObservation());
+    const observation = previousExecution.observation ?? (await this.captureBrowserObservation(cancellationSignal));
     const candidates = resolveSelectorFallbackCandidates(step, observation?.interactiveElements);
     if (!candidates.length) {
       return undefined;
@@ -2512,6 +2607,7 @@ export class StudioRuntime {
     const attempts: AgentSelectorFallbackAttempt[] = [];
     let executionMetrics: AgentExecutionMetrics | undefined;
     for (const candidate of candidates) {
+      throwIfRunCancelled(cancellationSignal);
       const fallbackStep = { ...step, selector: candidate.selector };
       const preparation = await this.prepareBrowserForAgent(request, fallbackStep);
       const fallbackExecution = toPlannedStepExecution(fallbackStep, stepIndex, preparation);
@@ -2559,6 +2655,7 @@ export class StudioRuntime {
   private async waitBeforeRetry(
     step: AgentPlanStepDraft,
     failedExecution?: PlannedAgentStepExecution,
+    cancellationSignal?: AbortSignal,
   ): Promise<AgentDynamicWaitAttempt | undefined> {
     if (!canWaitBeforeRetry(step, failedExecution?.recoveryStrategy)) {
       return undefined;
@@ -2573,10 +2670,10 @@ export class StudioRuntime {
           strategy: 'response',
           urlPattern: responseUrlPattern,
         };
-        await this.browserObserver.waitForResponse({
+        await awaitWithRunCancellation(this.browserObserver.waitForResponse({
           urlPattern: responseUrlPattern,
           timeoutMs: dynamicRetryResponseWaitMs,
-        });
+        }), cancellationSignal);
         return {
           ...attemptedWait,
           status: 'passed',
@@ -2590,7 +2687,10 @@ export class StudioRuntime {
           strategy: 'selector',
           selector: step.selector,
         };
-        await this.browserObserver.waitForSelector({ selector: step.selector, timeoutMs: dynamicRetrySelectorWaitMs });
+        await awaitWithRunCancellation(
+          this.browserObserver.waitForSelector({ selector: step.selector, timeoutMs: dynamicRetrySelectorWaitMs }),
+          cancellationSignal,
+        );
         return {
           ...attemptedWait,
           status: 'passed',
@@ -2603,7 +2703,10 @@ export class StudioRuntime {
           timeoutMs: dynamicRetryDataReadyWaitMs,
           strategy: 'dataReady',
         };
-        await this.browserObserver.waitForDataReady({ timeoutMs: dynamicRetryDataReadyWaitMs });
+        await awaitWithRunCancellation(
+          this.browserObserver.waitForDataReady({ timeoutMs: dynamicRetryDataReadyWaitMs }),
+          cancellationSignal,
+        );
         return {
           ...attemptedWait,
           status: 'passed',
@@ -2616,7 +2719,10 @@ export class StudioRuntime {
           timeoutMs: dynamicRetryNetworkIdleWaitMs,
           strategy: 'networkIdle',
         };
-        await this.browserObserver.waitForNetworkIdle({ timeoutMs: dynamicRetryNetworkIdleWaitMs });
+        await awaitWithRunCancellation(
+          this.browserObserver.waitForNetworkIdle({ timeoutMs: dynamicRetryNetworkIdleWaitMs }),
+          cancellationSignal,
+        );
         return {
           ...attemptedWait,
           status: 'passed',
@@ -2634,7 +2740,7 @@ export class StudioRuntime {
         timeoutMs: dynamicRetryWaitMs,
         strategy: 'timeout',
       };
-      await this.browserObserver.wait({ timeoutMs: dynamicRetryWaitMs });
+      await awaitWithRunCancellation(this.browserObserver.wait({ timeoutMs: dynamicRetryWaitMs }), cancellationSignal);
       return {
         ...attemptedWait,
         status: 'passed',
@@ -2642,6 +2748,9 @@ export class StudioRuntime {
         evidence: `已在重试「${step.title}」前等待 ${dynamicRetryWaitMs}ms。`,
       };
     } catch (error) {
+      if (isRunCancelled(error)) {
+        throw error;
+      }
       const failureReason = (error as Error).message || '未知错误';
       return {
         ...(attemptedWait ?? { timeoutMs: dynamicRetryWaitMs, strategy: 'timeout' as const }),
@@ -2672,9 +2781,11 @@ export class StudioRuntime {
   }
 
   async sendChatCommand(request: ChatCommandRequest): Promise<ChatCommandResponse> {
+    throwIfRunCancelled(request.cancellationSignal);
     const traceScopeId = `agent-trace-${Date.now()}`;
     const ownsTraceScope = await this.beginTraceScope(traceScopeId);
     const planningAttempt = await this.createAgentPlan(request);
+    throwIfRunCancelled(request.cancellationSignal);
     const modelAssignments = resolveAgentModelAssignments({
       midsceneConfig: request.midsceneConfig ?? defaultMidsceneConfig,
       ...(request.agentModelConfig ? { agentModelConfig: request.agentModelConfig } : {}),
@@ -2689,13 +2800,14 @@ export class StudioRuntime {
       let replanningCycles = 0;
       let completedSteps: CompletedPlannerStep[] = [];
       for (let stepIndex = 0; stepIndex < plannedPlan.steps.length; stepIndex += 1) {
+        throwIfRunCancelled(request.cancellationSignal);
         const step = plannedPlan.steps[stepIndex]!;
         const preparation = await this.prepareBrowserForAgent(request, step);
         let execution = toPlannedStepExecution(step, stepIndex, preparation);
         executionMetrics = mergeExecutionMetrics(executionMetrics, preparation.executionMetrics) ?? executionMetrics;
         if (execution.status !== 'passed' && shouldRetryFailedExecution(step, execution)) {
           const failedAttempt = execution;
-          const dynamicWaitAttempt = await this.waitBeforeRetry(step, failedAttempt);
+          const dynamicWaitAttempt = await this.waitBeforeRetry(step, failedAttempt, request.cancellationSignal);
           if (dynamicWaitAttempt) {
             executionMetrics = withDynamicWaitAttempt(executionMetrics);
           }
@@ -2726,7 +2838,13 @@ export class StudioRuntime {
           }
         }
         if (execution.status !== 'passed' && shouldTrySelectorFallback(step, execution)) {
-          const selectorFallback = await this.trySelectorFallbackForStep(request, step, stepIndex, execution);
+          const selectorFallback = await this.trySelectorFallbackForStep(
+            request,
+            step,
+            stepIndex,
+            execution,
+            request.cancellationSignal,
+          );
           if (selectorFallback) {
             execution = selectorFallback.execution;
             executionMetrics =
@@ -2738,7 +2856,7 @@ export class StudioRuntime {
         }
         if (execution.status !== 'passed') {
           const completedStepsForReplan = appendCompletedPlannerSteps(completedSteps, plannedPlan, executions);
-          const revisedPlan = replanningCycles >= replanningCycleLimit || !canReplanFailedStep(step)
+          const revisedPlan = replanningCycles >= replanningCycleLimit || !shouldReplanFailedExecution(step, execution)
             ? undefined
             : await this.createReplannedAgentPlan(request, plannedPlan, step, execution, completedStepsForReplan);
           if (revisedPlan) {
@@ -2788,6 +2906,8 @@ export class StudioRuntime {
         executionMetrics,
         modelAssignments,
         ...(request.projectId ? { projectId: request.projectId } : {}),
+        ...(request.groupId ? { groupId: request.groupId } : {}),
+        ...(request.environmentId ? { environmentId: request.environmentId } : {}),
         ...(request.testCaseId ? { testCaseId: request.testCaseId } : {}),
         ...(request.documentId ? { documentId: request.documentId } : {}),
       }));
@@ -2796,6 +2916,7 @@ export class StudioRuntime {
     }
 
     const browserPreparation = await this.prepareBrowserForAgent(request);
+    throwIfRunCancelled(request.cancellationSignal);
     const observedSession = browserPreparation.session;
     const primaryExecution = createPrimaryExecution(browserPreparation);
     const unresolvedEvaluation =
@@ -2846,6 +2967,8 @@ export class StudioRuntime {
           }
         : {}),
       ...(request.projectId ? { projectId: request.projectId } : {}),
+      ...(request.groupId ? { groupId: request.groupId } : {}),
+      ...(request.environmentId ? { environmentId: request.environmentId } : {}),
       ...(request.testCaseId ? { testCaseId: request.testCaseId } : {}),
       ...(request.documentId ? { documentId: request.documentId } : {}),
     }));
@@ -2889,6 +3012,7 @@ export class StudioRuntime {
     request: ChatCommandRequest,
     agentRun: AgentRunResult,
   ): Promise<AgentRunResult> {
+    throwIfRunCancelled(request.cancellationSignal);
     if (!this.agentReporter || agentRun.status === 'passed' || agentRun.status === 'running') {
       return agentRun;
     }
@@ -2899,22 +3023,33 @@ export class StudioRuntime {
     }
 
     try {
-      const result = await this.agentReporter.report({
-        config: resolved.config,
-        run: {
-          status: agentRun.status,
-          summary: agentRun.summary,
-          ...(agentRun.failureReason ? { failureReason: agentRun.failureReason } : {}),
-          intent: agentRun.intent,
-          plan: agentRun.plan,
-          events: agentRun.events,
-          artifacts: agentRun.artifacts,
-        },
-      });
-      const reportPaths = await this.reporterReportWriter?.writeReporterReport({
-        runId: agentRun.runId,
-        markdown: createReporterMarkdown(result),
-      });
+      const result = await awaitWithRunCancellation(
+        this.agentReporter.report({
+          config: resolved.config,
+          ...(request.cancellationSignal ? { cancellationSignal: request.cancellationSignal } : {}),
+          run: {
+            status: agentRun.status,
+            summary: agentRun.summary,
+            ...(agentRun.failureReason ? { failureReason: agentRun.failureReason } : {}),
+            intent: agentRun.intent,
+            plan: agentRun.plan,
+            events: agentRun.events,
+            artifacts: agentRun.artifacts,
+          },
+        }),
+        request.cancellationSignal,
+      );
+      throwIfRunCancelled(request.cancellationSignal);
+      const reportPaths = this.reporterReportWriter
+        ? await awaitWithRunCancellation(
+          this.reporterReportWriter.writeReporterReport({
+            runId: agentRun.runId,
+            markdown: createReporterMarkdown(result),
+          }),
+          request.cancellationSignal,
+        )
+        : undefined;
+      throwIfRunCancelled(request.cancellationSignal);
       const artifact: AgentArtifact = {
         id: `${agentRun.runId}-artifact-reporter`,
         type: 'report',
@@ -2966,7 +3101,10 @@ export class StudioRuntime {
           modelName: result.modelName,
         },
       };
-    } catch {
+    } catch (error) {
+      if (isRunCancelled(error)) {
+        throw error;
+      }
       return agentRun;
     }
   }
@@ -3005,6 +3143,7 @@ export class StudioRuntime {
   }
 
   private async createAgentPlan(request: ChatCommandRequest): Promise<PlanningAttempt> {
+    throwIfRunCancelled(request.cancellationSignal);
     const resolved = plannerConfigForRequest(request);
     if (!this.agentPlanner || !resolved.config) {
       return {
@@ -3017,20 +3156,27 @@ export class StudioRuntime {
 
     try {
       const current = this.browserObserver?.getState() ?? request.browserSession;
-      const result = await this.agentPlanner.createPlan({
-        config: resolved.config,
-        mode: request.mode,
-        prompt: request.prompt,
-        targetEnvironment: request.targetEnvironment,
-        targetUrl: request.runtimeProfile.baseUrl,
-        ...(current?.currentUrl ? { currentUrl: current.currentUrl } : {}),
-        ...(current?.pageTitle ? { pageTitle: current.pageTitle } : {}),
-      });
+      const result = await awaitWithRunCancellation(
+        this.agentPlanner.createPlan({
+          config: resolved.config,
+          ...(request.cancellationSignal ? { cancellationSignal: request.cancellationSignal } : {}),
+          mode: request.mode,
+          prompt: request.prompt,
+          targetEnvironment: request.targetEnvironment,
+          targetUrl: request.runtimeProfile.baseUrl,
+          ...(current?.currentUrl ? { currentUrl: current.currentUrl } : {}),
+          ...(current?.pageTitle ? { pageTitle: current.pageTitle } : {}),
+        }),
+        request.cancellationSignal,
+      );
       return {
         result,
         provenance: { source: 'model', modelName: result.modelName },
       };
     } catch (error) {
+      if (isRunCancelled(error)) {
+        throw error;
+      }
       return {
         provenance: {
           source: 'rule',
@@ -3053,39 +3199,46 @@ export class StudioRuntime {
     }
 
     const current = this.browserObserver?.getState() ?? request.browserSession;
-    const observation = await this.captureBrowserObservation();
+    const observation = await this.captureBrowserObservation(request.cancellationSignal);
     try {
-      const result = await this.agentPlanner.createPlan({
-        config: resolved.config,
-        mode: request.mode,
-        prompt: [
-          request.prompt,
-          `原计划「${currentPlan.title}」在步骤「${failedStep.title}」未完成，请基于最新页面观察重新生成从当前状态继续执行的计划。`,
-        ].join('\n'),
-        targetEnvironment: request.targetEnvironment,
-        targetUrl: request.runtimeProfile.baseUrl,
-        ...(current?.currentUrl ? { currentUrl: current.currentUrl } : {}),
-        ...(current?.pageTitle ? { pageTitle: current.pageTitle } : {}),
-        previousFailure: {
-          stepTitle: failedStep.title,
-          action: failedStep.action,
-          instruction: failedStep.instruction,
-          status: failedExecution.status === 'failed' ? 'failed' : 'neutral',
-          summary: failedExecution.summary,
-          evidence: failedExecution.evidence,
-          ...(failedExecution.failureReason ? { failureReason: failedExecution.failureReason } : {}),
-          ...(failedExecution.failureCategory ? { failureCategory: failedExecution.failureCategory } : {}),
-          ...(failedExecution.recoveryStrategy ? { recoveryStrategy: failedExecution.recoveryStrategy } : {}),
-        },
-        ...(completedSteps.length ? { completedSteps } : {}),
-        ...(observation?.domSummary || observation?.textSummary
-          ? { observationSummary: [observation.domSummary, observation.textSummary].filter(Boolean).join('\n') }
-          : {}),
-        ...(observation?.interactiveElements?.length ? { interactiveElements: observation.interactiveElements } : {}),
-      });
+      const result = await awaitWithRunCancellation(
+        this.agentPlanner.createPlan({
+          config: resolved.config,
+          ...(request.cancellationSignal ? { cancellationSignal: request.cancellationSignal } : {}),
+          mode: request.mode,
+          prompt: [
+            request.prompt,
+            `原计划「${currentPlan.title}」在步骤「${failedStep.title}」未完成，请基于最新页面观察重新生成从当前状态继续执行的计划。`,
+          ].join('\n'),
+          targetEnvironment: request.targetEnvironment,
+          targetUrl: request.runtimeProfile.baseUrl,
+          ...(current?.currentUrl ? { currentUrl: current.currentUrl } : {}),
+          ...(current?.pageTitle ? { pageTitle: current.pageTitle } : {}),
+          previousFailure: {
+            stepTitle: failedStep.title,
+            action: failedStep.action,
+            instruction: failedStep.instruction,
+            status: failedExecution.status === 'failed' ? 'failed' : 'neutral',
+            summary: failedExecution.summary,
+            evidence: failedExecution.evidence,
+            ...(failedExecution.failureReason ? { failureReason: failedExecution.failureReason } : {}),
+            ...(failedExecution.failureCategory ? { failureCategory: failedExecution.failureCategory } : {}),
+            ...(failedExecution.recoveryStrategy ? { recoveryStrategy: failedExecution.recoveryStrategy } : {}),
+          },
+          ...(completedSteps.length ? { completedSteps } : {}),
+          ...(observation?.domSummary || observation?.textSummary
+            ? { observationSummary: [observation.domSummary, observation.textSummary].filter(Boolean).join('\n') }
+            : {}),
+          ...(observation?.interactiveElements?.length ? { interactiveElements: observation.interactiveElements } : {}),
+        }),
+        request.cancellationSignal,
+      );
       const continuation = removeCompletedActionReplays(result.plan, completedSteps);
       return continuation.plan.steps.length ? { ...result, plan: continuation.plan } : undefined;
-    } catch {
+    } catch (error) {
+      if (isRunCancelled(error)) {
+        throw error;
+      }
       return undefined;
     }
   }
@@ -3094,6 +3247,7 @@ export class StudioRuntime {
     request: ChatCommandRequest,
     plannedStep?: AgentPlanStepDraft,
   ): Promise<BrowserPreparationResult> {
+    throwIfRunCancelled(request.cancellationSignal);
     const executionIntent = resolveExecutionIntent(request, plannedStep);
     const {
       assertionIntent,
@@ -3138,19 +3292,22 @@ export class StudioRuntime {
       let message: string;
 
       if (shouldStart && request.project && request.environment) {
-        session = await this.browserObserver.start({
+        session = await awaitWithRunCancellation(this.browserObserver.start({
           project: request.project,
           environment: request.environment,
           record: false,
-        });
+        }), request.cancellationSignal);
         message = `Agent 已启动受控浏览器：${session.currentUrl || request.environment.url}`;
       } else {
-        session = await this.browserObserver.capture();
+        session = await awaitWithRunCancellation(this.browserObserver.capture(), request.cancellationSignal);
         message = `Agent 已复用浏览器会话并捕获快照：${session.currentUrl || '当前页面'}`;
       }
 
       if (explicitUrl && session.currentUrl !== explicitUrl) {
-        session = await this.browserObserver.navigate({ url: explicitUrl });
+        session = await awaitWithRunCancellation(
+          this.browserObserver.navigate({ url: explicitUrl }),
+          request.cancellationSignal,
+        );
         message = `${message}；并导航到用户指定 URL：${explicitUrl}`;
       }
 
@@ -3159,19 +3316,22 @@ export class StudioRuntime {
       let executionMetrics: AgentExecutionMetrics | undefined;
 
       if (clickIntent?.selector) {
-        session = await this.browserObserver.click({ selector: clickIntent.selector });
+        session = await awaitWithRunCancellation(
+          this.browserObserver.click({ selector: clickIntent.selector }),
+          request.cancellationSignal,
+        );
         message = `${message}；并点击用户指定 selector：${clickIntent.selector}`;
       } else if (clickIntent?.target) {
         if (this.semanticActionRuntime && request.midsceneConfig && isMidsceneConfigured(request.midsceneConfig)) {
-          const result = await this.semanticActionRuntime.click({
+          const result = await awaitWithRunCancellation(this.semanticActionRuntime.click({
             target: clickIntent.target,
             prompt: plannedStep?.instruction ?? request.prompt,
             config: request.midsceneConfig,
-          });
+          }), request.cancellationSignal);
           semanticEvaluation = toAssertionEvaluation(result);
           reportArtifactPath = result.reportPath;
           executionMetrics = result.metrics;
-          session = await this.browserObserver.capture();
+          session = await awaitWithRunCancellation(this.browserObserver.capture(), request.cancellationSignal);
           message = `${message}；${result.message}`;
         } else {
           const pendingMessage = `已识别点击目标「${clickIntent.target}」，等待 Midscene 语义定位执行。`;
@@ -3181,20 +3341,23 @@ export class StudioRuntime {
       }
 
       if (inputIntent?.selector) {
-        session = await this.browserObserver.input({ selector: inputIntent.selector, value: inputIntent.value });
+        session = await awaitWithRunCancellation(
+          this.browserObserver.input({ selector: inputIntent.selector, value: inputIntent.value }),
+          request.cancellationSignal,
+        );
         message = `${message}；并在用户指定 selector 输入内容：${inputIntent.selector}`;
       } else if (inputIntent?.target) {
         if (this.semanticActionRuntime && request.midsceneConfig && isMidsceneConfigured(request.midsceneConfig)) {
-          const result = await this.semanticActionRuntime.input({
+          const result = await awaitWithRunCancellation(this.semanticActionRuntime.input({
             target: inputIntent.target,
             value: inputIntent.value,
             prompt: plannedStep?.instruction ?? request.prompt,
             config: request.midsceneConfig,
-          });
+          }), request.cancellationSignal);
           semanticEvaluation = toAssertionEvaluation(result);
           reportArtifactPath = result.reportPath;
           executionMetrics = result.metrics;
-          session = await this.browserObserver.capture();
+          session = await awaitWithRunCancellation(this.browserObserver.capture(), request.cancellationSignal);
           message = `${message}；${result.message}`;
         } else {
           const pendingMessage = `已识别输入目标「${inputIntent.target}」，等待 Midscene 语义定位执行。`;
@@ -3206,43 +3369,49 @@ export class StudioRuntime {
       let waitedMs: number | undefined;
       if (waitIntent) {
         if (waitIntent.strategy === 'chartStable' && this.browserObserver.waitForChartStable) {
-          session = await this.browserObserver.waitForChartStable({
+          session = await awaitWithRunCancellation(this.browserObserver.waitForChartStable({
             ...(waitIntent.selector ? { selector: waitIntent.selector } : {}),
             timeoutMs: waitIntent.timeoutMs,
-          });
+          }), request.cancellationSignal);
           waitedMs = waitIntent.timeoutMs;
           message = waitIntent.selector
             ? `${message}；并等待图表稳定：${waitIntent.selector}`
             : `${message}；并等待页面图表稳定`;
         } else if (waitIntent.strategy === 'dataReady' && this.browserObserver.waitForDataReady) {
-          session = await this.browserObserver.waitForDataReady({
+          session = await awaitWithRunCancellation(this.browserObserver.waitForDataReady({
             ...(waitIntent.selector ? { selector: waitIntent.selector } : {}),
             timeoutMs: waitIntent.timeoutMs,
-          });
+          }), request.cancellationSignal);
           waitedMs = waitIntent.timeoutMs;
           message = waitIntent.selector
             ? `${message}；并等待数据就绪：${waitIntent.selector}`
             : `${message}；并等待页面数据就绪`;
         } else if (waitIntent.selector && this.browserObserver.waitForSelector) {
-          session = await this.browserObserver.waitForSelector({
+          session = await awaitWithRunCancellation(this.browserObserver.waitForSelector({
             selector: waitIntent.selector,
             timeoutMs: waitIntent.timeoutMs,
-          });
+          }), request.cancellationSignal);
           waitedMs = waitIntent.timeoutMs;
           message = `${message}；并等待 selector 可见：${waitIntent.selector}`;
         } else if (waitIntent.strategy === 'response' && waitIntent.urlPattern && this.browserObserver.waitForResponse) {
-          session = await this.browserObserver.waitForResponse({
+          session = await awaitWithRunCancellation(this.browserObserver.waitForResponse({
             urlPattern: waitIntent.urlPattern,
             timeoutMs: waitIntent.timeoutMs,
-          });
+          }), request.cancellationSignal);
           waitedMs = waitIntent.timeoutMs;
           message = `${message}；并等待接口响应：${waitIntent.urlPattern}`;
         } else if (waitIntent.strategy === 'networkIdle' && this.browserObserver.waitForNetworkIdle) {
-          session = await this.browserObserver.waitForNetworkIdle({ timeoutMs: waitIntent.timeoutMs });
+          session = await awaitWithRunCancellation(
+            this.browserObserver.waitForNetworkIdle({ timeoutMs: waitIntent.timeoutMs }),
+            request.cancellationSignal,
+          );
           waitedMs = waitIntent.timeoutMs;
           message = `${message}；并等待页面网络空闲：${waitIntent.timeoutMs}ms`;
         } else if (this.browserObserver.wait) {
-          session = await this.browserObserver.wait({ timeoutMs: waitIntent.timeoutMs });
+          session = await awaitWithRunCancellation(
+            this.browserObserver.wait({ timeoutMs: waitIntent.timeoutMs }),
+            request.cancellationSignal,
+          );
           waitedMs = waitIntent.timeoutMs;
           message = `${message}；并等待页面稳定：${waitIntent.timeoutMs}ms`;
         } else {
@@ -3256,7 +3425,7 @@ export class StudioRuntime {
       let scrolledPage = false;
       if (scrollIntent) {
         if (this.browserObserver.scroll) {
-          session = await this.browserObserver.scroll(scrollIntent);
+          session = await awaitWithRunCancellation(this.browserObserver.scroll(scrollIntent), request.cancellationSignal);
           scrolledSelector = scrollIntent.selector;
           scrolledPage = !scrollIntent.selector;
           message = scrollIntent.selector
@@ -3273,7 +3442,10 @@ export class StudioRuntime {
       let selectedValue: string | undefined;
       if (selectIntent?.selector) {
         if (this.browserObserver.select) {
-          session = await this.browserObserver.select({ selector: selectIntent.selector, value: selectIntent.value });
+          session = await awaitWithRunCancellation(
+            this.browserObserver.select({ selector: selectIntent.selector, value: selectIntent.value }),
+            request.cancellationSignal,
+          );
           selectedSelector = selectIntent.selector;
           selectedValue = selectIntent.value;
           message = `${message}；并在用户指定 selector 选择选项：${selectIntent.selector}`;
@@ -3284,12 +3456,12 @@ export class StudioRuntime {
         }
       } else if (selectIntent?.target) {
         if (this.semanticActionRuntime && request.midsceneConfig && isMidsceneConfigured(request.midsceneConfig)) {
-          const result = await this.semanticActionRuntime.select({
+          const result = await awaitWithRunCancellation(this.semanticActionRuntime.select({
             target: selectIntent.target,
             value: selectIntent.value,
             prompt: plannedStep?.instruction ?? request.prompt,
             config: request.midsceneConfig,
-          });
+          }), request.cancellationSignal);
           semanticEvaluation = toAssertionEvaluation(result);
           reportArtifactPath = result.reportPath;
           executionMetrics = result.metrics;
@@ -3303,11 +3475,11 @@ export class StudioRuntime {
       }
 
       if (extractIntent?.target && this.semanticActionRuntime && request.midsceneConfig && isMidsceneConfigured(request.midsceneConfig)) {
-        const result = await this.semanticActionRuntime.extract({
+        const result = await awaitWithRunCancellation(this.semanticActionRuntime.extract({
           target: extractIntent.target,
           prompt: plannedStep?.instruction ?? request.prompt,
           config: request.midsceneConfig,
-        });
+        }), request.cancellationSignal);
         semanticEvaluation = toAssertionEvaluation(result);
         reportArtifactPath = result.reportPath;
         executionMetrics = result.metrics;
@@ -3318,7 +3490,7 @@ export class StudioRuntime {
         message = `${message}；${pendingMessage}`;
       }
 
-      const observation = await this.captureBrowserObservation();
+      const observation = await this.captureBrowserObservation(request.cancellationSignal);
       const extracted = Boolean(
         extractIntent && (extractIntent.target ? semanticEvaluation?.status === 'passed' : observation),
       );
@@ -3345,28 +3517,35 @@ export class StudioRuntime {
         const verifierConfig = verifierConfigForRequest(request);
         if (this.agentVerifier && verifierConfig.config) {
           try {
-            const result = await this.agentVerifier.verify({
-              config: verifierConfig.config,
-              assertion: semanticAssertion,
-              prompt: plannedStep?.instruction ?? request.prompt,
-              ...(session.currentUrl ? { currentUrl: session.currentUrl } : {}),
-              ...(session.pageTitle ? { pageTitle: session.pageTitle } : {}),
-              ...(observation ? { observation } : {}),
-            });
+            const result = await awaitWithRunCancellation(
+              this.agentVerifier.verify({
+                config: verifierConfig.config,
+                ...(request.cancellationSignal ? { cancellationSignal: request.cancellationSignal } : {}),
+                assertion: semanticAssertion,
+                prompt: plannedStep?.instruction ?? request.prompt,
+                ...(session.currentUrl ? { currentUrl: session.currentUrl } : {}),
+                ...(session.pageTitle ? { pageTitle: session.pageTitle } : {}),
+                ...(observation ? { observation } : {}),
+              }),
+              request.cancellationSignal,
+            );
             assertionEvaluation = toVerifierAssertionEvaluation(result);
             executionMetrics = result.metrics;
             message = `${message}；${result.summary}`;
           } catch (error) {
+            if (isRunCancelled(error)) {
+              throw error;
+            }
             const pendingMessage = `Verifier 模型判断失败，当前语义断言保持等待态：${(error as Error).message}`;
             assertionEvaluation = createPendingSemanticEvaluation(pendingMessage);
             message = `${message}；${pendingMessage}`;
           }
         } else if (this.semanticActionRuntime && request.midsceneConfig && isMidsceneConfigured(request.midsceneConfig)) {
-          const result = await this.semanticActionRuntime.assert({
+          const result = await awaitWithRunCancellation(this.semanticActionRuntime.assert({
             assertion: semanticAssertion,
             prompt: plannedStep?.instruction ?? request.prompt,
             config: request.midsceneConfig,
-          });
+          }), request.cancellationSignal);
           assertionEvaluation = toAssertionEvaluation(result);
           reportArtifactPath = result.reportPath;
           executionMetrics = result.metrics;
@@ -3405,6 +3584,9 @@ export class StudioRuntime {
         ...(observation ? { observation } : {}),
       };
     } catch (error) {
+      if (isRunCancelled(error)) {
+        throw error;
+      }
       const failureReason = (error as Error).message || '未知错误';
       return {
         session: request.browserSession ?? this.browserObserver.getState(),
@@ -3423,28 +3605,64 @@ export class StudioRuntime {
     }
   }
 
-  private async captureBrowserObservation(): Promise<BrowserPreparationResult['observation'] | undefined> {
+  private async captureBrowserObservation(
+    cancellationSignal?: AbortSignal,
+  ): Promise<BrowserPreparationResult['observation'] | undefined> {
     if (!this.browserObserver?.captureObservation) {
       return undefined;
     }
 
     try {
-      return await this.browserObserver.captureObservation();
-    } catch {
+      return await awaitWithRunCancellation(this.browserObserver.captureObservation(), cancellationSignal);
+    } catch (error) {
+      if (isRunCancelled(error)) {
+        throw error;
+      }
       return undefined;
     }
   }
 
   async runWorkflow(request: RunWorkflowRequest): Promise<RunWorkflowResponse> {
-    const runId = `agent-run-workflow-${Date.now()}`;
+    const runId = request.runId ?? `agent-run-workflow-${Date.now()}`;
     const title = request.workflow.name;
-    const ownsTraceScope = await this.beginTraceScope(runId);
+    let ownsTraceScope = false;
     const emitRunEvent = (event: RunEventPayload) => {
       if (!request.parentRunId) {
         this.emitRunEvent(event);
       }
     };
 
+    const completeCancelledRun = async (): Promise<RunWorkflowResponse> => {
+      const cancellation = createUserRunCancellation();
+      const baseRun = createWorkflowAgentRun({
+        workflow: request.workflow,
+        stepRuns: [],
+        runId,
+        ...(request.project ? { projectId: request.project.id } : {}),
+        ...(request.environment ? { environmentId: request.environment.id } : {}),
+        ...(request.documentId ? { documentId: request.documentId } : {}),
+      });
+      const tracedRun = await this.finishTraceScope(runId, ownsTraceScope, baseRun);
+      const agentRun = markAgentRunCancelled(tracedRun, cancellation);
+      const detail = {
+        ...createWorkflowRunDetail(request, agentRun),
+        cancellation,
+      };
+      emitRunEvent({
+        runId,
+        title,
+        type: 'complete',
+        status: 'neutral',
+        duration: detail.duration,
+        summary: detail.summary,
+        detail,
+      });
+      return { runId, title, detail, agentRun };
+    };
+
+    try {
+      ownsTraceScope = await this.beginTraceScope(runId);
+      throwIfRunCancelled(request.cancellationSignal);
     emitRunEvent({
       runId,
       title,
@@ -3488,14 +3706,17 @@ export class StudioRuntime {
         request.environment &&
         (!current.currentUrl || current.status === 'idle' || current.status === 'closed' || current.status === 'error')
       ) {
-        current = await this.browserObserver.start({
+        current = await awaitWithRunCancellation(this.browserObserver.start({
           project: request.project,
           environment: request.environment,
           record: false,
-        });
+        }), request.cancellationSignal);
       }
       if (!request.preserveCurrentPage && current.status !== 'error' && current.currentUrl !== request.workflow.url) {
-        current = await this.browserObserver.navigate({ url: request.workflow.url });
+        current = await awaitWithRunCancellation(
+          this.browserObserver.navigate({ url: request.workflow.url }),
+          request.cancellationSignal,
+        );
       }
       emitRunEvent({
         runId,
@@ -3507,6 +3728,7 @@ export class StudioRuntime {
 
     const stepRuns: AgentRunResult[] = [];
     for (const [index, step] of request.workflow.steps.entries()) {
+      throwIfRunCancelled(request.cancellationSignal);
       emitRunEvent({
         runId,
         title,
@@ -3515,6 +3737,7 @@ export class StudioRuntime {
       });
       const response = await this.sendChatCommand({
         mode: step.type,
+        ...(request.cancellationSignal ? { cancellationSignal: request.cancellationSignal } : {}),
         prompt: step.body,
         targetEnvironment: request.targetEnvironment,
         deepThink: true,
@@ -3528,6 +3751,7 @@ export class StudioRuntime {
         testCaseId: request.workflow.id,
         ...(request.documentId ? { documentId: request.documentId } : {}),
       });
+      throwIfRunCancelled(request.cancellationSignal);
       stepRuns.push(response.agentRun);
       emitRunEvent({
         runId,
@@ -3560,5 +3784,19 @@ export class StudioRuntime {
     });
 
     return { runId, title, detail, agentRun };
+    } catch (error) {
+      if (isRunCancelled(error)) {
+        return completeCancelledRun();
+      }
+      await this.finishTraceScope(runId, ownsTraceScope, createWorkflowAgentRun({
+        workflow: request.workflow,
+        stepRuns: [],
+        runId,
+        ...(request.project ? { projectId: request.project.id } : {}),
+        ...(request.environment ? { environmentId: request.environment.id } : {}),
+        ...(request.documentId ? { documentId: request.documentId } : {}),
+      }));
+      throw error;
+    }
   }
 }

@@ -2,56 +2,50 @@
 
 ## 1. 文档目的
 
-这份文档用于记录 PlayTest Pro 从“自动化测试工作台”推进到“自动化测试 Agent”的当前进度、最终目标和后续落地边界。
+这份文档用于记录 TestBuddy 从“具备 Agent 执行基础的自动化测试工作台”推进到“自然语言探索沉淀为长期回归”的当前进度、最终目标和后续落地边界。
 
 它回答三个问题：
 
 - 当前已经做到什么程度。
-- 哪些能力只是结构化 stub，还不是真 Agent。
-- 最终要做到什么程度才算接近可用的自动化测试 Agent。
+- 哪些能力已完成离线验证，但还没有真实模型/业务页面证据。
+- 距离 Hybrid Case、project asset 和 Suite 产品契约还有哪些结构性差距。
 
 ## 2. 最终目标
 
-PlayTest Pro 最终要实现一个面向 Web 应用的本地自动化测试 Agent。
+TestBuddy 最终要实现一个面向单个使用者、运行在本地桌面端的 Web UI 智能自动化测试工具。
 
-用户可以通过三种方式发起测试：
+核心价值是让自然语言探索沉淀为长期回归。自然语言是主入口；录制路径和 PRD/PDF 是输入适配器，不再与自然语言形成三套并列产品链路：
 
-- 自然语言：描述测试目标，例如“打开报表页，筛选近 30 天，并验证图表刷新”。
-- 录制路径：录制真实用户操作，然后作为回放和对比依据。
-- PRD/PDF：上传需求文档，由系统分析并生成测试路径。
+- 自然语言描述业务目标，例如“打开报表页，筛选近 30 天，并验证图表刷新”。
+- 录制路径为目标补充真实操作、页面上下文和候选定位。
+- PRD/PDF 为目标补充需求原文、边界和验收标准。
+- 三种输入最终都形成待用户确认的 Hybrid Case 草稿。
 
-Agent 最终要完成完整闭环：
+目标闭环为：
 
 ```text
-Intent -> Plan -> Execute -> Observe -> Verify -> Report -> Asset
+Intent / Adapters -> Explore -> Confirm -> Hybrid Case -> Suite -> Maintain
 ```
 
-含义：
+Hybrid Case 固定包含：
 
-- `Intent`：理解用户输入、录制路径或 PRD。
-- `Plan`：拆解成测试步骤、断言和风险点。
-- `Execute`：控制浏览器执行 navigate、click、input、wait、assert 等动作。
-- `Observe`：采集截图、DOM、URL、标题、console、network、trace。
-- `Verify`：判断文本、DOM、表格、图表、视觉状态是否满足预期。
-- `Report`：生成运行结果、失败原因、证据链和修复建议。
-- `Asset`：沉淀为测试用例、录制资产、PRD 覆盖记录和历史报告。
+- 业务意图。
+- 用户确认的结构化动作、目标和上下文定位指纹。
+- 具有稳定 ID 和显式版本的断言。
+
+回归执行确定性优先。AI 只用于首次探索、受控恢复和明确标记的复杂判断；恢复只能生成维护草稿，不能自动修改 Case、fixture、公共流程或 baseline，也不能改变高风险动作的业务对象、范围、输入和断言语义。
 
 ## 3. 当前整体完成度判断
 
-截至当前实现，项目大致处于：
+不再用单一百分比描述完成度。当前状态按可验证边界分为三层：
 
-- 产品与 UI 工作台：约 70%。
-- 测试资产管理：约 50%。
-- 浏览器 runtime：约 45%。
-- Agent contract 与事件链路：约 45%。
-- 真正智能执行：约 25%。
-- 结果分析与失败归因：约 20%。
+- **代码已实现**：项目、用例、录制、PRD 覆盖治理、运行记录、跨运行覆盖风险、项目级离线 HTML 报告、受控恢复草稿，以及 BrowserRuntime/Workflow/Recording 和 Planner/Verifier/Reporter 请求的取消协议均已进入持久化模型和桌面调用链；已通过的自然语言 Agent Run 可转存为独立、可编辑的 `naturalLanguage` 用例，并保留原始业务意图、发起时的项目/分组/环境，以及待审阅的 V2 结构化 action、定位 fingerprint、风险和运行来源。
+- **离线验证已完成**：状态迁移、风险派生、PRD triage、报告脱敏与 HTML 转义、受控取消（含模型请求、规则降级和 Reporter 产物写入边界）、录制视觉比较异常、表格/图表证据完整度、自然语言运行转 V2 foundation、运行记录命令和工程构建门禁均由单元测试、类型检查、构建和差异检查覆盖；这些验证不调用模型，也不访问业务页面。
+- **需真实模型/业务页面验收**：语义规划、语义点击/输入/选择/断言、复杂第三方网格、真实图表 tooltip/数据结构、视觉阈值和完整证据的业务语义仍需以真实页面样本验收。
 
-综合看，当前已经不是纯 UI 原型，但还不是完整 Agent。
+因此，当前工作台已不是 UI 原型；离线工程边界和结果治理已经成型，但不能把真实模型质量或任意业务页面的兼容性视为已完成。
 
-更准确地说：
-
-> 当前已经具备 Agent 的外壳、数据模型、事件协议和最小浏览器执行雏形；正在从结构化 stub 过渡到真实 Executor。
+当前运行模型仍使用 `running/passed/failed/neutral`。目标 contract 要把 `neutral` 拆为 `blocked/skipped/cancelled/error` 等明确原因，最终终态统一为 `passed/failed/blocked/skipped/cancelled/error`，`flaky` 作为独立标记；这项迁移尚未完成。
 
 ## 4. 已经实现的能力
 
@@ -79,6 +73,7 @@ Intent -> Plan -> Execute -> Observe -> Verify -> Report -> Asset
 - 环境配置。
 - 凭证引用。
 - 测试用例。
+- 已通过的自然语言 Agent Run 可生成独立用例；仅保留用户计划步骤，运行时准备和结果验证等内部步骤不会进入编辑器，生成后仍需人工审阅并主动运行。运行意图会保留提交时选定的项目、分组和环境；旧运行记录缺失该信息时才回退当前选择。
 - 录制资产。
 - PRD 文档资产。
 - 运行摘要 `RunSummary`。
@@ -109,7 +104,7 @@ Intent -> Plan -> Execute -> Observe -> Verify -> Report -> Asset
 
 ### 4.3.1 Agent 角色模型设置
 
-已经具备 Agent 层模型配置入口，用于把 PlayTest Pro 从单一 Midscene 配置推进到多角色 Agent 配置。
+已经具备 Agent 层模型配置入口，用于把 TestBuddy 从单一 Midscene 配置推进到多角色 Agent 配置。
 
 当前 Agent 角色：
 
@@ -156,6 +151,7 @@ Intent -> Plan -> Execute -> Observe -> Verify -> Report -> Asset
 - `AgentTableObservation`
 - `AgentChartObservation`
 - `AgentSelectorFallbackAttempt`
+- `AgentRunCancellation`
 
 当前自然语言测试已经开始走：
 
@@ -329,6 +325,7 @@ fill #password with 123456
 - 明确 selector 的 `click`、`input`、`select` 首次失败后，会在同 selector 重试前按 `selector visible -> network idle -> timeout` 的顺序做一次动态等待；如果当前浏览器 runtime 不支持 selector readiness，会尝试 `networkidle`，再不支持才回退为 500ms 页面稳定等待。等待结果会写入 `agent:dynamic-wait` 事件和 `metrics.dynamicWaitAttempts`，selector 等待会额外记录目标 selector，network idle 等待会记录 `strategy: networkIdle`。
 - 首次失败尝试会写入 `agent:step-retried` 结构化事件，实际重试次数写入 `metrics.retryAttempts`；断言和语义模型动作不会进入这条盲重试路径。
 - 确定性浏览器步骤失败会生成结构化 `failureCategory`，当前覆盖 selector、timeout、navigation、network、assertion、runtime 和 unknown；该分类会映射为 `recoveryStrategy`，当前覆盖 replaceSelector、waitForReadiness、replanNavigation、stopAndReport、retryAfterWait 和 replanFromCurrentState。分类和策略会写入 retry attempt、验证结果和 Planner 重规划的 previousFailure。
+- `stopAndReport` 已直接决定恢复路径：无论失败发生在 assert 还是语义 click/input 等可重规划动作中，只要归类为 assertion，就停止同计划重试和 Planner 重规划，保留证据交给 Verifier / Reporter，避免自动绕过业务断言。
 - `waitForReadiness` 已开始直接驱动恢复路径：网络失败且计划步骤明确给出 URL 或 `/api/...` 路径时，先等待该接口的下一次成功响应；没有稳定接口信息时，timeout/network 类失败若上下文明确涉及 table/list/grid/data/chart 等数据加载语义则优先等待页面数据就绪，其他情况等待页面网络空闲，减少数据仍在加载时的盲重试。动态等待无论成功或失败都会保留实际 strategy、超时、selector 或接口模式；就绪等待失败时会跳过原操作重试和 selector fallback，直接交给 Planner 基于当前页面状态重规划。
 - `retryAfterWait` 已开始直接驱动恢复路径：滚动、观察等可安全重试的确定性运行时异常会先等待页面网络空闲，浏览器不支持该能力时才回退为短暂稳定等待；导航异常仍保守地走 `replanNavigation`，不重复访问可能不可达的地址。
 - `replanNavigation` 已开始直接驱动恢复路径：导航失败会跳过同 URL 重试，直接进入 Planner 重规划，避免把不可达地址重复执行两次。
@@ -341,7 +338,7 @@ fill #password with 123456
 - 重规划请求会跨所有恢复轮次累积携带已通过步骤的动作、证据和对应页面 URL，Planner 只生成当前状态之后的后续步骤；执行器会剔除与任一已完成步骤完全相同的有副作用动作，`agent:plan-revised` 会记录累计保留的前置步骤数，避免已完成的输入或点击在后续修订中被重复执行。
 - 重规划历史覆盖动态等待、重试、selector fallback、观察、验证、浏览器状态、截图和报告产物；截图和报告按路径跨轮次去重，选择重规划事件可查看同一步骤的关联证据，Reporter 在失败或等待态运行中接收结构化重规划上下文。
 - 真实 Playwright 会话已改为 BrowserContext。自然语言 Agent、Workflow 与录制回放在运行开始时启用 tracing，运行结束时将 Trace `.zip` 归档到 `studio-data/artifacts`；Trace 会同步追加为 `AgentRunResult` 和运行记录 artifact，并产生 `agent:artifact-created` 事件。stub 或浏览器启动失败时不生成伪造 Trace。
-- 断言失败不会被自动重规划吞掉，仍交给 Verifier / Report 链路明确呈现。
+- 断言失败不会被自动重规划吞掉；即使断言失败来自可重规划的语义动作，也仍交给 Verifier / Report 链路明确呈现。
 
 规则降级目前能识别：
 
@@ -386,7 +383,7 @@ fill #password with 123456
 还没有完成：
 
 - 使用真实模型凭证和真实业务页面完成首条端到端验收。
-- Midscene 语义动作自身仍只暴露配置的重规划上限；PlayTest Planner 层已经记录配置上限和实际重规划次数。
+- Midscene 语义动作自身仍只暴露配置的重规划上限；TestBuddy Planner 层已经记录配置上限和实际重规划次数。
 - 表格/图表结构化观察已经接入，真实专项断言仍待实现。
 
 ### 5.3 Verifier 已有规则断言和独立模型路由
@@ -454,8 +451,8 @@ fill #password with 123456
 - 表格行数/列数断言基于 `AgentObservation.tables` 做严格数值比较。
 - 表格单元格断言基于 `AgentObservation.tables.sampleRows` 做严格相等比较，当前以观察到的样例行为准。
 - 表格列包含断言基于表头定位列，并在 `AgentObservation.tables.sampleRows` 中查找目标值。
-- 表格列合计断言基于表头定位列，并对 `AgentObservation.tables.sampleRows` 中可解析的数值单元格求和。
-- 表格排序断言优先基于 `AgentObservation.tables.sortStates` 做列名与方向严格匹配；没有排序状态时，会基于表头和样例行推断升序/降序。
+- 表格列合计断言只读取显式 `aggregates`；样例行不再被当作全量数据求和。
+- 表格排序断言只接受显式 `sortStates`；没有排序状态时保持 `neutral`，不从样例行推断顺序。
 - 表格筛选断言基于表格范围内具有 `data-filter` 的控件状态；筛选名称和当前值必须严格匹配。
 - 表格分页断言基于 `data-current-page`、`data-total-pages`、`data-total-items`、`data-page-size`、`aria-rowcount` 或明确分页导航的当前页/页数文本；AG Grid、MUI、Ant Design、Element Plus 已知分页根节点中的非末页范围文本（例如 `1 to 10 of 36`）也会被严格归一为当前页、每页条数、总条数和总页数。末页不足一页的范围只保留可确定的总条数，不把剩余条数猜作 page size。没有可识别元数据时不会推断状态。
 - 表格聚合值断言基于 `tfoot` 中按表头或 `data-aggregate` 标记采集的值；它与仅对样例行求和的列合计断言保持区分。
@@ -472,6 +469,7 @@ fill #password with 123456
 - 图表系列数据点断言会同时匹配 `data-series` / `data-series-name`、标签和值；例如“买入系列二月为 180”不会因为卖出系列二月为 `180` 而通过。数据系列可与图表标题一起限定。
 - 图表系列趋势断言优先读取指定系列的 `data-series-trend`，否则才根据该系列至少两个显式数值点的顺序判断上升、下降、平稳或混合；证据不足时不会通过。显式标记会覆盖数据点推导结果，系列趋势会同时写入运行记录的图表证据。
 - 图表趋势断言优先使用 `data-trend`；未标注时仅在单系列（或没有系列信息）的至少两个结构化数值点单调上升、单调下降、完全持平或混合时给出对应趋势。多个不同系列的交错数值不会自动推导趋势。
+- 涉及表格总行数、合计、排序、分页和图表数据/趋势的结论要求 `evidenceCompleteness: complete`；局部虚拟化或未知证据一律保持 `neutral`，不从可见样例推断全量结论。
 - 复杂语义断言会携带 URL、标题、DOM 摘要、文本摘要、表格和图表观察结果进入 Verifier 模型。
 - Verifier 模型必须返回 `passed`、`failed` 或 `neutral` 结构化结果；证据不足时保持 `neutral`，不会默认通过。
 - Verifier 模型 usage 会合并进入 Agent Run metrics，并且 API Key 不写入运行记录。
@@ -566,59 +564,36 @@ fill #password with 123456
 
 ## 6. 最终要实现到什么程度
 
-### 6.1 MVP Agent
+### 6.1 产品契约
 
-MVP Agent 要达到：
+- 自然语言是主入口，录制和 PRD 统一生成待确认的 Hybrid Case 草稿。
+- Hybrid Case 保存业务意图、用户确认的动作/目标、上下文定位指纹和显式版本化断言。
+- 不要求被测应用提供 `data-testid`；以语义 HTML、ARIA、公开 DOM 和定位质量为契约。
+- project directory 保存 cases、suites、fixtures、reusable flows 和 baselines；`studio-data` 只保存 runs、artifacts、credentials 和 cache。
+- typed fixture 同时声明 setup/cleanup、输入输出、资源和版本；默认优先 HTTP，自定义脚本需要显式信任。
+- 认证使用 `storageState`，Case 只保存逻辑引用。
+- 本地运行 10–100 case Suite，使用有限并发和资源锁；桌面/CLI 共用 Runner，不启动后台 daemon。
+- 公共流程固定引用具体版本，升级前提供影响分析。
+- Chromium 为稳定基线，Firefox/WebKit 为实验性。
+- 支持 iframe、tab、upload/download、hover、drag、clipboard、network assertion 和 explicit mock。
+- 页面变化、AI 恢复和 flaky 风险进入维护队列；资产只在用户确认后创建新版本。
+- 日志、报告、模型输入和 artifact 元数据执行脱敏，并按类型应用保留策略。
 
-- 用户能输入自然语言测试目标。
-- Agent 能启动浏览器。
-- Agent 能执行明确动作。
-- Agent 能基于页面状态做基础断言。
-- 每一步有结构化日志。
-- 每次执行有截图。
-- 失败时能定位到具体步骤。
-- 结果能进入运行记录。
-- 成功路径能保存为用例。
+### 6.2 完成定义
 
-MVP 支持的动作：
+- 新用户在 15 分钟内保存并成功复跑首个 Hybrid Case。
+- 同一 20 case Suite 在桌面端和 CLI 的选取、调度、终态和报告口径一致。
+- 稳定页面在等价环境下连续运行 10 轮，干净通过率不低于 95%。
+- 页面变化形成保留原资产、证据和影响范围的维护草稿，不发生自动资产改写。
 
-- navigate
-- click
-- input
-- wait
-- assert url
-- assert title
-- assert text
-- screenshot observation
+### 6.3 非目标
 
-### 6.2 可试用 Agent
-
-可试用版本要达到：
-
-- 支持 Midscene 语义定位。
-- 支持“点击登录按钮”这类语义点击。
-- 支持“在用户名输入 chris”这类语义输入。
-- 支持表格基础断言。
-- 支持图表存在性、标题、图例、tooltip 或数据区域断言。
-- 支持 PRD 生成测试路径。
-- 支持录制路径回放和对比。
-- 运行记录能查看截图和失败原因。
-
-### 6.3 产品化 Agent
-
-产品化版本要达到：
-
-- 多步骤 Agent planning。
-- 动态页面等待策略。
-- selector fallback。
-- 失败后有限重试和重新定位。
-- DOM + vision 双通道判断。
-- 图表和表格专项 verifier。
-- PRD 覆盖矩阵。
-- 报告导出。
-- CI/命令行执行预留。
-- 凭证安全存储。
-- 运行产物文件化管理。
+- 多人协作、账号体系和 RBAC。
+- 云同步、分布式执行和后台调度服务。
+- 内置 Git。
+- 完整 API、移动端或性能测试平台。
+- 验证码绕过。
+- 跨桌面应用自动化。
 
 ## 7. 与最终目标的差距
 
@@ -649,14 +624,15 @@ MVP 支持的动作：
 
 ### 仍然距离较远的部分
 
-- 真实模型与业务页面的稳定性验收。
-- Verifier / Reporter 独立模型路由的真实模型验收。
-- 更完整的 verifier。
-- 失败归因。
-- PRD 模型语义复核在真实复杂文档上的质量验收，以及覆盖矩阵驱动的批量缺口治理。
-- 图表和表格高级断言。
-- 运行报告体系。
-- 稳定性工程。
+- Hybrid Case V2 的意图、用户确认目标、定位指纹和断言版本 contract。
+- Project asset 从 `studio-data/state.json` 拆到 project directory。
+- typed fixtures、HTTP setup/cleanup、storageState 生命周期和 script trust。
+- 六种终态与独立 flaky 标记，替代 `neutral` 的混合语义。
+- 10–100 case Suite 的有限并发、资源锁和桌面/CLI 单一 Runner。
+- 固定版本 reusable flows 和升级影响分析。
+- 统一维护队列、完整脱敏和分类保留策略。
+- iframe/tab/upload/download/hover/drag/clipboard/network assertion/explicit mock。
+- Chromium 真实稳定性验收，以及 Firefox/WebKit 实验性验证。
 
 ### 已完成的工程化执行入口
 
@@ -679,67 +655,42 @@ MVP 支持的动作：
 
 ## 8. 下一步推进顺序
 
-建议继续按以下顺序推进：
+后续严格按阶段依赖推进：
 
-1. Midscene 真实环境验收与证据归档。
-   - 使用已配置模型完成 semantic click / input / assert 首条真实路径。
-   - 核验模型错误、耗时、usage、报告和截图证据是否完整且与供应商账单口径一致。
+1. **Regression Case V2**：Hybrid Case、版本化断言、定位指纹、六种终态和 flaky。
+2. **Project Asset Store**：project directory 与 `studio-data` 分离、旧状态审阅式迁移。
+3. **Fixtures / Auth**：typed setup/cleanup、HTTP 默认、script trust 和 storageState。
+4. **Suite Runner**：10–100 case、本地有限并发、资源锁、桌面/CLI 同 Runner、无 daemon。
+5. **Reusable Flows**：固定版本引用、反向引用和升级影响分析。
+6. **Maintenance / Safety**：统一维护队列、AI 只写草稿、脱敏和保留策略。
+7. **Interaction Breadth**：iframe、tab、upload/download、hover、drag、clipboard、network assertion/mock，以及实验性 Firefox/WebKit。
+8. **Real Acceptance**：15 分钟首用例、20 case 桌面/CLI 一致、稳定页面 10 轮不低于 95% 干净通过、变化形成维护草稿。
 
-2. Agent 动态重规划与角色模型路由。
-   - 已完成 selector readiness 动态等待、特定接口响应等待、图表稳定判断、数据就绪判断、失败分类、恢复策略建议、`waitForReadiness` 策略驱动数据就绪或网络空闲等待、`replanNavigation` 与 `replanFromCurrentState` 策略驱动重规划、`replaceSelector` 策略驱动 selector fallback、500ms 回退等待、Planner 条件化 wait、单次确定性动作重试、受控 selector fallback、语义 `select`、携带已完成前缀的跨步骤连续重规划、配置上限内多轮 Planner 重规划和跨轮次证据历史，后续让更多恢复策略直接驱动路径选择。
-   - Verifier 使用独立模型做复杂语义断言和失败归因。
-   - Reporter 使用独立模型生成结构化报告和修复建议。
-   - Executor 继续默认复用 Midscene，也允许切换独立执行模型策略。
-
-3. 表格与图表专项 Verifier。
-   - 扩展无结构钩子的第三方数据网格读取，以及更多跨框架筛选、分页和聚合值信号。
-   - 扩展 Canvas/SVG 与第三方图表库的结构化数据区域和视觉趋势读取；当前仅采集可可靠归属的 tooltip，不从像素或未标注文本猜测数据点。
-   - 将结构化观察转换为可判定的 verification evidence。
-
-4. 录制回放视觉比较。
-   - 像素差异与 diff 图片。
-   - 已完成动态区域遮罩和阈值。
-   - 已完成图表动画稳定策略，待真实业务图表页验收。
-
-5. PRD Planner 接入。
-   - 已完成文档摘要、规则化需求提取和测试路径生成。
-   - Markdown 标题、列表与正文中的可验收条款会被去重并最多生成 8 条路径；每条路径保留原文摘录、覆盖域、保守优先级和可编辑的“进入、执行、断言”步骤。
-   - 已完成路径写入正式用例或录制草稿，并以 `documentId + pathId` 显示稳定覆盖状态；资产改名、同名条款或重新分析未变更条款不会误判覆盖，历史资产保留名称回退兼容。PRD 来源会随执行进入 Agent Run、RunDetail 和运行列表。
-   - 已接入 Planner 角色模型进行受限语义复核：模型仅能细化规则已抽取的候选路径，保留原文摘录与稳定 `pathId`；模型未配置、停用、请求失败或返回越界路径时自动保留规则结果并在文档页显示降级原因。
-- 已提供项目级 PRD 覆盖矩阵，汇总全部文档路径与对应的用例、录制状态，优先使用 `documentId + pathId`，同时保留历史资产兼容匹配；未覆盖路径可直接写入用例或录制草稿，也可跨文档一次性写入全部缺口用例或录制草稿，并按缺用例、缺录制、完全未覆盖和治理状态筛选。
-- 矩阵内已提供本地缺口治理：以 `documentId + pathId + target` 记录用例/录制的延后或忽略决定，必须填写说明和更新时间；资产覆盖生成后显示已解决但不删除说明，文档或路径失效时会清理决策。应用没有登录或成员体系，因此不做分派、通知或外部协作同步。
-- 待以真实模型/复杂 PRD 验收跨段落条件关联质量；成员分派仅在未来具备成员体系后再评估。
+前序 contract 未稳定时，后序能力不得通过临时资产格式、Runner 分支或自动写回旁路提前落地。
 
 ## 9. 当前验收状态
 
-当前最近一次验证：
+离线质量门禁统一为：
 
 ```text
-pnpm test
-pnpm build
-git diff --check
+pnpm check
 ```
 
-当前测试覆盖数量：
+它按顺序执行全量单元测试、`tsc --noEmit`、生产构建和 `git diff --check`。非首屏页面已采用 route-level dynamic import，并使用不改变主区域尺寸的加载占位；不再把之前的主包体积警告当作已知遗留项。
 
-```text
-37 files / 259 tests passed
-```
+最近一次离线门禁结果：38 个测试文件、281 个测试通过；类型检查、renderer/Electron 构建和差异检查均通过。
 
-注意：
-
-- 构建存在 Vite chunk size warning。
-- 该 warning 暂不影响功能。
-- 后续可通过 route-level dynamic import 或 manualChunks 优化。
+这层验证不启动应用、不调用模型、不访问业务页面。真实模型和业务页面验收仍应单独记录输入页面、模型配置、可复现步骤和证据产物。
 
 ## 10. 当前开发原则
 
 继续推进时遵守：
 
-- 不再只做 UI。
-- 每个新功能都必须进入 Agent 闭环。
-- 能真实执行的动作才真实执行。
-- 不确定 selector 的语义动作不硬猜，交给 Midscene。
-- 所有执行过程必须结构化记录。
-- 失败必须可诊断。
-- 生成的测试资产必须可编辑。
+- 自然语言主入口，录制/PRD 只做输入适配。
+- 用户确认后才形成长期资产。
+- 确定性优先，AI 仅用于恢复和复杂判断。
+- AI 不自动修改资产，高风险恢复不改变业务语义。
+- 不要求 `data-testid`，以语义 HTML、ARIA、公开 DOM 和定位质量为契约。
+- Desktop/CLI 共用 Runner，不增加后台 daemon。
+- 所有执行过程结构化记录，状态和 flaky 不混用。
+- 每项能力明确代码实现、离线验证和真实验收边界。

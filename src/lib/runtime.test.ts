@@ -39,6 +39,21 @@ describe('browser fallback agent runtime', () => {
     );
   });
 
+  it('preserves the source group and environment in fallback natural-language runs', async () => {
+    const response = await sendChatCommand({
+      ...request,
+      projectId: 'project-orders',
+      groupId: 'group-orders',
+      environmentId: 'env-staging',
+    });
+
+    expect(response.agentRun.intent).toMatchObject({
+      projectId: 'project-orders',
+      groupId: 'group-orders',
+      environmentId: 'env-staging',
+    });
+  });
+
   it('keeps workflow runs neutral instead of simulating a pass', async () => {
     const response = await runWorkflow({
       workflow: {
@@ -206,6 +221,28 @@ describe('browser fallback agent runtime', () => {
     await expect(runtime.exportArtifact('/tmp/playtest-artifacts/agent-run-1-reporter.html')).resolves.toBe(true);
 
     expect(desktopApi.exportArtifact).toHaveBeenCalledWith('/tmp/playtest-artifacts/agent-run-1-reporter.html');
+    window.desktopApi = originalDesktopApi;
+  });
+
+  it('delegates project report export to the desktop bridge', async () => {
+    const originalDesktopApi = window.desktopApi;
+    const desktopApi = { exportProjectReport: vi.fn().mockResolvedValue(true) } as unknown as DesktopApi;
+    window.desktopApi = desktopApi;
+
+    await expect(runtime.exportProjectReport({ projectId: 'project-1', locale: 'zh-CN' })).resolves.toBe(true);
+
+    expect(desktopApi.exportProjectReport).toHaveBeenCalledWith({ projectId: 'project-1', locale: 'zh-CN' });
+    window.desktopApi = originalDesktopApi;
+  });
+
+  it('delegates cancellation to the desktop bridge', async () => {
+    const originalDesktopApi = window.desktopApi;
+    const desktopApi = { cancelRun: vi.fn().mockResolvedValue(true) } as unknown as DesktopApi;
+    window.desktopApi = desktopApi;
+
+    await expect(runtime.cancelRun('run-active')).resolves.toBe(true);
+
+    expect(desktopApi.cancelRun).toHaveBeenCalledWith('run-active');
     window.desktopApi = originalDesktopApi;
   });
 

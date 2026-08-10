@@ -213,4 +213,136 @@ describe('RecordingRunner', () => {
       expect.arrayContaining([expect.objectContaining({ label: '差异 · 报表快照', path: '/tmp/report-actual-diff.png' })]),
     );
   });
+
+  it('marks an interrupted replay and remaining recording nodes as neutral', async () => {
+    const project = createEmptyProject(1);
+    const environment = project.environments[0]!;
+    const recording = {
+      id: 'recording-cancelled',
+      name: '可取消回放',
+      summary: '',
+      source: 'live' as const,
+      groupId: project.groups[0]!.id,
+      environmentId: environment.id,
+      startUrl: environment.url,
+      comparisonGoal: '回放完成',
+      tags: [],
+      createdAt: new Date(0).toISOString(),
+      updatedAt: new Date(0).toISOString(),
+      steps: [
+        { id: 'recording-step-wait', kind: 'wait' as const, title: '等待页面', detail: '等待页面稳定' },
+        { id: 'recording-step-next', kind: 'click' as const, title: '继续操作', detail: '点击后续按钮' },
+      ],
+    };
+    let beginReplay: () => void = () => undefined;
+    const replayStarted = new Promise<void>((resolve) => {
+      beginReplay = resolve;
+    });
+    const replayRecordingSteps = vi.fn(() => {
+      beginReplay();
+      return new Promise<RecordingReplayResult[]>(() => undefined);
+    });
+    const emitRunEvent = vi.fn<(event: RunEventPayload) => void>();
+    const runner = new RecordingRunner(
+      {
+        start: vi.fn().mockResolvedValue({
+          id: 'session-recording',
+          status: 'ready',
+          currentUrl: environment.url,
+          message: 'ready',
+          updatedAt: new Date(0).toISOString(),
+        }),
+        navigate: vi.fn(),
+        replayRecordingSteps,
+      } as never,
+      emitRunEvent,
+    );
+    const controller = new AbortController();
+    const pending = runner.run({ project, environment, recording, cancellationSignal: controller.signal });
+
+    await replayStarted;
+    controller.abort();
+    const response = await pending;
+
+    expect(replayRecordingSteps).toHaveBeenCalledWith(recording.steps, response.runId, controller.signal);
+    expect(response.detail.status).toBe('neutral');
+    expect(response.detail.cancellation).toEqual(expect.objectContaining({ source: 'user', reason: 'userCancelled' }));
+    expect(response.detail.steps).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ stepId: 'recording-step-wait', status: 'neutral' }),
+        expect.objectContaining({ stepId: 'recording-step-next', status: 'neutral' }),
+      ]),
+    );
+    expect(response.agentRun.events).toContainEqual(
+      expect.objectContaining({ type: 'agent:run-cancelled', status: 'neutral' }),
+    );
+    expect(emitRunEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'complete', status: 'neutral', detail: response.detail }),
+    );
+  });
+
+  it('keeps a rejected visual comparison as neutral evidence without dropping replay artifacts', async () => {
+    const project = createEmptyProject(1);
+    const environment = project.environments[0]!;
+    const recording = {
+      id: 'recording-visual-error',
+      name: '视觉比较异常',
+      summary: '',
+      source: 'live' as const,
+      groupId: project.groups[0]!.id,
+      environmentId: environment.id,
+      startUrl: environment.url,
+      comparisonGoal: '页面与基线一致',
+      tags: [],
+      createdAt: new Date(0).toISOString(),
+      updatedAt: new Date(0).toISOString(),
+      steps: [
+        {
+          id: 'recording-step-snapshot',
+          kind: 'snapshot' as const,
+          title: '报表快照',
+          detail: '保存报表页面',
+          screenshotPath: '/tmp/report-baseline.png',
+        },
+      ],
+    };
+    const runner = new RecordingRunner(
+      {
+        start: vi.fn().mockResolvedValue({
+          id: 'session-visual-error',
+          status: 'ready',
+          currentUrl: environment.url,
+          message: 'ready',
+          updatedAt: new Date(0).toISOString(),
+        }),
+        navigate: vi.fn(),
+        replayRecordingSteps: vi.fn().mockResolvedValue([
+          {
+            step: recording.steps[0],
+            status: 'passed',
+            message: '已回放：报表快照',
+            screenshotPath: '/tmp/report-actual.png',
+          },
+        ]),
+      } as never,
+      vi.fn(),
+      { compare: vi.fn().mockRejectedValue(new Error('baseline image is corrupt')) } as never,
+    );
+
+    const response = await runner.run({ project, environment, recording });
+
+    expect(response.agentRun.status).toBe('neutral');
+    expect(response.agentRun.events).toContainEqual(
+      expect.objectContaining({
+        type: 'agent:assertion-result',
+        verification: expect.objectContaining({ status: 'neutral', summary: expect.stringContaining('视觉对比不可用') }),
+      }),
+    );
+    expect(response.detail.artifacts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ path: '/tmp/report-baseline.png' }),
+        expect.objectContaining({ path: '/tmp/report-actual.png' }),
+      ]),
+    );
+  });
 });

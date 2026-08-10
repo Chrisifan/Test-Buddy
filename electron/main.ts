@@ -4,11 +4,13 @@ import { fileURLToPath } from 'node:url';
 import { app, BrowserWindow, dialog, ipcMain, nativeImage, shell } from 'electron';
 
 import {
+  deriveProjectRunReport,
   type BrowserNavigateRequest,
   type BrowserSessionRequest,
   type ChatCommandRequest,
   type MidsceneConfig,
   type ProjectDraft,
+  type ProjectReportExportRequest,
   type PrdSemanticAnalysisRequest,
   type RuntimeInfo,
   type RunRecordingRequest,
@@ -165,7 +167,7 @@ function registerIpcHandlers(): void {
     return result;
   });
   ipcMain.handle('runtime:run-recording', async (_event, request: RunRecordingRequest) => {
-    const result = await getRuntimeBundleOrThrow().recordingRunner.run(request);
+    const result = await getRuntimeBundleOrThrow().runRecording(request);
     const state = await getStoreOrThrow().load();
     await getStoreOrThrow().save(
       appendRunToStudioState(
@@ -176,6 +178,47 @@ function registerIpcHandlers(): void {
       ),
     );
     return result;
+  });
+  ipcMain.handle('runtime:cancel-run', async (_event, runId: string): Promise<boolean> => {
+    if (typeof runId !== 'string' || !runId.trim()) {
+      throw new Error('运行 ID 无效。');
+    }
+    return getRuntimeBundleOrThrow().cancelRun(runId);
+  });
+  ipcMain.handle('runtime:export-project-report', async (_event, request: ProjectReportExportRequest): Promise<boolean> => {
+    if (
+      !request ||
+      typeof request.projectId !== 'string' ||
+      !request.projectId.trim() ||
+      (request.locale !== 'zh-CN' && request.locale !== 'en-US')
+    ) {
+      throw new Error('项目报告请求无效。');
+    }
+    const state = await getStoreOrThrow().load();
+    const project = state.projects.find((item) => item.id === request.projectId);
+    if (!project) {
+      throw new Error('项目不存在，无法导出报告。');
+    }
+
+    const artifactManager = getRuntimeBundleOrThrow().artifactManager;
+    const reportPath = await artifactManager.createProjectRunReport(
+      deriveProjectRunReport(project, state.recentRuns, state.runDetails),
+      request.locale,
+    );
+    try {
+      const result = await dialog.showSaveDialog({
+        defaultPath: path.join(app.getPath('downloads'), `testbuddy-${safeFileSegment(project.name)}-report.html`),
+        title: request.locale === 'en-US' ? 'Export project report' : '导出项目报告',
+        filters: [{ name: 'HTML', extensions: ['html'] }],
+      });
+      if (result.canceled || !result.filePath) {
+        return false;
+      }
+      await artifactManager.exportArtifact(reportPath, result.filePath);
+      return true;
+    } finally {
+      await artifactManager.removeArtifact(reportPath);
+    }
   });
   ipcMain.handle('runtime:load-run-detail', async (_event, runId: string) => {
     const state = await getStoreOrThrow().load();
@@ -236,8 +279,13 @@ function registerIpcHandlers(): void {
     getRuntimeOrThrow().sendChatCommand(request),
   );
   ipcMain.handle('runtime:run-workflow', async (_event, request: RunWorkflowRequest) =>
-    getRuntimeOrThrow().runWorkflow(request),
+    getRuntimeBundleOrThrow().runWorkflow(request),
   );
+}
+
+function safeFileSegment(value: string): string {
+  const normalized = value.trim().replace(/[^a-zA-Z0-9_-]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+  return normalized || 'project';
 }
 
 app.whenReady().then(async () => {
