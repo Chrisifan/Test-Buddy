@@ -256,6 +256,8 @@ export interface RunDeterministicStepRequest {
   plannedStep: AgentPlanStepDraft;
   /** A reference only. The resolved value must never enter the Agent plan or run evidence. */
   inputBinding?: TestInputValueBinding;
+  /** Per-run main-process resolver for a transient Fixture output. Never crosses IPC. */
+  inputBindingResolver?: DeterministicInputBindingResolver;
   assertion?: ExplicitTestAssertion;
   testCaseId: string;
   targetEnvironment: string;
@@ -3798,17 +3800,18 @@ export class StudioRuntime {
     request: RunDeterministicStepRequest & { inputBinding: TestInputValueBinding },
   ): Promise<BrowserPreparationResult> {
     const action = request.sourceStep.execution?.action;
+    const inputBindingResolver = request.inputBindingResolver ?? this.deterministicInputBindingResolver;
     if (
       !this.browserObserver ||
       (action?.kind !== 'input' && action?.kind !== 'select') ||
       !request.project?.id ||
-      !this.deterministicInputBindingResolver
+      !inputBindingResolver
     ) {
       return {
-        message: '凭据输入绑定不可用，未读取凭据且未派发浏览器动作。',
+        message: '输入值绑定不可用，未读取值且未派发浏览器动作。',
         assertionEvaluation: {
           status: 'neutral',
-          summary: '凭据输入绑定不可用。',
+          summary: '输入值绑定不可用。',
           evidence: '当前运行缺少项目上下文或受控凭据解析器。',
         },
       };
@@ -3818,7 +3821,7 @@ export class StudioRuntime {
     let value: string;
     try {
       value = await awaitWithRunCancellation(
-        this.deterministicInputBindingResolver.resolve({
+        inputBindingResolver.resolve({
           projectId: request.project.id,
           binding: request.inputBinding,
         }),
@@ -3830,10 +3833,10 @@ export class StudioRuntime {
       }
       return {
         session,
-        message: '凭据输入绑定无法解析，未派发浏览器动作。',
+        message: '输入值绑定无法解析，未派发浏览器动作。',
         assertionEvaluation: {
           status: 'neutral',
-          summary: '凭据输入绑定无法解析。',
+          summary: '输入值绑定无法解析。',
           evidence: (error as Error).message || '凭据引用不可用。',
         },
       };
@@ -3848,7 +3851,7 @@ export class StudioRuntime {
       return {
         session: nextSession,
         inputSelector: action.locator.selector,
-        message: `已使用已确认的凭据引用填写 selector：${action.locator.selector}`,
+        message: `已使用已确认的输入值引用填写 selector：${action.locator.selector}`,
       };
     }
 
@@ -3859,7 +3862,7 @@ export class StudioRuntime {
         assertionEvaluation: {
           status: 'neutral',
           summary: '下拉选择执行器不可用。',
-          evidence: '凭据值未传递给未接入的浏览器执行器。',
+          evidence: '输入值未传递给未接入的浏览器执行器。',
         },
       };
     }
@@ -3870,7 +3873,7 @@ export class StudioRuntime {
     return {
       session: nextSession,
       selectedSelector: action.locator.selector,
-      message: `已使用已确认的凭据引用选择 selector：${action.locator.selector}`,
+      message: `已使用已确认的输入值引用选择 selector：${action.locator.selector}`,
     };
   }
 

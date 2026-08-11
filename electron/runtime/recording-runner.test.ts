@@ -85,6 +85,48 @@ describe('RecordingRunner', () => {
     );
   });
 
+  it('does not replay nodes when a bound authentication state blocks browser startup', async () => {
+    const project = createEmptyProject(1);
+    const environment = { ...project.environments[0]!, storageStateId: 'state-expired' };
+    const recording = {
+      id: 'recording-auth-blocked',
+      name: '认证后页面回放',
+      summary: '',
+      source: 'live' as const,
+      groupId: project.groups[0]!.id,
+      environmentId: environment.id,
+      startUrl: environment.url,
+      comparisonGoal: '回放完成',
+      tags: [],
+      createdAt: new Date(0).toISOString(),
+      updatedAt: new Date(0).toISOString(),
+      steps: [{ id: 'recording-step', kind: 'snapshot' as const, title: '登录后快照', detail: '保存快照' }],
+    };
+    const replayRecordingSteps = vi.fn();
+    const runner = new RecordingRunner(
+      {
+        start: vi.fn().mockResolvedValue({
+          id: 'session-auth-error',
+          status: 'error',
+          currentUrl: environment.url,
+          pageTitle: project.name,
+          message: '认证状态已过期，请重新导入后再启动浏览器。',
+          updatedAt: new Date(0).toISOString(),
+        }),
+        navigate: vi.fn(),
+        replayRecordingSteps,
+      },
+      vi.fn(),
+    );
+
+    const response = await runner.run({ project, environment, recording });
+
+    expect(replayRecordingSteps).not.toHaveBeenCalled();
+    expect(response.detail.status).toBe('neutral');
+    expect(response.detail.summary).toContain('认证状态已过期');
+    expect(response.detail.steps).toEqual([expect.objectContaining({ status: 'neutral' })]);
+  });
+
   it('attaches an archived trace to recording evidence when the browser runtime provides one', async () => {
     const project = createEmptyProject(1);
     const environment = project.environments[0];

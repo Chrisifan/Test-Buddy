@@ -82,8 +82,14 @@ export interface BrowserObservationSnapshot {
   charts: AgentChartObservation[];
 }
 
+/** Main-process-only resolver. Serialized authentication state never crosses renderer IPC. */
+export interface BrowserStorageStateResolver {
+  resolve: (projectId: string, storageStateId: string) => Promise<{ serializedState: string }>;
+}
+
 type PlaywrightContext = {
   newPage: () => Promise<PlaywrightPage>;
+  storageState: () => Promise<unknown>;
   tracing: {
     start: (options?: { screenshots?: boolean; snapshots?: boolean; sources?: boolean }) => Promise<unknown>;
     stop: (options?: { path?: string }) => Promise<unknown>;
@@ -125,6 +131,7 @@ export class BrowserRuntime {
     private readonly rootDir: string,
     private readonly artifacts: ArtifactManager,
     private readonly emitRecordingEvent?: (event: RecordingCapturedEvent) => void,
+    private readonly storageStateResolver?: BrowserStorageStateResolver,
   ) {
     this.state = {
       id: 'session-idle',
@@ -157,6 +164,24 @@ export class BrowserRuntime {
       message: '正在启动受控浏览器会话。',
     });
 
+    let storageState: string | undefined;
+    if (request.environment.storageStateId) {
+      try {
+        if (!this.storageStateResolver) {
+          throw new Error('认证状态执行器尚未初始化。');
+        }
+        storageState = (await this.storageStateResolver.resolve(
+          request.project.id,
+          request.environment.storageStateId,
+        )).serializedState;
+      } catch (error) {
+        return this.patchState({
+          status: 'error',
+          message: error instanceof Error ? error.message : '认证状态无法解析，未启动浏览器会话。',
+        });
+      }
+    }
+
     const loaded = await loadPlaywright();
     const launcher = loaded?.[request.environment.browser] ?? loaded?.chromium;
     if (!launcher) {
@@ -181,6 +206,7 @@ export class BrowserRuntime {
       this.context = await this.browser.newContext({
         locale: request.environment.locale,
         viewport: viewportFor(request.environment.viewport),
+        ...(storageState ? { storageState } : {}),
       });
       await this.startPendingTrace();
       this.page = await this.context.newPage();
@@ -720,6 +746,18 @@ export class BrowserRuntime {
       screenshotPath,
       message: '已捕获当前页面截图。',
     });
+  }
+
+  /** Main-process-only snapshot of the authenticated context, never sent to the renderer. */
+  async captureStorageState(projectId: string): Promise<string> {
+    if (!this.context || this.state.status !== 'ready' || this.state.projectId !== projectId) {
+      throw new Error('当前没有属于此项目的真实浏览器会话，无法捕获认证状态。');
+    }
+    try {
+      return JSON.stringify(await this.context.storageState());
+    } catch {
+      throw new Error('无法从当前浏览器会话捕获认证状态。');
+    }
   }
 
   async getPageText(): Promise<string> {

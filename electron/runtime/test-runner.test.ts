@@ -3,6 +3,8 @@ import { describe, expect, it, vi } from 'vitest';
 import type {
   BrowserSessionRequest,
   BrowserSessionState,
+  FixtureAsset,
+  FixtureLifecycleEvidence,
   ProjectDraft,
   ProjectEnvironment,
   RecordingStepDraft,
@@ -12,9 +14,393 @@ import type {
 import { createEmptyProject } from '../../shared/studio.js';
 import { createStubAgentRun } from '../../shared/agentStub.js';
 import type { RecordingReplayResult } from './browser-runtime.js';
+import type { FixtureLifecycleExecutor } from './fixture-http-executor.js';
 import { TestRunner } from './test-runner.js';
 
+function createExecutableHttpFixture(
+  environment: ProjectEnvironment,
+  id = 'fixture-orders',
+  cleanup = true,
+): FixtureAsset {
+  return {
+    schemaVersion: 1,
+    id,
+    version: 1,
+    name: id,
+    description: '',
+    inputs: [],
+    outputs: [],
+    credentialIds: [],
+    environmentIds: [environment.id],
+    setup: {
+      mode: 'http',
+      summary: 'prepare',
+      http: { method: 'POST', path: `/api/test-data/${id}`, expectedStatuses: [201] },
+    },
+    ...(cleanup ? {
+      cleanup: {
+        mode: 'http' as const,
+        summary: 'cleanup',
+        http: { method: 'DELETE' as const, path: `/api/test-data/${id}`, expectedStatuses: [204] },
+      },
+    } : {}),
+    concurrency: 'exclusive',
+    resourceLocks: [id],
+    createdAt: new Date(0).toISOString(),
+    updatedAt: new Date(0).toISOString(),
+  };
+}
+
+function fixtureEvidence(
+  fixture: FixtureAsset,
+  lifecycle: 'setup' | 'cleanup',
+  outcome: FixtureLifecycleEvidence['outcome'] = 'passed',
+): FixtureLifecycleEvidence {
+  const declaration = lifecycle === 'setup' ? fixture.setup : fixture.cleanup!;
+  const http = declaration.http!;
+  return {
+    fixtureId: fixture.id,
+    fixtureVersion: fixture.version,
+    lifecycle,
+    method: http.method,
+    path: http.path,
+    expectedStatuses: http.expectedStatuses,
+    outcome,
+    ...(outcome === 'passed' ? { httpStatus: http.expectedStatuses[0] } : {}),
+    durationMs: 1,
+  };
+}
+
 describe('TestRunner recording replay', () => {
+  it('blocks unresolved fixture execution before opening a browser session', async () => {
+    const project = createProjectWithRecording();
+    const environment = project.environments[0]!;
+    const fixture = {
+      schemaVersion: 1 as const,
+      id: 'fixture-seed',
+      version: 1,
+      name: '准备订单数据',
+      description: '',
+      inputs: [],
+      outputs: [],
+      credentialIds: [],
+      environmentIds: [environment.id],
+      setup: { mode: 'http' as const, summary: '创建测试数据。' },
+      concurrency: 'exclusive' as const,
+      resourceLocks: ['orders'],
+      createdAt: new Date(0).toISOString(),
+      updatedAt: new Date(0).toISOString(),
+    };
+    const testCase = {
+      ...project.testCases[0]!,
+      assetReferences: { fixtures: [{ id: fixture.id, version: fixture.version }], reusableFlows: [] },
+    };
+    const start = vi.fn();
+    const artifacts = { createSnapshot: vi.fn() };
+    const workflowRunner = { runWorkflow: vi.fn() };
+    const runner = new TestRunner(
+      artifacts as never,
+      { start } as never,
+      vi.fn(),
+      undefined,
+      workflowRunner as never,
+    );
+
+    const response = await runner.run({ project: { ...project, fixtures: [fixture] }, testCase, environment });
+
+    expect(response.detail.status).toBe('neutral');
+    expect(response.detail.summary).toContain('HTTP 请求配置不完整');
+    expect(response.detail.steps.every((step) => step.status === 'neutral')).toBe(true);
+    expect(start).not.toHaveBeenCalled();
+    expect(artifacts.createSnapshot).not.toHaveBeenCalled();
+    expect(workflowRunner.runWorkflow).not.toHaveBeenCalled();
+  });
+
+  it('keeps a trusted script fixture blocked before browser startup until an executor exists', async () => {
+    const project = createProjectWithRecording();
+    const environment = project.environments[0]!;
+    const fixture = {
+      schemaVersion: 1 as const,
+      id: 'fixture-script-seed',
+      version: 1,
+      name: '脚本准备订单数据',
+      description: '',
+      inputs: [],
+      outputs: [],
+      credentialIds: [],
+      environmentIds: [environment.id],
+      setup: {
+        mode: 'script' as const,
+        summary: '执行准备脚本。',
+        script: {
+          relativePath: 'scripts/seed-orders.mjs',
+          contentHash: 'a'.repeat(64),
+          requiredEnvironment: [],
+        },
+      },
+      concurrency: 'exclusive' as const,
+      resourceLocks: ['orders'],
+      createdAt: new Date(0).toISOString(),
+      updatedAt: new Date(0).toISOString(),
+    };
+    const testCase = {
+      ...project.testCases[0]!,
+      assetReferences: { fixtures: [{ id: fixture.id, version: fixture.version }], reusableFlows: [] },
+    };
+    const start = vi.fn();
+    const runner = new TestRunner({ createSnapshot: vi.fn() } as never, { start } as never, vi.fn());
+
+    const response = await runner.run({
+      project: { ...project, fixtures: [fixture] },
+      testCase,
+      environment,
+      fixtureScriptTrustDirectory: '/tmp/project-assets',
+      fixtureScriptTrustRecords: [{
+        schemaVersion: 1,
+        projectId: project.id,
+        projectDirectory: '/tmp/project-assets',
+        fixtureId: fixture.id,
+        fixtureVersion: fixture.version,
+        lifecycle: 'setup',
+        relativePath: fixture.setup.script.relativePath,
+        contentHash: fixture.setup.script.contentHash,
+        approvedAt: new Date(0).toISOString(),
+      }],
+    });
+
+    expect(response.detail.status).toBe('neutral');
+    expect(response.detail.summary).toContain('脚本执行器不可用');
+    expect(start).not.toHaveBeenCalled();
+  });
+
+  it('runs a trusted script Fixture through a registered executor before browser startup', async () => {
+    const project = createProjectWithRecording();
+    const environment = project.environments[0]!;
+    const fixture = {
+      schemaVersion: 1 as const,
+      id: 'fixture-script-seed',
+      version: 1,
+      name: '脚本准备订单数据',
+      description: '',
+      inputs: [],
+      outputs: [],
+      credentialIds: [],
+      environmentIds: [environment.id],
+      setup: {
+        mode: 'script' as const,
+        summary: '执行准备脚本。',
+        script: {
+          relativePath: 'scripts/seed-orders.mjs',
+          contentHash: 'a'.repeat(64),
+          requiredEnvironment: [],
+        },
+      },
+      concurrency: 'exclusive' as const,
+      resourceLocks: ['orders'],
+      createdAt: new Date(0).toISOString(),
+      updatedAt: new Date(0).toISOString(),
+    };
+    const testCase = {
+      ...project.testCases[0]!,
+      steps: [],
+      assetReferences: { fixtures: [{ id: fixture.id, version: fixture.version }], reusableFlows: [] },
+    };
+    const order: string[] = [];
+    const start = vi.fn().mockImplementation(async () => {
+      order.push('browser');
+      return { id: 'session-script', status: 'ready', projectId: project.id, environmentId: environment.id, currentUrl: environment.url, pageTitle: project.name, message: 'ready', updatedAt: new Date(0).toISOString() };
+    });
+    const fixtureExecutor: FixtureLifecycleExecutor = {
+      supports: (mode) => mode === 'script',
+      execute: vi.fn().mockImplementation(async (request) => {
+        order.push('script');
+        expect(request).toEqual(expect.objectContaining({
+          projectId: project.id,
+          projectDirectory: '/tmp/project-assets',
+          scriptTrustRecords: expect.arrayContaining([expect.objectContaining({ fixtureId: fixture.id })]),
+        }));
+        return {
+          evidence: {
+            fixtureId: fixture.id,
+            fixtureVersion: fixture.version,
+            lifecycle: 'setup',
+            mode: 'script',
+            scriptPath: fixture.setup.script.relativePath,
+            outcome: 'passed',
+            durationMs: 1,
+          },
+          message: 'ok',
+        };
+      }),
+    };
+    const runner = new TestRunner(
+      { createSnapshot: vi.fn().mockResolvedValue({ id: 'start', type: 'snapshot', label: 'start', path: '/tmp/start.png' }) } as never,
+      { start } as never,
+      vi.fn(),
+      undefined,
+      undefined,
+      undefined,
+      fixtureExecutor,
+    );
+
+    const response = await runner.run({
+      project: { ...project, fixtures: [fixture] },
+      testCase,
+      environment,
+      fixtureScriptTrustDirectory: '/tmp/project-assets',
+      fixtureScriptTrustRecords: [{
+        schemaVersion: 1,
+        projectId: project.id,
+        projectDirectory: '/tmp/project-assets',
+        fixtureId: fixture.id,
+        fixtureVersion: fixture.version,
+        lifecycle: 'setup',
+        relativePath: fixture.setup.script.relativePath,
+        contentHash: fixture.setup.script.contentHash,
+        approvedAt: new Date(0).toISOString(),
+      }],
+    });
+
+    expect(order).toEqual(['script', 'browser']);
+    expect(response.detail.status).toBe('passed');
+    expect(response.detail.fixtureLifecycles).toEqual([
+      expect.objectContaining({ mode: 'script', outcome: 'passed' }),
+    ]);
+  });
+
+  it('passes a trusted script output only to the matching confirmed deterministic input', async () => {
+    const project = createProjectWithRecording();
+    const environment = project.environments[0]!;
+    const fixture = {
+      schemaVersion: 1 as const,
+      id: 'fixture-script-output',
+      version: 1,
+      name: '脚本准备订单数据',
+      description: '',
+      inputs: [],
+      outputs: [{ name: 'orderId', type: 'string' as const, required: true }],
+      credentialIds: [],
+      environmentIds: [environment.id],
+      setup: {
+        mode: 'script' as const,
+        summary: '执行准备脚本。',
+        script: { relativePath: 'scripts/seed-orders.mjs', contentHash: 'a'.repeat(64), requiredEnvironment: [] },
+      },
+      concurrency: 'exclusive' as const,
+      resourceLocks: ['orders'],
+      createdAt: new Date(0).toISOString(),
+      updatedAt: new Date(0).toISOString(),
+    };
+    const testCase = {
+      ...project.testCases[0]!,
+      assetReferences: { fixtures: [{ id: fixture.id, version: fixture.version }], reusableFlows: [] },
+      steps: [{
+        id: 'script-output-input',
+        type: 'ai' as const,
+        title: '填写订单号',
+        body: '填写脚本准备的订单号。',
+        execution: {
+          schemaVersion: 2 as const,
+          intent: '填写脚本准备的订单号。',
+          reviewStatus: 'confirmed' as const,
+          actionRisk: 'medium' as const,
+          action: {
+            kind: 'input' as const,
+            locator: { selector: '#order-id', quality: 'acceptable' as const },
+            binding: { kind: 'fixtureOutput' as const, fixtureId: fixture.id, fixtureVersion: fixture.version, outputName: 'orderId' },
+          },
+        },
+      }],
+    };
+    const deterministicRunner = {
+      runDeterministicStep: vi.fn().mockImplementation(async (request) => {
+        await expect(request.inputBindingResolver?.resolve({ projectId: project.id, binding: request.inputBinding! })).resolves.toBe('script-order-456');
+        return {
+          runId: 'deterministic-script-output',
+          title: testCase.steps[0]!.title,
+          detail: {
+            id: 'deterministic-script-output',
+            projectId: project.id,
+            testCaseId: testCase.id,
+            environmentId: environment.id,
+            title: testCase.steps[0]!.title,
+            status: 'passed' as const,
+            startedAt: new Date(0).toISOString(),
+            endedAt: new Date(0).toISOString(),
+            duration: '00:00:01',
+            summary: '已填写订单号',
+            logs: [],
+            steps: [],
+            artifacts: [],
+          },
+        };
+      }),
+    };
+    const fixtureExecutor: FixtureLifecycleExecutor = {
+      supports: (mode) => mode === 'script',
+      execute: vi.fn().mockResolvedValue({
+        evidence: { fixtureId: fixture.id, fixtureVersion: fixture.version, lifecycle: 'setup', mode: 'script', scriptPath: fixture.setup.script.relativePath, outcome: 'passed', durationMs: 1 },
+        message: 'ok',
+        outputValues: { orderId: 'script-order-456' },
+      }),
+    };
+    const runner = new TestRunner(
+      { createSnapshot: vi.fn().mockResolvedValue({ id: 'start', type: 'snapshot', label: 'start', path: '/tmp/start.png' }) } as never,
+      { start: vi.fn().mockResolvedValue({ id: 'session-script', status: 'ready', projectId: project.id, environmentId: environment.id, currentUrl: environment.url, pageTitle: project.name, message: 'ready', updatedAt: new Date(0).toISOString() }) } as never,
+      vi.fn(),
+      undefined,
+      undefined,
+      deterministicRunner as never,
+      fixtureExecutor,
+    );
+
+    const response = await runner.run({
+      project: { ...project, fixtures: [fixture] },
+      testCase,
+      environment,
+      fixtureScriptTrustDirectory: '/tmp/project-assets',
+      fixtureScriptTrustRecords: [{
+        schemaVersion: 1,
+        projectId: project.id,
+        projectDirectory: '/tmp/project-assets',
+        fixtureId: fixture.id,
+        fixtureVersion: fixture.version,
+        lifecycle: 'setup',
+        relativePath: fixture.setup.script.relativePath,
+        contentHash: fixture.setup.script.contentHash,
+        approvedAt: new Date(0).toISOString(),
+      }],
+    });
+
+    expect(response.detail.status).toBe('passed');
+    expect(JSON.stringify(response.detail)).not.toContain('script-order-456');
+  });
+
+  it('records an unavailable authentication state as neutral before creating run artifacts or executing steps', async () => {
+    const project = createProjectWithRecording();
+    const environment = { ...project.environments[0]!, storageStateId: 'state-missing' };
+    const start = vi.fn().mockResolvedValue({
+      id: 'session-auth-error',
+      status: 'error',
+      projectId: project.id,
+      environmentId: environment.id,
+      currentUrl: environment.url,
+      pageTitle: project.name,
+      message: '认证状态引用不存在或不属于当前项目。',
+      updatedAt: new Date(0).toISOString(),
+    });
+    const artifacts = { createSnapshot: vi.fn() };
+    const runner = new TestRunner(artifacts as never, { start } as never, vi.fn());
+
+    const response = await runner.run({ project, testCase: project.testCases[0]!, environment });
+
+    expect(start).toHaveBeenCalledWith({ project, environment, record: false });
+    expect(response.detail.status).toBe('neutral');
+    expect(response.detail.summary).toContain('认证状态引用不存在');
+    expect(response.detail.steps.every((step) => step.status === 'neutral')).toBe(true);
+    expect(artifacts.createSnapshot).not.toHaveBeenCalled();
+  });
+
   it('runs replay sessions without recording and persists replay logs', async () => {
     const project = createProjectWithRecording();
     const environment = project.environments[0];
@@ -651,6 +1037,295 @@ describe('TestRunner recording replay', () => {
       expect.objectContaining({ stepId: 'step-legacy-ai', status: 'neutral', message: expect.stringContaining('前序步骤') }),
     ]);
     expect(workflowRunner.runWorkflow).not.toHaveBeenCalled();
+  });
+});
+
+describe('TestRunner HTTP fixture lifecycle', () => {
+  it('runs bound HTTP setups before the browser and records cleanup separately after a passed case', async () => {
+    const project = createProjectWithRecording();
+    const environment = project.environments[0]!;
+    const fixture = createExecutableHttpFixture(environment);
+    const testCase = { ...project.testCases[0]!, steps: [], assetReferences: { fixtures: [{ id: fixture.id, version: fixture.version }], reusableFlows: [] } };
+    const order: string[] = [];
+    const browserRuntime = {
+      start: vi.fn().mockImplementation(async () => {
+        order.push('browser');
+        return { id: 'session-fixture', status: 'ready', projectId: project.id, environmentId: environment.id, currentUrl: environment.url, pageTitle: project.name, message: 'ready', updatedAt: new Date(0).toISOString() };
+      }),
+    };
+    const artifacts = { createSnapshot: vi.fn().mockResolvedValue({ id: 'start', type: 'snapshot', label: 'start', path: '/tmp/start.png' }) };
+    const fixtureExecutor: FixtureLifecycleExecutor = {
+      execute: vi.fn().mockImplementation(async ({ fixture: currentFixture, lifecycle }) => {
+        order.push(lifecycle);
+        return { evidence: fixtureEvidence(currentFixture, lifecycle), message: 'ok' };
+      }),
+    };
+    const runner = new TestRunner(artifacts as never, browserRuntime as never, vi.fn(), undefined, undefined, undefined, fixtureExecutor);
+
+    const response = await runner.run({ project: { ...project, fixtures: [fixture] }, testCase, environment });
+
+    expect(order).toEqual(['setup', 'browser', 'cleanup']);
+    expect(response.detail.status).toBe('passed');
+    expect(response.detail.fixtureLifecycles).toEqual([
+      expect.objectContaining({ lifecycle: 'setup', outcome: 'passed' }),
+      expect.objectContaining({ lifecycle: 'cleanup', outcome: 'passed' }),
+    ]);
+  });
+
+  it('stops before browser startup and cleans only already prepared fixtures when setup fails', async () => {
+    const project = createProjectWithRecording();
+    const environment = project.environments[0]!;
+    const first = createExecutableHttpFixture(environment, 'fixture-first');
+    const second = createExecutableHttpFixture(environment, 'fixture-second');
+    const testCase = { ...project.testCases[0]!, assetReferences: { fixtures: [{ id: first.id, version: 1 }, { id: second.id, version: 1 }], reusableFlows: [] } };
+    const start = vi.fn();
+    const order: string[] = [];
+    const fixtureExecutor: FixtureLifecycleExecutor = {
+      execute: vi.fn().mockImplementation(async ({ fixture, lifecycle }) => {
+        order.push(`${lifecycle}:${fixture.id}`);
+        const failed = lifecycle === 'setup' && fixture.id === second.id;
+        return { evidence: fixtureEvidence(fixture, lifecycle, failed ? 'failed' : 'passed'), message: failed ? 'setup failed' : 'ok' };
+      }),
+    };
+    const runner = new TestRunner({ createSnapshot: vi.fn() } as never, { start } as never, vi.fn(), undefined, undefined, undefined, fixtureExecutor);
+
+    const response = await runner.run({ project: { ...project, fixtures: [first, second] }, testCase, environment });
+
+    expect(order).toEqual(['setup:fixture-first', 'setup:fixture-second', 'cleanup:fixture-first']);
+    expect(start).not.toHaveBeenCalled();
+    expect(response.detail.status).toBe('neutral');
+    expect(response.detail.fixtureLifecycles).toEqual(expect.arrayContaining([
+      expect.objectContaining({ fixtureId: second.id, lifecycle: 'setup', outcome: 'failed' }),
+      expect.objectContaining({ fixtureId: first.id, lifecycle: 'cleanup', outcome: 'passed' }),
+    ]));
+  });
+
+  it('preserves a failed case result when cleanup fails', async () => {
+    const project = createProjectWithRecording();
+    const environment = project.environments[0]!;
+    const fixture = createExecutableHttpFixture(environment);
+    const testCase = {
+      ...project.testCases[0]!,
+      assetReferences: { fixtures: [{ id: fixture.id, version: fixture.version }], reusableFlows: [] },
+      steps: [{
+        id: 'step-fail',
+        type: 'ai' as const,
+        title: '打开页面',
+        body: '打开页面',
+        execution: {
+          schemaVersion: 2 as const,
+          intent: '打开页面',
+          reviewStatus: 'confirmed' as const,
+          actionRisk: 'low' as const,
+          action: { kind: 'navigate' as const, url: environment.url },
+        },
+      }],
+    };
+    const browserRuntime = { start: vi.fn().mockResolvedValue({ id: 'session-fixture', status: 'ready', projectId: project.id, environmentId: environment.id, currentUrl: environment.url, pageTitle: project.name, message: 'ready', updatedAt: new Date(0).toISOString() }) };
+    const artifacts = { createSnapshot: vi.fn().mockResolvedValue({ id: 'start', type: 'snapshot', label: 'start', path: '/tmp/start.png' }) };
+    const deterministicRunner = {
+      runDeterministicStep: vi.fn().mockResolvedValue({
+        runId: 'deterministic-fail',
+        title: '打开页面',
+        detail: { id: 'deterministic-fail', projectId: project.id, testCaseId: testCase.id, environmentId: environment.id, title: '打开页面', status: 'failed', startedAt: new Date(0).toISOString(), endedAt: new Date(0).toISOString(), duration: '00:00:01', summary: '页面不可访问', failureReason: '页面不可访问', logs: [], steps: [], artifacts: [] },
+      }),
+    };
+    const fixtureExecutor: FixtureLifecycleExecutor = {
+      execute: vi.fn().mockImplementation(async ({ fixture: currentFixture, lifecycle }) => ({
+        evidence: fixtureEvidence(currentFixture, lifecycle, lifecycle === 'cleanup' ? 'failed' : 'passed'),
+        message: lifecycle === 'cleanup' ? 'cleanup failed' : 'ok',
+      })),
+    };
+    const runner = new TestRunner(artifacts as never, browserRuntime as never, vi.fn(), undefined, undefined, deterministicRunner as never, fixtureExecutor);
+
+    const response = await runner.run({ project: { ...project, fixtures: [fixture] }, testCase, environment });
+
+    expect(response.detail.status).toBe('failed');
+    expect(response.detail.failureReason).toBe('页面不可访问');
+    expect(response.detail.fixtureLifecycles).toEqual(expect.arrayContaining([
+      expect.objectContaining({ lifecycle: 'cleanup', outcome: 'failed' }),
+    ]));
+  });
+
+  it('runs cleanup after cancellation without reopening or closing the browser session', async () => {
+    const project = createProjectWithRecording();
+    const environment = project.environments[0]!;
+    const fixture = createExecutableHttpFixture(environment);
+    const testCase = { ...project.testCases[0]!, assetReferences: { fixtures: [{ id: fixture.id, version: fixture.version }], reusableFlows: [] } };
+    const controller = new AbortController();
+    const start = vi.fn();
+    const fixtureExecutor: FixtureLifecycleExecutor = {
+      execute: vi.fn().mockImplementation(async ({ fixture: currentFixture, lifecycle, cancellationSignal }) => {
+        if (lifecycle === 'setup') {
+          expect(cancellationSignal).toBe(controller.signal);
+          controller.abort();
+        } else {
+          expect(cancellationSignal).toBeUndefined();
+        }
+        return { evidence: fixtureEvidence(currentFixture, lifecycle), message: 'ok' };
+      }),
+    };
+    const runner = new TestRunner({ createSnapshot: vi.fn() } as never, { start } as never, vi.fn(), undefined, undefined, undefined, fixtureExecutor);
+
+    const response = await runner.run({ project: { ...project, fixtures: [fixture] }, testCase, environment, cancellationSignal: controller.signal });
+
+    expect(start).not.toHaveBeenCalled();
+    expect(response.detail.status).toBe('neutral');
+    expect(response.detail.cancellation).toEqual(expect.objectContaining({ reason: 'userCancelled' }));
+    expect(response.detail.fixtureLifecycles).toEqual([
+      expect.objectContaining({ lifecycle: 'setup', outcome: 'passed' }),
+      expect.objectContaining({ lifecycle: 'cleanup', outcome: 'passed' }),
+    ]);
+  });
+
+  it('resolves a Fixture output only through the current deterministic input step', async () => {
+    const project = createProjectWithRecording();
+    const environment = project.environments[0]!;
+    const fixture = {
+      ...createExecutableHttpFixture(environment),
+      outputs: [{ name: 'orderId', type: 'string' as const, required: true }],
+      setup: {
+        mode: 'http' as const,
+        summary: 'prepare',
+        http: {
+          method: 'POST' as const,
+          path: '/api/test-data/fixture-orders',
+          expectedStatuses: [201],
+          responseOutputs: [{ outputName: 'orderId', jsonPointer: '/orderId' }],
+        },
+      },
+    };
+    const testCase = {
+      ...project.testCases[0]!,
+      assetReferences: { fixtures: [{ id: fixture.id, version: fixture.version }], reusableFlows: [] },
+      steps: [{
+        id: 'step-input-fixture-output',
+        type: 'ai' as const,
+        title: '输入订单号',
+        body: '输入已准备订单的 ID。',
+        execution: {
+          schemaVersion: 2 as const,
+          intent: '输入已准备订单的 ID。',
+          reviewStatus: 'confirmed' as const,
+          actionRisk: 'medium' as const,
+          action: {
+            kind: 'input' as const,
+            locator: { selector: '#order-id', quality: 'acceptable' as const },
+            binding: { kind: 'fixtureOutput' as const, fixtureId: fixture.id, fixtureVersion: fixture.version, outputName: 'orderId' },
+          },
+        },
+      }],
+    };
+    const start = vi.fn().mockResolvedValue({ id: 'session-fixture', status: 'ready', projectId: project.id, environmentId: environment.id, currentUrl: environment.url, pageTitle: project.name, message: 'ready', updatedAt: new Date(0).toISOString() });
+    const deterministicRunner = {
+      runDeterministicStep: vi.fn().mockImplementation(async (request) => {
+        await expect(request.inputBindingResolver?.resolve({
+          projectId: project.id,
+          binding: request.inputBinding!,
+        })).resolves.toBe('fixture-order-123');
+        return {
+          runId: 'deterministic-fixture-output',
+          title: testCase.steps[0]!.title,
+          detail: {
+            id: 'deterministic-fixture-output',
+            projectId: project.id,
+            testCaseId: testCase.id,
+            environmentId: environment.id,
+            title: testCase.steps[0]!.title,
+            status: 'passed' as const,
+            startedAt: new Date(0).toISOString(),
+            endedAt: new Date(0).toISOString(),
+            duration: '00:00:01',
+            summary: '已填写订单号',
+            logs: [],
+            steps: [],
+            artifacts: [],
+          },
+        };
+      }),
+    };
+    const fixtureExecutor: FixtureLifecycleExecutor = {
+      execute: vi.fn().mockImplementation(async ({ fixture: currentFixture, lifecycle }) => ({
+        evidence: fixtureEvidence(currentFixture, lifecycle),
+        message: 'ok',
+        ...(lifecycle === 'setup' ? { outputValues: { orderId: 'fixture-order-123' } } : {}),
+      })),
+    };
+    const runner = new TestRunner(
+      { createSnapshot: vi.fn().mockResolvedValue({ id: 'start', type: 'snapshot', label: 'start', path: '/tmp/start.png' }) } as never,
+      { start } as never,
+      vi.fn(),
+      undefined,
+      undefined,
+      deterministicRunner as never,
+      fixtureExecutor,
+    );
+
+    const response = await runner.run({ project: { ...project, fixtures: [fixture] }, testCase, environment });
+
+    expect(start).toHaveBeenCalledTimes(1);
+    expect(deterministicRunner.runDeterministicStep).toHaveBeenCalledWith(expect.objectContaining({
+      inputBinding: { kind: 'fixtureOutput', fixtureId: fixture.id, fixtureVersion: fixture.version, outputName: 'orderId' },
+      inputBindingResolver: expect.any(Object),
+    }));
+    expect(response.detail.status).toBe('passed');
+    expect(JSON.stringify(response.detail)).not.toContain('fixture-order-123');
+  });
+
+  it('blocks a missing Fixture output before browser startup or deterministic browser input', async () => {
+    const project = createProjectWithRecording();
+    const environment = project.environments[0]!;
+    const fixture = {
+      ...createExecutableHttpFixture(environment),
+      outputs: [{ name: 'orderId', type: 'string' as const, required: true }],
+      setup: {
+        mode: 'http' as const,
+        summary: 'prepare',
+        http: {
+          method: 'POST' as const,
+          path: '/api/test-data/fixture-orders',
+          expectedStatuses: [201],
+          responseOutputs: [{ outputName: 'orderId', jsonPointer: '/orderId' }],
+        },
+      },
+    };
+    const testCase = {
+      ...project.testCases[0]!,
+      assetReferences: { fixtures: [{ id: fixture.id, version: fixture.version }], reusableFlows: [] },
+      steps: [{
+        id: 'step-input-missing-fixture-output',
+        type: 'ai' as const,
+        title: '输入订单号',
+        body: '输入已准备订单的 ID。',
+        execution: {
+          schemaVersion: 2 as const,
+          intent: '输入已准备订单的 ID。',
+          reviewStatus: 'confirmed' as const,
+          actionRisk: 'medium' as const,
+          action: {
+            kind: 'input' as const,
+            locator: { selector: '#order-id', quality: 'acceptable' as const },
+            binding: { kind: 'fixtureOutput' as const, fixtureId: fixture.id, fixtureVersion: fixture.version, outputName: 'orderId' },
+          },
+        },
+      }],
+    };
+    const start = vi.fn();
+    const deterministicRunner = { runDeterministicStep: vi.fn() };
+    const fixtureExecutor: FixtureLifecycleExecutor = {
+      execute: vi.fn().mockImplementation(async ({ fixture: currentFixture, lifecycle }) => ({
+        evidence: fixtureEvidence(currentFixture, lifecycle),
+        message: 'ok',
+      })),
+    };
+    const runner = new TestRunner({ createSnapshot: vi.fn() } as never, { start } as never, vi.fn(), undefined, undefined, deterministicRunner as never, fixtureExecutor);
+
+    const response = await runner.run({ project: { ...project, fixtures: [fixture] }, testCase, environment });
+
+    expect(response.detail.status).toBe('neutral');
+    expect(response.detail.summary).toContain('未在当前准备请求中生成');
+    expect(start).not.toHaveBeenCalled();
+    expect(deterministicRunner.runDeterministicStep).not.toHaveBeenCalled();
   });
 });
 

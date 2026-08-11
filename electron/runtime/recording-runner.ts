@@ -80,6 +80,7 @@ export class RecordingRunner {
     let replayResults: RecordingReplayResult[] = [];
     let visualComparisons: RecordingVisualComparison[] = [];
     let cancelledAt: string | undefined;
+    let preflightReason: string | undefined;
     let traceRequested = false;
     try {
       traceRequested = true;
@@ -93,13 +94,15 @@ export class RecordingRunner {
         }),
         request.cancellationSignal,
       );
-      if (session.status !== 'error' && request.recording.startUrl && session.currentUrl !== request.recording.startUrl) {
+      if (session.status === 'error') {
+        preflightReason = `浏览器会话未启动：${session.message}`;
+      } else if (request.recording.startUrl && session.currentUrl !== request.recording.startUrl) {
         session = await awaitWithRunCancellation(
           this.browserRuntime.navigate({ url: request.recording.startUrl }),
           request.cancellationSignal,
         );
       }
-      if (emitEvents) {
+      if (emitEvents && !preflightReason) {
         this.emitRunEvent({
           runId,
           title,
@@ -107,11 +110,13 @@ export class RecordingRunner {
           line: `Recording context: ${session.currentUrl || request.recording.startUrl}`,
         });
       }
-      const replay = request.cancellationSignal
-        ? this.browserRuntime.replayRecordingSteps(request.recording.steps, runId, request.cancellationSignal)
-        : this.browserRuntime.replayRecordingSteps(request.recording.steps, runId);
-      replayResults = await awaitWithRunCancellation(replay, request.cancellationSignal);
-      visualComparisons = await this.compareScreenshots(request, replayResults, request.cancellationSignal);
+      if (!preflightReason) {
+        const replay = request.cancellationSignal
+          ? this.browserRuntime.replayRecordingSteps(request.recording.steps, runId, request.cancellationSignal)
+          : this.browserRuntime.replayRecordingSteps(request.recording.steps, runId);
+        replayResults = await awaitWithRunCancellation(replay, request.cancellationSignal);
+        visualComparisons = await this.compareScreenshots(request, replayResults, request.cancellationSignal);
+      }
     } catch (error) {
       if (!isRunCancelled(error)) {
         throw error;
@@ -131,7 +136,8 @@ export class RecordingRunner {
       endedAt: endedAt.toISOString(),
       visualComparisons,
     });
-    const tracedAgentRun = traceArtifact ? appendTraceArtifact(baseAgentRun, traceArtifact) : baseAgentRun;
+    const preflightAgentRun = preflightReason ? markAgentRunPreflightBlocked(baseAgentRun, preflightReason) : baseAgentRun;
+    const tracedAgentRun = traceArtifact ? appendTraceArtifact(preflightAgentRun, traceArtifact) : preflightAgentRun;
     const cancellation = cancelledAt ? createUserRunCancellation(cancelledAt) : undefined;
     const agentRun = cancellation ? markAgentRunCancelled(tracedAgentRun, cancellation) : tracedAgentRun;
     const detail: RunDetail = {
@@ -229,6 +235,25 @@ export class RecordingRunner {
     );
     return comparisons.filter((comparison): comparison is NonNullable<typeof comparison> => Boolean(comparison));
   }
+}
+
+function markAgentRunPreflightBlocked(agentRun: AgentRunResult, reason: string): AgentRunResult {
+  return {
+    ...agentRun,
+    status: 'neutral',
+    summary: reason,
+    events: [
+      ...agentRun.events,
+      {
+        id: `${agentRun.runId}-event-preflight-blocked`,
+        runId: agentRun.runId,
+        type: 'agent:browser-action',
+        message: reason,
+        status: 'neutral',
+        createdAt: new Date().toISOString(),
+      },
+    ],
+  };
 }
 
 function appendTraceArtifact(agentRun: AgentRunResult, trace: RunArtifact): AgentRunResult {

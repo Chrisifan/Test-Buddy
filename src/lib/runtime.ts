@@ -2,6 +2,7 @@ import type {
   BrowserNavigateRequest,
   BrowserSessionRequest,
   BrowserSessionState,
+  CaptureStorageStateRequest,
   ChatCommandRequest,
   ChatCommandResponse,
   ChatEntry,
@@ -16,7 +17,13 @@ import type {
   ProjectAssetReloadPlan,
   ProjectAssetReloadRequest,
   ProjectAssetReloadResult,
+  ProjectAssetUpdatePlan,
+  ProjectAssetUpdateRequest,
   ProjectReportExportRequest,
+  RevokeStorageStateRequest,
+  ImportStorageStateRequest,
+  FixtureScriptTrustRequest,
+  FixtureScriptTrustStatus,
   RunDetail,
   RuntimeProfile,
   RunEventPayload,
@@ -29,6 +36,7 @@ import type {
   RunWorkflowResponse,
   SaveCredentialRequest,
   CredentialRef,
+  StorageStateRef,
   RunArtifact,
   SessionStartRequest,
 } from '../../shared/studio.js';
@@ -126,6 +134,46 @@ export async function reloadProjectAssetSnapshot(
   }
 
   return desktopApi.reloadProjectAssetSnapshot(request);
+}
+
+export async function planProjectAssetUpdate(
+  request: ProjectAssetUpdateRequest,
+): Promise<ProjectAssetUpdatePlan | undefined> {
+  const desktopApi = getDesktopApi();
+  if (!desktopApi || typeof desktopApi.planProjectAssetUpdate !== 'function') {
+    return undefined;
+  }
+
+  return desktopApi.planProjectAssetUpdate(request);
+}
+
+export async function updateProjectAssetSnapshot(
+  request: ProjectAssetUpdateRequest,
+): Promise<ProjectAssetBinding | undefined> {
+  const desktopApi = getDesktopApi();
+  if (!desktopApi || typeof desktopApi.updateProjectAssetSnapshot !== 'function') {
+    return undefined;
+  }
+
+  return desktopApi.updateProjectAssetSnapshot(request);
+}
+
+export async function listFixtureScriptTrusts(projectId: string): Promise<FixtureScriptTrustStatus[]> {
+  const desktopApi = getDesktopApi();
+  if (!desktopApi || typeof desktopApi.listFixtureScriptTrusts !== 'function') {
+    return [];
+  }
+  return desktopApi.listFixtureScriptTrusts(projectId);
+}
+
+export async function approveFixtureScriptTrust(
+  request: FixtureScriptTrustRequest,
+): Promise<FixtureScriptTrustStatus | undefined> {
+  const desktopApi = getDesktopApi();
+  if (!desktopApi || typeof desktopApi.approveFixtureScriptTrust !== 'function') {
+    return undefined;
+  }
+  return desktopApi.approveFixtureScriptTrust(request);
 }
 
 export async function openArtifact(artifactPath: string): Promise<void> {
@@ -303,6 +351,32 @@ export async function saveCredential(request: SaveCredentialRequest): Promise<Cr
     updatedAt: new Date().toISOString(),
     hasSecret: Boolean(request.secret),
   };
+}
+
+/** The desktop main process selects and reads the storageState file directly. */
+export async function importStorageState(request: ImportStorageStateRequest): Promise<StorageStateRef | undefined> {
+  const desktopApi = getDesktopApi();
+  if (!desktopApi || typeof desktopApi.importStorageState !== 'function') {
+    return undefined;
+  }
+  return (await desktopApi.importStorageState(request)) ?? undefined;
+}
+
+export async function captureStorageState(request: CaptureStorageStateRequest): Promise<StorageStateRef | undefined> {
+  const desktopApi = getDesktopApi();
+  if (!desktopApi || typeof desktopApi.captureStorageState !== 'function') {
+    return undefined;
+  }
+  return desktopApi.captureStorageState(request);
+}
+
+export async function revokeStorageState(request: RevokeStorageStateRequest): Promise<boolean> {
+  const desktopApi = getDesktopApi();
+  if (!desktopApi || typeof desktopApi.revokeStorageState !== 'function') {
+    return false;
+  }
+  await desktopApi.revokeStorageState(request);
+  return true;
 }
 
 export async function startBrowserSession(

@@ -7,6 +7,7 @@ const {
   inspectProjectAssetBinding,
   planProjectAssetMigration,
   planProjectAssetReload,
+  planProjectAssetUpdate,
   reloadProjectAssetSnapshot,
   runRecording,
   runTestCase,
@@ -14,6 +15,7 @@ const {
   selectProjectAssetDirectory,
   sendChatCommand,
   testMidsceneConnection,
+  updateProjectAssetSnapshot,
   writeProjectAssetSnapshot,
 } = runtime;
 
@@ -287,6 +289,21 @@ describe('browser fallback agent runtime', () => {
       project: reloadedProject,
       snapshotRevision: reloadPlan.snapshotRevision,
     };
+    const updatePlan = {
+      projectId: request.projectId,
+      projectDirectory: request.projectDirectory,
+      publishedRevision: binding.revision,
+      snapshotRevision: 'c'.repeat(64),
+      files: ['project.json', 'cases/case-orders.json'],
+      status: 'ready' as const,
+      issues: [],
+    };
+    const updateRequest = {
+      projectId: request.projectId,
+      project: reloadedProject,
+      expectedRevision: binding.revision,
+      plannedRevision: updatePlan.snapshotRevision,
+    };
     const desktopApi = {
       selectProjectAssetDirectory: vi.fn().mockResolvedValue(request.projectDirectory),
       planProjectAssetMigration: vi.fn().mockResolvedValue(plan),
@@ -294,6 +311,8 @@ describe('browser fallback agent runtime', () => {
       inspectProjectAssetBinding: vi.fn().mockResolvedValue(bindingStatus),
       planProjectAssetReload: vi.fn().mockResolvedValue(reloadPlan),
       reloadProjectAssetSnapshot: vi.fn().mockResolvedValue(reloadResult),
+      planProjectAssetUpdate: vi.fn().mockResolvedValue(updatePlan),
+      updateProjectAssetSnapshot: vi.fn().mockResolvedValue({ ...binding, revision: updatePlan.snapshotRevision }),
     } as unknown as DesktopApi;
     window.desktopApi = desktopApi;
 
@@ -303,6 +322,8 @@ describe('browser fallback agent runtime', () => {
     await expect(inspectProjectAssetBinding(request.projectId)).resolves.toEqual(bindingStatus);
     await expect(planProjectAssetReload({ projectId: request.projectId, project: reloadedProject })).resolves.toEqual(reloadPlan);
     await expect(reloadProjectAssetSnapshot(reloadRequest)).resolves.toEqual(reloadResult);
+    await expect(planProjectAssetUpdate({ projectId: request.projectId, project: reloadedProject, expectedRevision: binding.revision })).resolves.toEqual(updatePlan);
+    await expect(updateProjectAssetSnapshot(updateRequest)).resolves.toEqual({ ...binding, revision: updatePlan.snapshotRevision });
 
     expect(desktopApi.selectProjectAssetDirectory).toHaveBeenCalledOnce();
     expect(desktopApi.planProjectAssetMigration).toHaveBeenCalledWith(request);
@@ -310,6 +331,8 @@ describe('browser fallback agent runtime', () => {
     expect(desktopApi.inspectProjectAssetBinding).toHaveBeenCalledWith(request.projectId);
     expect(desktopApi.planProjectAssetReload).toHaveBeenCalledWith({ projectId: request.projectId, project: reloadedProject });
     expect(desktopApi.reloadProjectAssetSnapshot).toHaveBeenCalledWith(reloadRequest);
+    expect(desktopApi.planProjectAssetUpdate).toHaveBeenCalledWith({ projectId: request.projectId, project: reloadedProject, expectedRevision: binding.revision });
+    expect(desktopApi.updateProjectAssetSnapshot).toHaveBeenCalledWith(updateRequest);
     window.desktopApi = originalDesktopApi;
   });
 
@@ -322,6 +345,74 @@ describe('browser fallback agent runtime', () => {
 
     expect(desktopApi.cancelRun).toHaveBeenCalledWith('run-active');
     window.desktopApi = originalDesktopApi;
+  });
+
+  it('uses the desktop bridge for local fixture script trust records only', async () => {
+    const originalDesktopApi = window.desktopApi;
+    const trust = {
+      fixtureId: 'fixture-seed',
+      fixtureVersion: 1,
+      lifecycle: 'setup' as const,
+      relativePath: 'scripts/seed.mjs',
+      contentHash: 'a'.repeat(64),
+      approvedAt: '2026-08-11T00:00:00.000Z',
+    };
+    const desktopApi = {
+      listFixtureScriptTrusts: vi.fn().mockResolvedValue([trust]),
+      approveFixtureScriptTrust: vi.fn().mockResolvedValue(trust),
+    } as unknown as DesktopApi;
+    window.desktopApi = desktopApi;
+
+    await expect(runtime.listFixtureScriptTrusts('project-orders')).resolves.toEqual([trust]);
+    await expect(runtime.approveFixtureScriptTrust({
+      projectId: 'project-orders',
+      fixtureId: trust.fixtureId,
+      fixtureVersion: trust.fixtureVersion,
+      lifecycle: trust.lifecycle,
+    })).resolves.toEqual(trust);
+
+    expect(desktopApi.listFixtureScriptTrusts).toHaveBeenCalledWith('project-orders');
+    expect(desktopApi.approveFixtureScriptTrust).toHaveBeenCalledWith({
+      projectId: 'project-orders',
+      fixtureId: trust.fixtureId,
+      fixtureVersion: trust.fixtureVersion,
+      lifecycle: trust.lifecycle,
+    });
+    window.desktopApi = originalDesktopApi;
+  });
+
+  it('keeps storageState capture and revocation on the desktop bridge', async () => {
+    const originalDesktopApi = window.desktopApi;
+    const reference = {
+      id: 'state-staging-admin',
+      label: '预发布管理员登录态',
+      createdAt: '2026-08-11T00:00:00.000Z',
+      updatedAt: '2026-08-11T00:00:00.000Z',
+      availability: 'available' as const,
+    };
+    const desktopApi = {
+      captureStorageState: vi.fn().mockResolvedValue(reference),
+      revokeStorageState: vi.fn().mockResolvedValue(undefined),
+    } as unknown as DesktopApi;
+    window.desktopApi = desktopApi;
+
+    try {
+      await expect(runtime.captureStorageState({
+        projectId: 'project-orders',
+        label: reference.label,
+        storageStateId: reference.id,
+      })).resolves.toEqual(reference);
+      await expect(runtime.revokeStorageState({ projectId: 'project-orders', storageStateId: reference.id })).resolves.toBe(true);
+
+      expect(desktopApi.captureStorageState).toHaveBeenCalledWith({
+        projectId: 'project-orders',
+        label: reference.label,
+        storageStateId: reference.id,
+      });
+      expect(desktopApi.revokeStorageState).toHaveBeenCalledWith({ projectId: 'project-orders', storageStateId: reference.id });
+    } finally {
+      window.desktopApi = originalDesktopApi;
+    }
   });
 
   it('delegates manual evidence attachment to the desktop bridge', async () => {

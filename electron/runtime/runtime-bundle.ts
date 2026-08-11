@@ -22,10 +22,13 @@ import { OpenAICompatibleAgentPlanner } from './agent-planner.js';
 import { OpenAICompatibleAgentReporter } from './agent-reporter.js';
 import { OpenAICompatibleAgentVerifier } from './agent-verifier.js';
 import { ArtifactManager } from './artifact-manager.js';
-import { BrowserRuntime } from './browser-runtime.js';
+import { BrowserRuntime, type BrowserStorageStateResolver } from './browser-runtime.js';
 import { RecordingRunner } from './recording-runner.js';
 import { MidsceneSemanticActionRuntime } from './semantic-action-runtime.js';
 import { TestRunner } from './test-runner.js';
+import { FixtureHttpExecutor } from './fixture-http-executor.js';
+import { FixtureScriptExecutor } from './fixture-script-executor.js';
+import { DefaultFixtureLifecycleExecutor } from './default-fixture-lifecycle-executor.js';
 import { PixelVisualDiffService, type VisualDiffImageAdapter } from './visual-diff.js';
 import { StudioRuntime, type DeterministicInputBindingResolver } from '../studioRuntime.js';
 
@@ -46,6 +49,7 @@ export interface RuntimeBundle {
 export interface RuntimeBundleOptions {
   rootDir: string;
   visualDiffImageAdapter: VisualDiffImageAdapter;
+  storageStateResolver?: BrowserStorageStateResolver;
   emitRunEvent?: (event: RunEventPayload) => void;
   emitRecordingEvent?: (event: RecordingCapturedEvent) => void;
   deterministicInputBindingResolver?: DeterministicInputBindingResolver;
@@ -54,7 +58,12 @@ export interface RuntimeBundleOptions {
 export function createRuntimeBundle(options: RuntimeBundleOptions): RuntimeBundle {
   const emitRunEvent = options.emitRunEvent ?? (() => undefined);
   const artifactManager = new ArtifactManager(options.rootDir);
-  const browserRuntime = new BrowserRuntime(options.rootDir, artifactManager, options.emitRecordingEvent);
+  const browserRuntime = new BrowserRuntime(
+    options.rootDir,
+    artifactManager,
+    options.emitRecordingEvent,
+    options.storageStateResolver,
+  );
   const semanticActionRuntime = new MidsceneSemanticActionRuntime(browserRuntime, undefined, {
     reportDirectory: path.join(options.rootDir, 'studio-data', 'artifacts'),
   });
@@ -92,6 +101,10 @@ export function createRuntimeBundle(options: RuntimeBundleOptions): RuntimeBundl
     recordingRunner,
     studioRuntime,
     studioRuntime,
+    new DefaultFixtureLifecycleExecutor(
+      new FixtureHttpExecutor(),
+      new FixtureScriptExecutor(),
+    ),
   );
   const activeRuns = new Map<string, AbortController>();
 
@@ -126,6 +139,10 @@ export function createRuntimeBundle(options: RuntimeBundleOptions): RuntimeBundl
       const recording = recordingId
         ? request.project.recordings.find((item) => item.id === recordingId)
         : undefined;
+
+      if (request.testCase.assetReferences?.fixtures.length) {
+        return testRunner.run({ ...request, runId, cancellationSignal });
+      }
 
       if (recording) {
         return recordingRunner.run({

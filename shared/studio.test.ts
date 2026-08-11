@@ -21,6 +21,8 @@ import {
   getConfirmedDeterministicTestStep,
   getConfirmedExplicitTestAssertion,
   getExclusiveRecordingReplayId,
+  getTestCaseFixtureOutputBindingOptions,
+  getTestCaseFixtureRunBlocker,
   getTestCasePrdPath,
   isRecordingLinkedToGeneratedPath,
   isConfirmedDeterministicTestStep,
@@ -33,12 +35,401 @@ import {
   moveTestStep,
   mergeProjectAssetBindings,
   normalizeProjectAssetBindings,
+  normalizeFixtureHttpDeclaration,
   removeTestStep,
+  resolveTestCaseFixtures,
+  resolveSuiteTestCases,
   prunePrdCoverageTriage,
   updatePrdDocumentAnalysis,
   workflowToTestCase,
 } from './studio.js';
 import { createStubAgentRun } from './agentStub.js';
+
+describe('suite asset contract', () => {
+  it('resolves immutable Case versions in dependency order and rejects stale or cyclic references', () => {
+    const project = createEmptyProject(1);
+    const environment = project.environments[0]!;
+    const checkout = createEmptyTestCase(1, project.groups[0]!.id, environment.id);
+    const invoice = { ...createEmptyTestCase(2, project.groups[0]!.id, environment.id), id: 'case-invoice', version: 2 };
+    project.testCases = [checkout, invoice];
+    const suite: studio.SuiteAsset = {
+      schemaVersion: 1,
+      id: 'suite-release',
+      version: 1,
+      name: '发布前回归',
+      description: '先创建订单，再验证发票。',
+      tags: ['release', 'critical'],
+      environmentId: environment.id,
+      caseReferences: [
+        { id: invoice.id, version: 2, dependsOn: [{ id: checkout.id, version: 1 }] },
+        { id: checkout.id, version: 1, dependsOn: [] },
+      ],
+      execution: { concurrency: 2, failurePolicy: 'failFast', retryLimit: 1 },
+      createdAt: '2026-08-11T00:00:00.000Z',
+      updatedAt: '2026-08-11T00:00:00.000Z',
+    };
+
+    expect(resolveSuiteTestCases(project, suite)).toEqual(expect.objectContaining({
+      environment,
+      issues: [],
+      orderedCases: [
+        expect.objectContaining({ testCase: checkout }),
+        expect.objectContaining({ testCase: invoice }),
+      ],
+    }));
+
+    expect(resolveSuiteTestCases(project, {
+      ...suite,
+      caseReferences: [{ id: checkout.id, version: 2, dependsOn: [] }],
+    }).issues).toEqual([expect.objectContaining({ kind: 'staleCaseVersion' })]);
+    expect(resolveSuiteTestCases(project, {
+      ...suite,
+      caseReferences: [
+        { id: checkout.id, version: 1, dependsOn: [{ id: invoice.id, version: 2 }] },
+        { id: invoice.id, version: 2, dependsOn: [{ id: checkout.id, version: 1 }] },
+      ],
+    })).toEqual(expect.objectContaining({
+      orderedCases: [],
+      issues: [expect.objectContaining({ kind: 'cyclicDependency' })],
+    }));
+  });
+
+  it('hydrates only well-formed Suite assets while retaining stale references for explicit run diagnostics', () => {
+    const project = createEmptyProject(1);
+    const environment = project.environments[0]!;
+    const testCase = createEmptyTestCase(1, project.groups[0]!.id, environment.id);
+    const suite: studio.SuiteAsset = {
+      schemaVersion: 1,
+      id: 'suite-stale',
+      version: 1,
+      name: '版本漂移回归',
+      description: '',
+      tags: [],
+      environmentId: environment.id,
+      caseReferences: [{ id: testCase.id, version: 2, dependsOn: [] }],
+      execution: { concurrency: 1, failurePolicy: 'continue', retryLimit: 0 },
+      createdAt: '2026-08-11T00:00:00.000Z',
+      updatedAt: '2026-08-11T00:00:00.000Z',
+    };
+    const hydrated = hydrateStudioState({
+      ...createInitialStudioState(),
+      projects: [{
+        ...project,
+        testCases: [testCase],
+        suites: [suite, { ...suite, id: 'suite-invalid', execution: { concurrency: 0 } }],
+      } as unknown as typeof project],
+    });
+
+    expect(hydrated.projects[0]?.suites).toEqual([suite]);
+    expect(resolveSuiteTestCases(hydrated.projects[0]!, suite).issues).toEqual([
+      expect.objectContaining({ kind: 'staleCaseVersion' }),
+    ]);
+    expect(hydrateStudioState({ ...createInitialStudioState(), projects: [{ ...project, testCases: [testCase] }] }).projects[0]?.suites).toEqual([]);
+  });
+});
+
+describe('fixture asset contract', () => {
+  it('resolves fixed fixture versions and blocks missing, mismatched, and script fixtures', () => {
+    const project = createEmptyProject(1);
+    const environment = project.environments[0]!;
+    const httpFixture = {
+      schemaVersion: 1 as const,
+      id: 'fixture-seed',
+      version: 2,
+      name: '准备订单数据',
+      description: '',
+      inputs: [],
+      outputs: [],
+      credentialIds: [],
+      environmentIds: [environment.id],
+      setup: { mode: 'http' as const, summary: '创建订单。' },
+      concurrency: 'exclusive' as const,
+      resourceLocks: ['orders'],
+      createdAt: new Date(0).toISOString(),
+      updatedAt: new Date(0).toISOString(),
+    };
+    const scriptFixture = {
+      ...httpFixture,
+      id: 'fixture-script',
+      version: 1,
+      name: '导入脚本数据',
+      setup: {
+        mode: 'script' as const,
+        summary: '导入测试数据。',
+        script: {
+          relativePath: 'scripts/seed-orders.mjs',
+          contentHash: 'a'.repeat(64),
+          requiredEnvironment: ['ORDER_API_TOKEN'],
+        },
+      },
+    };
+    const executableHttpFixture = {
+      ...httpFixture,
+      id: 'fixture-http-ready',
+      version: 1,
+      setup: {
+        mode: 'http' as const,
+        summary: '创建订单。',
+        http: {
+          method: 'POST' as const,
+          path: '/api/test-data/orders',
+          expectedStatuses: [201],
+          body: { orderType: 'fixture' },
+        },
+      },
+    };
+    project.fixtures = [httpFixture, scriptFixture, executableHttpFixture];
+
+    expect(resolveTestCaseFixtures(project, [{ id: httpFixture.id, version: 2 }], environment.id)).toEqual({
+      fixtures: [httpFixture],
+      issues: [],
+    });
+    expect(getTestCaseFixtureRunBlocker(project, {
+      assetReferences: { fixtures: [{ id: httpFixture.id, version: 2 }], reusableFlows: [] },
+    }, environment.id)).toMatchObject({ kind: 'executionUnavailable' });
+    expect(getTestCaseFixtureRunBlocker(project, {
+      assetReferences: { fixtures: [{ id: executableHttpFixture.id, version: 1 }], reusableFlows: [] },
+    }, environment.id)).toBeUndefined();
+    expect(getTestCaseFixtureRunBlocker(project, {
+      assetReferences: { fixtures: [{ id: httpFixture.id, version: 1 }], reusableFlows: [] },
+    }, environment.id)).toMatchObject({ kind: 'missingFixture' });
+    expect(getTestCaseFixtureRunBlocker(project, {
+      assetReferences: { fixtures: [{ id: scriptFixture.id, version: 1 }], reusableFlows: [] },
+    }, environment.id)).toMatchObject({ kind: 'scriptTrustRequired' });
+    expect(getTestCaseFixtureRunBlocker(project, {
+      assetReferences: { fixtures: [{ id: scriptFixture.id, version: 1 }], reusableFlows: [] },
+    }, environment.id, {
+      projectId: project.id,
+      projectDirectory: '/tmp/project-assets',
+      records: [{
+        schemaVersion: 1,
+        projectId: project.id,
+        projectDirectory: '/tmp/project-assets',
+        fixtureId: scriptFixture.id,
+        fixtureVersion: scriptFixture.version,
+        lifecycle: 'setup',
+        relativePath: scriptFixture.setup.script!.relativePath,
+        contentHash: scriptFixture.setup.script!.contentHash,
+        approvedAt: new Date(0).toISOString(),
+      }],
+    })).toMatchObject({ kind: 'executionUnavailable' });
+    expect(getTestCaseFixtureRunBlocker(project, {
+      assetReferences: { fixtures: [{ id: scriptFixture.id, version: 1 }], reusableFlows: [] },
+    }, environment.id, {
+      projectId: project.id,
+      projectDirectory: '/tmp/project-assets',
+      scriptExecutionEnabled: true,
+      records: [{
+        schemaVersion: 1,
+        projectId: project.id,
+        projectDirectory: '/tmp/project-assets',
+        fixtureId: scriptFixture.id,
+        fixtureVersion: scriptFixture.version,
+        lifecycle: 'setup',
+        relativePath: scriptFixture.setup.script!.relativePath,
+        contentHash: scriptFixture.setup.script!.contentHash,
+        approvedAt: new Date(0).toISOString(),
+      }],
+    })).toBeUndefined();
+    expect(resolveTestCaseFixtures(project, [{ id: httpFixture.id, version: 2 }], 'other-environment').issues).toEqual([
+      expect.objectContaining({ kind: 'environmentMismatch' }),
+    ]);
+  });
+
+  it('accepts only bounded, non-secret same-origin HTTP lifecycle declarations', () => {
+    expect(normalizeFixtureHttpDeclaration({
+      method: 'PATCH',
+      path: '/api/test-data/orders/1',
+      expectedStatuses: [200, 204],
+      body: { state: 'ready' },
+    })).toEqual({
+      method: 'PATCH',
+      path: '/api/test-data/orders/1',
+      expectedStatuses: [200, 204],
+      body: { state: 'ready' },
+    });
+    expect(normalizeFixtureHttpDeclaration({
+      method: 'POST',
+      path: 'https://outside.example.test/seed',
+      expectedStatuses: [200],
+    })).toBeUndefined();
+    expect(normalizeFixtureHttpDeclaration({
+      method: 'POST',
+      path: '/api/test-data/orders?token=secret',
+      expectedStatuses: [200],
+    })).toBeUndefined();
+    expect(normalizeFixtureHttpDeclaration({
+      method: 'POST',
+      path: '/api/test-data/orders',
+      expectedStatuses: [200],
+      body: { apiKey: 'not-allowed' },
+    })).toBeUndefined();
+    expect(normalizeFixtureHttpDeclaration({
+      method: 'POST',
+      path: '/api/test-data/orders',
+      expectedStatuses: [201],
+      responseOutputs: [{ outputName: 'orderId', jsonPointer: '/orderId' }],
+    })).toEqual(expect.objectContaining({
+      responseOutputs: [{ outputName: 'orderId', jsonPointer: '/orderId' }],
+    }));
+    expect(normalizeFixtureHttpDeclaration({
+      method: 'POST',
+      path: '/api/test-data/orders',
+      expectedStatuses: [201],
+      responseOutputs: [{ outputName: 'token', jsonPointer: '/token' }],
+    })).toBeUndefined();
+    expect(normalizeFixtureHttpDeclaration({
+      method: 'POST',
+      path: '/api/test-data/orders',
+      expectedStatuses: [201],
+      responseOutputs: [{ outputName: 'orderId', jsonPointer: '/data/orderId' }],
+    })).toBeUndefined();
+  });
+
+  it('lists only mapped string outputs from exact Fixture versions bound to the Case', () => {
+    const project = createEmptyProject(1);
+    const environment = project.environments[0]!;
+    const boundFixture = {
+      schemaVersion: 1 as const,
+      id: 'fixture-order',
+      version: 2,
+      name: '准备订单',
+      description: '',
+      inputs: [],
+      outputs: [
+        { name: 'orderId', type: 'string' as const, required: true },
+        { name: 'rowCount', type: 'number' as const, required: true },
+      ],
+      credentialIds: [],
+      environmentIds: [environment.id],
+      setup: {
+        mode: 'http' as const,
+        summary: '创建订单。',
+        http: {
+          method: 'POST' as const,
+          path: '/api/test-data/orders',
+          expectedStatuses: [201],
+          responseOutputs: [
+            { outputName: 'orderId', jsonPointer: '/orderId' },
+            { outputName: 'rowCount', jsonPointer: '/rowCount' },
+          ],
+        },
+      },
+      concurrency: 'exclusive' as const,
+      resourceLocks: [],
+      createdAt: new Date(0).toISOString(),
+      updatedAt: new Date(0).toISOString(),
+    };
+    const otherFixture = { ...boundFixture, id: 'fixture-other', version: 1, name: '未绑定 Fixture' };
+    const testCase = {
+      ...project.testCases[0]!,
+      assetReferences: { fixtures: [{ id: boundFixture.id, version: boundFixture.version }], reusableFlows: [] },
+    };
+
+    expect(getTestCaseFixtureOutputBindingOptions(
+      { ...project, fixtures: [boundFixture, otherFixture] },
+      testCase,
+    )).toEqual([
+      expect.objectContaining({ fixtureId: boundFixture.id, fixtureVersion: 2, output: expect.objectContaining({ name: 'orderId' }) }),
+    ]);
+
+    const scriptFixture = {
+      ...boundFixture,
+      id: 'fixture-script-order',
+      version: 3,
+      name: '脚本准备订单',
+      outputs: [{ name: 'orderId', type: 'string' as const, required: true }],
+      setup: {
+        mode: 'script' as const,
+        summary: '执行准备脚本。',
+        script: { relativePath: 'scripts/seed-orders.mjs', contentHash: 'a'.repeat(64), requiredEnvironment: [] },
+      },
+    };
+    expect(getTestCaseFixtureOutputBindingOptions(
+      { ...project, fixtures: [boundFixture, scriptFixture] },
+      { ...testCase, assetReferences: { fixtures: [{ id: scriptFixture.id, version: scriptFixture.version }], reusableFlows: [] } },
+    )).toEqual([
+      expect.objectContaining({ fixtureId: scriptFixture.id, fixtureVersion: 3, output: expect.objectContaining({ name: 'orderId' }) }),
+    ]);
+  });
+
+  it('keeps legacy or malformed HTTP fixtures for explicit preflight blocking during hydration', () => {
+    const project = createEmptyProject(1);
+    const environment = project.environments[0]!;
+    const legacyFixture = {
+      schemaVersion: 1 as const,
+      id: 'fixture-legacy-http',
+      version: 1,
+      name: '旧版准备数据',
+      description: '',
+      inputs: [],
+      outputs: [],
+      credentialIds: [],
+      environmentIds: [environment.id],
+      setup: { mode: 'http' as const, summary: '旧版声明没有请求详情。' },
+      cleanup: {
+        mode: 'http' as const,
+        summary: '不安全声明。',
+        http: { method: 'POST' as const, path: 'https://outside.example.test/seed', expectedStatuses: [200] },
+      },
+      concurrency: 'exclusive' as const,
+      resourceLocks: [],
+      createdAt: new Date(0).toISOString(),
+      updatedAt: new Date(0).toISOString(),
+    };
+    const testCase = {
+      ...project.testCases[0]!,
+      assetReferences: { fixtures: [{ id: legacyFixture.id, version: legacyFixture.version }], reusableFlows: [] },
+    };
+    const hydrated = hydrateStudioState({
+      ...createInitialStudioState(),
+      selectedProjectId: project.id,
+      selectedGroupId: project.groups[0]!.id,
+      selectedTestCaseId: testCase.id,
+      projects: [{ ...project, fixtures: [legacyFixture], testCases: [testCase] }],
+    });
+
+    expect(hydrated.projects[0]?.fixtures).toEqual([
+      expect.objectContaining({ id: legacyFixture.id, setup: { mode: 'http', summary: legacyFixture.setup.summary } }),
+    ]);
+    expect(hydrated.projects[0]?.fixtures[0]?.cleanup).toEqual({ mode: 'http', summary: legacyFixture.cleanup.summary });
+    expect(getTestCaseFixtureRunBlocker(
+      hydrated.projects[0]!,
+      hydrated.projects[0]!.testCases[0]!,
+      environment.id,
+    )).toMatchObject({ kind: 'executionUnavailable' });
+  });
+});
+
+describe('storageState project references', () => {
+  it('hydrates only valid logical authentication-state references and clears dangling environment bindings', () => {
+    const project = createEmptyProject(1);
+    const reference = {
+      id: 'state-staging-admin',
+      label: '预发布管理员登录态',
+      createdAt: '2026-08-11T00:00:00.000Z',
+      updatedAt: '2026-08-11T00:00:00.000Z',
+      availability: 'available' as const,
+    };
+    const hydrated = hydrateStudioState({
+      ...createDemoStudioState(),
+      projects: [{
+        ...project,
+        storageStateRefs: [reference, { ...reference, id: 'state-invalid', availability: 'broken' as never }],
+        environments: [
+          { ...project.environments[0]!, storageStateId: reference.id },
+          { ...project.environments[0]!, id: 'env-dangling', storageStateId: 'state-missing' },
+        ],
+      }],
+    });
+
+    expect(hydrated.projects[0]?.storageStateRefs).toEqual([reference]);
+    expect(hydrated.projects[0]?.environments).toEqual([
+      expect.objectContaining({ id: project.environments[0]?.id, storageStateId: reference.id }),
+      expect.not.objectContaining({ storageStateId: expect.anything() }),
+    ]);
+  });
+});
 
 describe('studio state hydration', () => {
   it('creates an editable natural-language test case from a passed Agent plan', () => {
@@ -2116,6 +2507,17 @@ describe('studio state hydration', () => {
       kind: 'credential',
       credentialId: 'cred-qa',
       field: 'username',
+    });
+    const confirmedFixtureOutput = confirmedAction({
+      kind: 'input',
+      locator: { selector: '#order-id', quality: 'acceptable' },
+      binding: { kind: 'fixtureOutput', fixtureId: 'fixture-order', fixtureVersion: 2, outputName: 'orderId' },
+    });
+    expect(getConfirmedDeterministicTestInputBinding(confirmedFixtureOutput)).toEqual({
+      kind: 'fixtureOutput',
+      fixtureId: 'fixture-order',
+      fixtureVersion: 2,
+      outputName: 'orderId',
     });
     expect(
       getConfirmedDeterministicTestStep(

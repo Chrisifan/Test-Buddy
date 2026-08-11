@@ -14,6 +14,7 @@ export type ViewportPreset = 'desktop' | 'laptop' | 'mobile';
 export type TestCaseSource = 'manual' | 'naturalLanguage' | 'recording' | 'prd' | 'reporter';
 export type EnvironmentKind = 'local' | 'staging' | 'productionMirror';
 export type CredentialKind = 'password' | 'cookie' | 'token';
+export type StorageStateAvailability = 'available' | 'expired' | 'unknown';
 export type BrowserSessionStatus = 'idle' | 'starting' | 'ready' | 'navigating' | 'closed' | 'error';
 export type PrdDocumentKind = 'pdf' | 'markdown' | 'text';
 export type PrdAnalysisStatus = 'draft' | 'analyzed';
@@ -85,7 +86,18 @@ export interface CredentialTestInputBinding {
   field: 'username' | 'secret';
 }
 
-export type TestInputValueBinding = CredentialTestInputBinding;
+/**
+ * A reference to a declared setup output from one exact Fixture version. The
+ * value is resolved only while that Case run is active in the main process.
+ */
+export interface FixtureOutputTestInputBinding {
+  kind: 'fixtureOutput';
+  fixtureId: string;
+  fixtureVersion: number;
+  outputName: string;
+}
+
+export type TestInputValueBinding = CredentialTestInputBinding | FixtureOutputTestInputBinding;
 
 /**
  * A structured input target captured from a passed Agent Run. The Agent value
@@ -139,6 +151,203 @@ export interface VersionedTestAssetReference {
   version: number;
 }
 
+export type SuiteFailurePolicy = 'continue' | 'failFast';
+
+/**
+ * An immutable Case reference inside a Suite. Dependencies use the exact
+ * Case revision too, so an edited Case can never silently alter a Suite DAG.
+ */
+export interface SuiteCaseReference extends VersionedTestAssetReference {
+  dependsOn: VersionedTestAssetReference[];
+}
+
+/** Persisted scheduling intent. The shared resolver does not run work yet. */
+export interface SuiteExecutionPolicy {
+  concurrency: number;
+  failurePolicy: SuiteFailurePolicy;
+  retryLimit: number;
+}
+
+/** A versioned collection of Cases for a single target environment. */
+export interface SuiteAsset {
+  schemaVersion: 1;
+  id: string;
+  version: number;
+  name: string;
+  description: string;
+  tags: string[];
+  environmentId: string;
+  caseReferences: SuiteCaseReference[];
+  execution: SuiteExecutionPolicy;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type SuiteResolutionIssueKind =
+  | 'emptySuite'
+  | 'missingEnvironment'
+  | 'missingCase'
+  | 'staleCaseVersion'
+  | 'missingDependency'
+  | 'cyclicDependency';
+
+export interface SuiteResolutionIssue {
+  kind: SuiteResolutionIssueKind;
+  reference?: VersionedTestAssetReference;
+  message: string;
+}
+
+export interface ResolvedSuiteCase {
+  reference: SuiteCaseReference;
+  testCase: TestCaseDraft;
+}
+
+export interface SuiteCaseResolution {
+  environment?: ProjectEnvironment;
+  orderedCases: ResolvedSuiteCase[];
+  issues: SuiteResolutionIssue[];
+}
+
+export type FixtureValueType = 'string' | 'number' | 'boolean' | 'json';
+export type FixtureExecutionMode = 'http' | 'ui' | 'script';
+export type FixtureConcurrency = 'parallel' | 'exclusive';
+export type FixtureHttpMethod = 'POST' | 'PUT' | 'PATCH' | 'DELETE';
+
+export type FixtureHttpJsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | FixtureHttpJsonValue[]
+  | { [key: string]: FixtureHttpJsonValue };
+
+/** A bounded top-level JSON pointer from an HTTP response to a declared output. */
+export interface FixtureHttpResponseOutputMapping {
+  outputName: string;
+  jsonPointer: string;
+}
+
+/**
+ * A deliberately small HTTP contract for data setup and cleanup. It never
+ * carries headers, credentials, cookies, absolute URLs, or variable
+ * interpolation. The runtime resolves `path` against the selected
+ * environment only after validating it as a same-origin relative API path.
+ */
+export interface FixtureHttpDeclaration {
+  method: FixtureHttpMethod;
+  path: string;
+  expectedStatuses: number[];
+  body?: FixtureHttpJsonValue;
+  /** Setup-only, declared response values. Values never become run evidence. */
+  responseOutputs?: FixtureHttpResponseOutputMapping[];
+}
+
+/** Typed data admitted to or produced by a fixture lifecycle. */
+export interface FixtureParameter {
+  name: string;
+  type: FixtureValueType;
+  required: boolean;
+  description?: string;
+}
+
+/**
+ * A lifecycle declaration deliberately contains no resolved credentials or
+ * script content. Script execution is permitted only after a later trust
+ * check against this relative path and content hash.
+ */
+export interface FixtureLifecycleDeclaration {
+  mode: FixtureExecutionMode;
+  summary: string;
+  http?: FixtureHttpDeclaration;
+  script?: {
+    relativePath: string;
+    contentHash: string;
+    requiredEnvironment: string[];
+  };
+}
+
+/** A versioned, non-secret setup/cleanup asset owned by one project. */
+export interface FixtureAsset {
+  schemaVersion: 1;
+  id: string;
+  version: number;
+  name: string;
+  description: string;
+  inputs: FixtureParameter[];
+  outputs: FixtureParameter[];
+  credentialIds: string[];
+  environmentIds: string[];
+  setup: FixtureLifecycleDeclaration;
+  cleanup?: FixtureLifecycleDeclaration;
+  concurrency: FixtureConcurrency;
+  resourceLocks: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type FixtureReferenceIssueKind = 'missing' | 'environmentMismatch';
+
+export interface FixtureReferenceIssue {
+  reference: VersionedTestAssetReference;
+  kind: FixtureReferenceIssueKind;
+  message: string;
+}
+
+export interface FixtureResolution {
+  fixtures: FixtureAsset[];
+  issues: FixtureReferenceIssue[];
+}
+
+export type FixtureRunBlockerKind = 'missingFixture' | 'environmentMismatch' | 'scriptTrustRequired' | 'executionUnavailable';
+
+export interface FixtureRunBlocker {
+  kind: FixtureRunBlockerKind;
+  message: string;
+}
+
+export type FixtureScriptLifecycle = 'setup' | 'cleanup';
+
+/**
+ * A local approval for one immutable script declaration. It intentionally
+ * lives only under studio-data and never becomes project asset content.
+ */
+export interface FixtureScriptTrustRecord {
+  schemaVersion: 1;
+  projectId: string;
+  projectDirectory: string;
+  fixtureId: string;
+  fixtureVersion: number;
+  lifecycle: FixtureScriptLifecycle;
+  relativePath: string;
+  contentHash: string;
+  approvedAt: string;
+}
+
+/** Renderer-safe view of a local script approval. */
+export interface FixtureScriptTrustStatus {
+  fixtureId: string;
+  fixtureVersion: number;
+  lifecycle: FixtureScriptLifecycle;
+  relativePath: string;
+  contentHash: string;
+  approvedAt: string;
+}
+
+export interface FixtureScriptTrustRequest {
+  projectId: string;
+  fixtureId: string;
+  fixtureVersion: number;
+  lifecycle: FixtureScriptLifecycle;
+}
+
+export interface FixtureScriptTrustContext {
+  projectId?: string;
+  projectDirectory?: string;
+  records?: FixtureScriptTrustRecord[];
+  /** Set only by a main-process runner with a registered script executor. */
+  scriptExecutionEnabled?: boolean;
+}
+
 export interface TestCaseAssetReferences {
   fixtures: VersionedTestAssetReference[];
   reusableFlows: VersionedTestAssetReference[];
@@ -150,6 +359,207 @@ export function createEmptyTestCaseAssetReferences(): TestCaseAssetReferences {
     fixtures: [],
     reusableFlows: [],
   };
+}
+
+/** Resolves exact fixture versions only; references never follow a latest version implicitly. */
+export function resolveTestCaseFixtures(
+  project: Pick<ProjectDraft, 'fixtures'>,
+  references: VersionedTestAssetReference[],
+  environmentId?: string,
+): FixtureResolution {
+  const fixturesByReference = new Map(
+    project.fixtures.map((fixture) => [`${fixture.id}@${fixture.version}`, fixture]),
+  );
+  const fixtures: FixtureAsset[] = [];
+  const issues: FixtureReferenceIssue[] = [];
+  references.forEach((reference) => {
+    const fixture = fixturesByReference.get(`${reference.id}@${reference.version}`);
+    if (!fixture) {
+      issues.push({
+        reference,
+        kind: 'missing',
+        message: `未找到 fixture ${reference.id}@${reference.version}。`,
+      });
+      return;
+    }
+    if (environmentId && fixture.environmentIds.length && !fixture.environmentIds.includes(environmentId)) {
+      issues.push({
+        reference,
+        kind: 'environmentMismatch',
+        message: `fixture ${fixture.name}@${fixture.version} 不适用于当前环境。`,
+      });
+      return;
+    }
+    fixtures.push(fixture);
+  });
+  return { fixtures, issues };
+}
+
+/**
+ * A dependency must resolve to its exact version, match the selected
+ * environment, and declare only executable lifecycle requests before a
+ * browser session can begin. Script lifecycle execution additionally requires
+ * a matching local trust record and a main-process script executor.
+ */
+export function getTestCaseFixtureRunBlocker(
+  project: Pick<ProjectDraft, 'fixtures'>,
+  testCase: Pick<TestCaseDraft, 'assetReferences'>,
+  environmentId: string,
+  scriptTrust: FixtureScriptTrustContext = {},
+): FixtureRunBlocker | undefined {
+  const resolution = resolveTestCaseFixtures(project, testCase.assetReferences?.fixtures ?? [], environmentId);
+  const issue = resolution.issues[0];
+  if (issue) {
+    return {
+      kind: issue.kind === 'missing' ? 'missingFixture' : 'environmentMismatch',
+      message: issue.message,
+    };
+  }
+  const untrustedScript = resolution.fixtures
+    .flatMap((fixture) => getFixtureScriptLifecycles(fixture).map((lifecycle) => ({ fixture, lifecycle })))
+    .find(({ fixture, lifecycle }) => !isFixtureScriptTrusted(fixture, lifecycle, scriptTrust));
+  if (untrustedScript) {
+    return {
+      kind: 'scriptTrustRequired',
+      message: `fixture ${untrustedScript.fixture.name}@${untrustedScript.fixture.version} 的 ${untrustedScript.lifecycle === 'setup' ? '准备' : '清理'}脚本需要信任，当前不会执行。`,
+    };
+  }
+  const invalidOutputConfiguration = resolution.fixtures.find((fixture) => !hasValidFixtureHttpOutputConfiguration(fixture));
+  if (invalidOutputConfiguration) {
+    return {
+      kind: 'executionUnavailable',
+      message: `fixture ${invalidOutputConfiguration.name}@${invalidOutputConfiguration.version} 的 HTTP 输出映射必须指向已声明的 setup 输出，当前不会执行。`,
+    };
+  }
+  const unsupportedLifecycle = resolution.fixtures
+    .flatMap((fixture) => [
+      { fixture, lifecycle: 'setup' as const, declaration: fixture.setup },
+      ...(fixture.cleanup ? [{ fixture, lifecycle: 'cleanup' as const, declaration: fixture.cleanup }] : []),
+    ])
+    .find(({ declaration }) => {
+      if (declaration.mode === 'http') {
+        return !normalizeFixtureHttpDeclaration(declaration.http);
+      }
+      return declaration.mode === 'script' ? !scriptTrust.scriptExecutionEnabled : true;
+    });
+  if (unsupportedLifecycle) {
+    const { fixture, lifecycle, declaration } = unsupportedLifecycle;
+    const lifecycleName = lifecycle === 'setup' ? '准备' : '清理';
+    const message = declaration.mode === 'http'
+      ? `fixture ${fixture.name}@${fixture.version} 的 ${lifecycleName} HTTP 请求配置不完整，当前不会执行。`
+      : declaration.mode === 'script'
+        ? `fixture ${fixture.name}@${fixture.version} 的 ${lifecycleName}脚本执行器不可用，当前不会执行。`
+        : `fixture ${fixture.name}@${fixture.version} 的 ${lifecycleName}界面操作尚未配置受控执行器，当前不会执行。`;
+    return { kind: 'executionUnavailable', message };
+  }
+  return undefined;
+}
+
+/** Returns a normalized safe HTTP declaration, or rejects the whole declaration. */
+export function normalizeFixtureHttpDeclaration(value: unknown): FixtureHttpDeclaration | undefined {
+  const rawHttp = asRecord(value);
+  if (!rawHttp || !isFixtureHttpMethod(rawHttp.method)) {
+    return undefined;
+  }
+  const path = normalizedNonEmptyString(rawHttp.path);
+  const expectedStatuses = normalizeFixtureExpectedStatuses(rawHttp.expectedStatuses);
+  const responseOutputs = rawHttp.responseOutputs === undefined
+    ? undefined
+    : normalizeFixtureHttpResponseOutputMappings(rawHttp.responseOutputs);
+  if (!path || !isSafeFixtureHttpPath(path) || !expectedStatuses) {
+    return undefined;
+  }
+  const body = rawHttp.body === undefined ? undefined : normalizeFixtureHttpJsonValue(rawHttp.body);
+  if (
+    (rawHttp.body !== undefined && body === undefined) ||
+    (rawHttp.responseOutputs !== undefined && !responseOutputs) ||
+    (body !== undefined && JSON.stringify(body).length > 8_192)
+  ) {
+    return undefined;
+  }
+  return {
+    method: rawHttp.method,
+    path,
+    expectedStatuses,
+    ...(body === undefined ? {} : { body }),
+    ...(responseOutputs === undefined ? {} : { responseOutputs }),
+  };
+}
+
+/**
+ * Returns only string outputs that are both mapped by the setup HTTP contract
+ * and bound to this exact Case. It is renderer-safe because it contains no
+ * resolved response value.
+ */
+export function getTestCaseFixtureOutputBindingOptions(
+  project: Pick<ProjectDraft, 'fixtures'>,
+  testCase: Pick<TestCaseDraft, 'assetReferences' | 'environmentId'>,
+): Array<{
+  fixtureId: string;
+  fixtureVersion: number;
+  fixtureName: string;
+  output: FixtureParameter;
+}> {
+  return resolveTestCaseFixtures(
+    project,
+    testCase.assetReferences?.fixtures ?? [],
+    testCase.environmentId,
+  ).fixtures.flatMap((fixture) => {
+    const http = fixture.setup.mode === 'http' ? normalizeFixtureHttpDeclaration(fixture.setup.http) : undefined;
+    const mappedNames = fixture.setup.mode === 'script'
+      ? new Set(fixture.outputs.map((output) => output.name))
+      : new Set(http?.responseOutputs?.map((mapping) => mapping.outputName) ?? []);
+    return fixture.outputs
+      .filter((output) => output.type === 'string' && mappedNames.has(output.name))
+      .map((output) => ({
+        fixtureId: fixture.id,
+        fixtureVersion: fixture.version,
+        fixtureName: fixture.name,
+        output,
+      }));
+  });
+}
+
+/** A Fixture may expose HTTP response outputs only from its setup lifecycle. */
+export function hasValidFixtureHttpOutputConfiguration(
+  fixture: Pick<FixtureAsset, 'setup' | 'cleanup' | 'outputs'>,
+): boolean {
+  const setupHttp = fixture.setup.mode === 'http' ? normalizeFixtureHttpDeclaration(fixture.setup.http) : undefined;
+  const setupMappings = setupHttp?.responseOutputs ?? [];
+  if (setupMappings.some((mapping) => !fixture.outputs.some((output) => output.name === mapping.outputName))) {
+    return false;
+  }
+  const cleanupHttp = fixture.cleanup?.mode === 'http' ? normalizeFixtureHttpDeclaration(fixture.cleanup.http) : undefined;
+  return !(cleanupHttp?.responseOutputs?.length);
+}
+
+export function getFixtureScriptLifecycles(fixture: FixtureAsset): FixtureScriptLifecycle[] {
+  return [
+    ...(fixture.setup.mode === 'script' ? ['setup' as const] : []),
+    ...(fixture.cleanup?.mode === 'script' ? ['cleanup' as const] : []),
+  ];
+}
+
+export function isFixtureScriptTrusted(
+  fixture: FixtureAsset,
+  lifecycle: FixtureScriptLifecycle,
+  context: FixtureScriptTrustContext = {},
+): boolean {
+  const declaration = lifecycle === 'setup' ? fixture.setup : fixture.cleanup;
+  const script = declaration?.mode === 'script' ? declaration.script : undefined;
+  if (!script || !context.projectId || !context.projectDirectory) {
+    return false;
+  }
+  return (context.records ?? []).some((record) => (
+    record.schemaVersion === 1 &&
+    record.projectId === context.projectId &&
+    record.projectDirectory === context.projectDirectory &&
+    record.fixtureId === fixture.id &&
+    record.fixtureVersion === fixture.version &&
+    record.lifecycle === lifecycle &&
+    record.relativePath === script.relativePath &&
+    record.contentHash === script.contentHash
+  ));
 }
 
 /** Returns the immutable revision assigned to the next editor save. */
@@ -300,6 +710,20 @@ export interface CredentialRef {
   hasSecret: boolean;
 }
 
+/**
+ * Renderer-safe metadata for one locally encrypted Playwright storageState.
+ * The serialized cookies, origin storage, and local file path never enter a
+ * project asset, StudioState, run report, or renderer response.
+ */
+export interface StorageStateRef {
+  id: string;
+  label: string;
+  createdAt: string;
+  updatedAt: string;
+  availability: StorageStateAvailability;
+  expiresAt?: string;
+}
+
 export interface ProjectEnvironment {
   id: string;
   name: string;
@@ -311,6 +735,8 @@ export interface ProjectEnvironment {
   locale: string;
   headless: boolean;
   credentialId?: string;
+  /** Logical reference to a local encrypted browser authentication state. */
+  storageStateId?: string;
 }
 
 export type PrdCoverageTarget = 'case' | 'recording';
@@ -337,10 +763,115 @@ export interface ProjectDraft {
   testCases: TestCaseDraft[];
   recordings: RecordingAsset[];
   documents: PrdDocumentAsset[];
+  fixtures: FixtureAsset[];
+  suites: SuiteAsset[];
   prdCoverageTriage: PrdCoverageTriageDecision[];
   credentialRefs: CredentialRef[];
+  storageStateRefs: StorageStateRef[];
   createdAt: string;
   updatedAt: string;
+}
+
+/**
+ * Resolves a Suite without executing it. Member order remains the stable
+ * tie-breaker for independent branches; dependency edges only add ordering.
+ * A stale Case version is deliberately an issue, never an implicit upgrade.
+ */
+export function resolveSuiteTestCases(
+  project: Pick<ProjectDraft, 'environments' | 'testCases'>,
+  suite: SuiteAsset,
+): SuiteCaseResolution {
+  const environment = project.environments.find((candidate) => candidate.id === suite.environmentId);
+  const issues: SuiteResolutionIssue[] = [];
+  if (!suite.caseReferences.length) {
+    issues.push({
+      kind: 'emptySuite',
+      message: `Suite ${suite.name}@${suite.version} 未选择任何用例。`,
+    });
+  }
+  if (!environment) {
+    issues.push({
+      kind: 'missingEnvironment',
+      message: `Suite ${suite.name}@${suite.version} 引用了不存在的环境。`,
+    });
+  }
+
+  const casesById = new Map(project.testCases.map((testCase) => [testCase.id, testCase]));
+  const referencesByKey = new Map(suite.caseReferences.map((reference) => [versionedReferenceKey(reference), reference]));
+  const resolvedByKey = new Map<string, ResolvedSuiteCase>();
+  suite.caseReferences.forEach((reference) => {
+    const testCase = casesById.get(reference.id);
+    if (!testCase) {
+      issues.push({
+        kind: 'missingCase',
+        reference,
+        message: `Suite 未找到用例 ${reference.id}@${reference.version}。`,
+      });
+      return;
+    }
+    const currentVersion = normalizeTestCaseVersion(testCase.version);
+    if (currentVersion !== reference.version) {
+      issues.push({
+        kind: 'staleCaseVersion',
+        reference,
+        message: `Suite 引用的用例 ${reference.id}@${reference.version} 已不是当前版本。`,
+      });
+      return;
+    }
+    resolvedByKey.set(versionedReferenceKey(reference), { reference, testCase });
+  });
+
+  suite.caseReferences.forEach((reference) => {
+    reference.dependsOn.forEach((dependency) => {
+      if (!referencesByKey.has(versionedReferenceKey(dependency))) {
+        issues.push({
+          kind: 'missingDependency',
+          reference,
+          message: `Suite 用例 ${reference.id}@${reference.version} 的前置依赖不存在。`,
+        });
+      }
+    });
+  });
+
+  if (issues.length) {
+    return { ...(environment ? { environment } : {}), orderedCases: [], issues };
+  }
+
+  const remainingDependencies = new Map(
+    suite.caseReferences.map((reference) => [
+      versionedReferenceKey(reference),
+      new Set(reference.dependsOn.map(versionedReferenceKey)),
+    ]),
+  );
+  const orderedCases: ResolvedSuiteCase[] = [];
+  const complete = new Set<string>();
+  while (orderedCases.length < suite.caseReferences.length) {
+    const nextReference = suite.caseReferences.find((reference) => {
+      const key = versionedReferenceKey(reference);
+      return !complete.has(key) && (remainingDependencies.get(key)?.size ?? 0) === 0;
+    });
+    if (!nextReference) {
+      issues.push({
+        kind: 'cyclicDependency',
+        message: `Suite ${suite.name}@${suite.version} 存在循环依赖，当前不会执行。`,
+      });
+      return { ...(environment ? { environment } : {}), orderedCases: [], issues };
+    }
+    const nextKey = versionedReferenceKey(nextReference);
+    const resolved = resolvedByKey.get(nextKey);
+    if (!resolved) {
+      issues.push({
+        kind: 'missingCase',
+        reference: nextReference,
+        message: `Suite 未找到用例 ${nextReference.id}@${nextReference.version}。`,
+      });
+      return { ...(environment ? { environment } : {}), orderedCases: [], issues };
+    }
+    complete.add(nextKey);
+    orderedCases.push(resolved);
+    remainingDependencies.forEach((dependencies) => dependencies.delete(nextKey));
+  }
+  return { ...(environment ? { environment } : {}), orderedCases, issues };
 }
 
 /** A review-only request to materialize project assets in a user-selected directory. */
@@ -404,6 +935,32 @@ export interface ProjectAssetReloadResult {
   binding: ProjectAssetBinding;
 }
 
+/** A reviewed request to publish local project edits to an existing binding. */
+export interface ProjectAssetUpdateRequest {
+  projectId: string;
+  /** Current editor state. It is compared to persisted studio-data before publish. */
+  project: ProjectDraft;
+  /** The binding revision observed when the plan was generated. */
+  expectedRevision?: string;
+  /** The target asset revision returned by the reviewed update plan. */
+  plannedRevision?: string;
+}
+
+/**
+ * A read-only compare-and-swap publish plan for an already bound project
+ * directory. `publishedRevision` describes the current external snapshot;
+ * `snapshotRevision` is the sanitized local snapshot that may be published.
+ */
+export interface ProjectAssetUpdatePlan {
+  projectId: string;
+  projectDirectory: string;
+  publishedRevision?: string;
+  snapshotRevision?: string;
+  files: string[];
+  status: 'ready' | 'requiresReview' | 'unavailable';
+  issues: ProjectAssetDiagnostic[];
+}
+
 export interface RunArtifact {
   id: string;
   type: 'screenshot' | 'trace' | 'report' | 'snapshot' | 'attachment';
@@ -418,6 +975,23 @@ export interface RunStepLog {
   status: RunTone;
   message: string;
   screenshotPath?: string;
+}
+
+/** Safe, value-free evidence for one Fixture lifecycle. */
+export interface FixtureLifecycleEvidence {
+  fixtureId: string;
+  fixtureVersion: number;
+  lifecycle: FixtureScriptLifecycle;
+  /** Absent in legacy HTTP evidence written before lifecycle modes were added. */
+  mode?: 'http' | 'script';
+  method?: FixtureHttpMethod;
+  path?: string;
+  expectedStatuses?: number[];
+  /** Relative path only; stdout, stderr, context, and output values are never recorded. */
+  scriptPath?: string;
+  outcome: 'passed' | 'failed' | 'neutral';
+  httpStatus?: number;
+  durationMs: number;
 }
 
 export interface ManualStepEvidence {
@@ -444,6 +1018,7 @@ export interface RunDetail {
   logs: string[];
   steps: RunStepLog[];
   artifacts: RunArtifact[];
+  fixtureLifecycles?: FixtureLifecycleEvidence[];
   agentRun?: AgentRunResult;
   agentRuns?: AgentRunResult[];
   manualEvidence?: ManualStepEvidence[];
@@ -658,6 +1233,10 @@ export interface RunTestCaseRequest {
   runId?: string;
   /** Internal-only signal. It is never sent across IPC from the renderer. */
   cancellationSignal?: AbortSignal;
+  /** Main-process-only local approvals. Renderer requests cannot supply these values. */
+  fixtureScriptTrustRecords?: FixtureScriptTrustRecord[];
+  /** Main-process-only identity of the bound asset directory. */
+  fixtureScriptTrustDirectory?: string;
   project: ProjectDraft;
   testCase: TestCaseDraft;
   environment: ProjectEnvironment;
@@ -791,6 +1370,28 @@ export interface SaveCredentialRequest {
   secret: string;
 }
 
+/**
+ * The main process opens and reads the selected file itself. Its serialized
+ * authentication state must never be transferred through the renderer IPC.
+ */
+export interface ImportStorageStateRequest {
+  projectId: string;
+  label: string;
+}
+
+/** Captures the state from the current real BrowserSession in the main process. */
+export interface CaptureStorageStateRequest {
+  projectId: string;
+  label: string;
+  /** Replaces an existing local state while preserving its logical ID. */
+  storageStateId?: string;
+}
+
+export interface RevokeStorageStateRequest {
+  projectId: string;
+  storageStateId: string;
+}
+
 export interface RunEventPayload {
   runId: string;
   title: string;
@@ -811,12 +1412,19 @@ export interface DesktopApi {
   updateProject: (project: ProjectDraft) => Promise<ProjectDraft>;
   analyzePrdDocument: (request: PrdSemanticAnalysisRequest) => Promise<PrdSemanticAnalysisResponse>;
   saveCredential: (request: SaveCredentialRequest) => Promise<CredentialRef>;
+  importStorageState: (request: ImportStorageStateRequest) => Promise<StorageStateRef | null>;
+  captureStorageState: (request: CaptureStorageStateRequest) => Promise<StorageStateRef>;
+  revokeStorageState: (request: RevokeStorageStateRequest) => Promise<void>;
   selectProjectAssetDirectory: () => Promise<string | null>;
   planProjectAssetMigration: (request: ProjectAssetMigrationRequest) => Promise<ProjectAssetMigrationPlan>;
   writeProjectAssetSnapshot: (request: ProjectAssetMigrationRequest) => Promise<ProjectAssetBinding>;
   inspectProjectAssetBinding: (projectId: string) => Promise<ProjectAssetBindingStatus | null>;
   planProjectAssetReload: (request: ProjectAssetReloadRequest) => Promise<ProjectAssetReloadPlan>;
   reloadProjectAssetSnapshot: (request: ProjectAssetReloadRequest) => Promise<ProjectAssetReloadResult>;
+  planProjectAssetUpdate: (request: ProjectAssetUpdateRequest) => Promise<ProjectAssetUpdatePlan>;
+  updateProjectAssetSnapshot: (request: ProjectAssetUpdateRequest) => Promise<ProjectAssetBinding>;
+  listFixtureScriptTrusts: (projectId: string) => Promise<FixtureScriptTrustStatus[]>;
+  approveFixtureScriptTrust: (request: FixtureScriptTrustRequest) => Promise<FixtureScriptTrustStatus>;
   startBrowserSession: (request: BrowserSessionRequest) => Promise<BrowserSessionState>;
   navigateBrowserSession: (request: BrowserNavigateRequest) => Promise<BrowserSessionState>;
   captureBrowserSnapshot: () => Promise<BrowserSessionState>;
@@ -1284,6 +1892,7 @@ export function createDemoProject(): ProjectDraft {
         hasSecret: true,
       },
     ],
+    storageStateRefs: [],
     recordings: [
       {
         id: 'recording-demo-dashboard',
@@ -1326,6 +1935,8 @@ export function createDemoProject(): ProjectDraft {
       },
     ],
     documents: [],
+    fixtures: [],
+    suites: [],
     prdCoverageTriage: [],
     testCases: initialWorkflows.map((workflow) => workflowToTestCase(workflow)),
   };
@@ -1834,15 +2445,35 @@ function normalizeVersionedTestAssetReference(value: unknown): VersionedTestAsse
   return { id, version };
 }
 
+function versionedReferenceKey(reference: Pick<VersionedTestAssetReference, 'id' | 'version'>): string {
+  return `${reference.id}@${reference.version}`;
+}
+
 function normalizeTestInputValueBinding(value: unknown): TestInputValueBinding | undefined {
   const rawBinding = asRecord(value);
-  const credentialId = normalizedNonEmptyString(rawBinding?.credentialId);
-  if (!rawBinding || rawBinding.kind !== 'credential' || !credentialId) {
+  if (!rawBinding) {
     return undefined;
   }
-  return rawBinding.field === 'username' || rawBinding.field === 'secret'
-    ? { kind: 'credential', credentialId, field: rawBinding.field }
-    : undefined;
+  if (rawBinding.kind === 'credential') {
+    const credentialId = normalizedNonEmptyString(rawBinding.credentialId);
+    return credentialId && (rawBinding.field === 'username' || rawBinding.field === 'secret')
+      ? { kind: 'credential', credentialId, field: rawBinding.field }
+      : undefined;
+  }
+  if (rawBinding.kind === 'fixtureOutput') {
+    const fixtureId = normalizedNonEmptyString(rawBinding.fixtureId);
+    const outputName = normalizedNonEmptyString(rawBinding.outputName);
+    const fixtureVersion = rawBinding.fixtureVersion;
+    return fixtureId &&
+      outputName &&
+      /^[A-Za-z_][A-Za-z0-9_-]*$/.test(outputName) &&
+      typeof fixtureVersion === 'number' &&
+      Number.isSafeInteger(fixtureVersion) &&
+      fixtureVersion > 0
+      ? { kind: 'fixtureOutput', fixtureId, fixtureVersion, outputName }
+      : undefined;
+  }
+  return undefined;
 }
 
 function isTestInputValueBinding(value: unknown): value is TestInputValueBinding {
@@ -1881,6 +2512,337 @@ function normalizeTestCaseAssetReferences(value: unknown): TestCaseAssetReferenc
     reusableFlows: normalizeVersionedTestAssetReferences(rawReferences?.reusableFlows),
     ...(baseline ? { baseline } : {}),
   };
+}
+
+function normalizeFixtureParameter(value: unknown): FixtureParameter | undefined {
+  const rawParameter = asRecord(value);
+  const name = normalizedNonEmptyString(rawParameter?.name);
+  if (
+    !rawParameter ||
+    !name ||
+    !/^[A-Za-z_][A-Za-z0-9_-]*$/.test(name) ||
+    (rawParameter.type !== 'string' && rawParameter.type !== 'number' && rawParameter.type !== 'boolean' && rawParameter.type !== 'json') ||
+    typeof rawParameter.required !== 'boolean'
+  ) {
+    return undefined;
+  }
+  const description = normalizedNonEmptyString(rawParameter.description);
+  return { name, type: rawParameter.type, required: rawParameter.required, ...(description ? { description } : {}) };
+}
+
+function normalizeFixtureLifecycle(value: unknown): FixtureLifecycleDeclaration | undefined {
+  const rawLifecycle = asRecord(value);
+  const summary = normalizedNonEmptyString(rawLifecycle?.summary);
+  if (!rawLifecycle || !summary || (rawLifecycle.mode !== 'http' && rawLifecycle.mode !== 'ui' && rawLifecycle.mode !== 'script')) {
+    return undefined;
+  }
+  if (rawLifecycle.mode === 'http') {
+    if (rawLifecycle.http === undefined) {
+      return { mode: 'http', summary };
+    }
+    const http = normalizeFixtureHttpDeclaration(rawLifecycle.http);
+    return http ? { mode: 'http', summary, http } : { mode: 'http', summary };
+  }
+  if (rawLifecycle.mode === 'ui') {
+    return { mode: 'ui', summary };
+  }
+  const rawScript = asRecord(rawLifecycle.script);
+  const relativePath = normalizedNonEmptyString(rawScript?.relativePath);
+  const contentHash = normalizedNonEmptyString(rawScript?.contentHash);
+  if (
+    !relativePath ||
+    relativePath.startsWith('/') ||
+    relativePath.split(/[\\/]/u).includes('..') ||
+    !contentHash ||
+    !/^[a-f0-9]{64}$/i.test(contentHash) ||
+    !Array.isArray(rawScript?.requiredEnvironment)
+  ) {
+    return undefined;
+  }
+  const requiredEnvironment = normalizeUniqueStrings(rawScript.requiredEnvironment);
+  return { mode: 'script', summary, script: { relativePath, contentHash, requiredEnvironment } };
+}
+
+function isFixtureHttpMethod(value: unknown): value is FixtureHttpMethod {
+  return value === 'POST' || value === 'PUT' || value === 'PATCH' || value === 'DELETE';
+}
+
+function normalizeFixtureExpectedStatuses(value: unknown): number[] | undefined {
+  if (!Array.isArray(value) || !value.length || value.length > 8) {
+    return undefined;
+  }
+  const statuses = Array.from(new Set(value));
+  return statuses.length === value.length && statuses.every((status) => (
+    typeof status === 'number' && Number.isInteger(status) && status >= 100 && status <= 599
+  ))
+    ? statuses
+    : undefined;
+}
+
+function normalizeFixtureHttpResponseOutputMappings(value: unknown): FixtureHttpResponseOutputMapping[] | undefined {
+  if (!Array.isArray(value) || !value.length || value.length > 20) {
+    return undefined;
+  }
+  const mappings = value.map((rawMapping) => {
+    const mapping = asRecord(rawMapping);
+    const outputName = normalizedNonEmptyString(mapping?.outputName);
+    const jsonPointer = normalizedNonEmptyString(mapping?.jsonPointer);
+    if (
+      !outputName ||
+      !jsonPointer ||
+      !/^[A-Za-z_][A-Za-z0-9_-]*$/.test(outputName) ||
+      !/^\/[A-Za-z_][A-Za-z0-9_-]*$/u.test(jsonPointer) ||
+      isSensitiveFixtureHttpKey(outputName) ||
+      isSensitiveFixtureHttpKey(jsonPointer.slice(1))
+    ) {
+      return undefined;
+    }
+    return { outputName, jsonPointer };
+  });
+  if (mappings.some((mapping): mapping is undefined => mapping === undefined)) {
+    return undefined;
+  }
+  const normalized = mappings as FixtureHttpResponseOutputMapping[];
+  return new Set(normalized.map((mapping) => mapping.outputName)).size === normalized.length &&
+    new Set(normalized.map((mapping) => mapping.jsonPointer)).size === normalized.length
+    ? normalized
+    : undefined;
+}
+
+function isSafeFixtureHttpPath(value: string): boolean {
+  if (
+    !value.startsWith('/') ||
+    value.startsWith('//') ||
+    value.includes('\\') ||
+    value.includes('?') ||
+    value.includes('#') ||
+    value.split('/').includes('..')
+  ) {
+    return false;
+  }
+  try {
+    const normalized = new URL(value, 'https://fixture.invalid');
+    return normalized.origin === 'https://fixture.invalid' && normalized.pathname === value;
+  } catch {
+    return false;
+  }
+}
+
+export function normalizeFixtureHttpJsonValue(value: unknown, depth = 0): FixtureHttpJsonValue | undefined {
+  if (depth > 8 || value === null || typeof value === 'string' || typeof value === 'boolean') {
+    return value === null || typeof value === 'string' || typeof value === 'boolean' ? value : undefined;
+  }
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : undefined;
+  }
+  if (Array.isArray(value)) {
+    if (value.length > 100) {
+      return undefined;
+    }
+    const entries = value.map((item) => normalizeFixtureHttpJsonValue(item, depth + 1));
+    if (entries.some((item) => item === undefined)) {
+      return undefined;
+    }
+    return entries as FixtureHttpJsonValue[];
+  }
+  const record = asRecord(value);
+  if (!record || Object.keys(record).length > 100) {
+    return undefined;
+  }
+  const entries: Record<string, FixtureHttpJsonValue> = {};
+  for (const [key, item] of Object.entries(record)) {
+    if (!key || key.length > 100 || isSensitiveFixtureHttpKey(key)) {
+      return undefined;
+    }
+    const normalized = normalizeFixtureHttpJsonValue(item, depth + 1);
+    if (normalized === undefined) {
+      return undefined;
+    }
+    entries[key] = normalized;
+  }
+  try {
+    return JSON.stringify(entries).length <= 8_192 ? entries : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function isSensitiveFixtureHttpKey(value: string): boolean {
+  return /(?:api[-_]?key|authorization|cookie|credential|pass(?:word)?|secret|token)/iu.test(value);
+}
+
+function normalizeFixtureAsset(
+  value: unknown,
+  environmentIds: Set<string>,
+  credentialIds: Set<string>,
+): FixtureAsset | undefined {
+  const rawFixture = asRecord(value);
+  const id = normalizedNonEmptyString(rawFixture?.id);
+  const name = normalizedNonEmptyString(rawFixture?.name);
+  const setup = normalizeFixtureLifecycle(rawFixture?.setup);
+  if (!rawFixture || rawFixture.schemaVersion !== 1 || !id || !name || !setup || rawFixture.version === undefined) {
+    return undefined;
+  }
+  const version = normalizeTestCaseVersion(rawFixture.version);
+  if (version !== rawFixture.version) {
+    return undefined;
+  }
+  const cleanup = rawFixture.cleanup === undefined ? undefined : normalizeFixtureLifecycle(rawFixture.cleanup);
+  if (rawFixture.cleanup !== undefined && !cleanup) {
+    return undefined;
+  }
+  const inputs = Array.isArray(rawFixture.inputs)
+    ? rawFixture.inputs.map(normalizeFixtureParameter).filter((parameter): parameter is FixtureParameter => Boolean(parameter))
+    : [];
+  const outputs = Array.isArray(rawFixture.outputs)
+    ? rawFixture.outputs.map(normalizeFixtureParameter).filter((parameter): parameter is FixtureParameter => Boolean(parameter))
+    : [];
+  if (inputs.length !== (Array.isArray(rawFixture.inputs) ? rawFixture.inputs.length : 0) || outputs.length !== (Array.isArray(rawFixture.outputs) ? rawFixture.outputs.length : 0)) {
+    return undefined;
+  }
+  const createdAt = normalizedNonEmptyString(rawFixture.createdAt);
+  const updatedAt = normalizedNonEmptyString(rawFixture.updatedAt);
+  if (!createdAt || !updatedAt || Number.isNaN(Date.parse(createdAt)) || Number.isNaN(Date.parse(updatedAt))) {
+    return undefined;
+  }
+  const inputNames = new Set(inputs.map((parameter) => parameter.name));
+  const outputNames = new Set(outputs.map((parameter) => parameter.name));
+  if (inputNames.size !== inputs.length || outputNames.size !== outputs.length) {
+    return undefined;
+  }
+  const description = typeof rawFixture.description === 'string' ? rawFixture.description.trim() : '';
+  const fixtureEnvironmentIds = normalizeUniqueStrings(rawFixture.environmentIds).filter((environmentId) => environmentIds.has(environmentId));
+  const fixtureCredentialIds = normalizeUniqueStrings(rawFixture.credentialIds).filter((credentialId) => credentialIds.has(credentialId));
+  const resourceLocks = normalizeUniqueStrings(rawFixture.resourceLocks);
+  if (fixtureEnvironmentIds.length !== normalizeUniqueStrings(rawFixture.environmentIds).length || fixtureCredentialIds.length !== normalizeUniqueStrings(rawFixture.credentialIds).length) {
+    return undefined;
+  }
+  if (rawFixture.concurrency !== 'parallel' && rawFixture.concurrency !== 'exclusive') {
+    return undefined;
+  }
+  return {
+    schemaVersion: 1,
+    id,
+    version,
+    name,
+    description,
+    inputs,
+    outputs,
+    credentialIds: fixtureCredentialIds,
+    environmentIds: fixtureEnvironmentIds,
+    setup,
+    ...(cleanup ? { cleanup } : {}),
+    concurrency: rawFixture.concurrency,
+    resourceLocks,
+    createdAt,
+    updatedAt,
+  };
+}
+
+function normalizeSuiteCaseReference(value: unknown): SuiteCaseReference | undefined {
+  const rawReference = asRecord(value);
+  const reference = normalizeVersionedTestAssetReference(rawReference);
+  if (!rawReference || !reference || !Array.isArray(rawReference.dependsOn)) {
+    return undefined;
+  }
+  const dependsOn = rawReference.dependsOn.map(normalizeVersionedTestAssetReference);
+  if (dependsOn.some((dependency) => !dependency)) {
+    return undefined;
+  }
+  const normalizedDependencies = dependsOn as VersionedTestAssetReference[];
+  const dependencyKeys = normalizedDependencies.map(versionedReferenceKey);
+  if (new Set(dependencyKeys).size !== dependencyKeys.length) {
+    return undefined;
+  }
+  return { ...reference, dependsOn: normalizedDependencies };
+}
+
+function normalizeSuiteAsset(value: unknown): SuiteAsset | undefined {
+  const rawSuite = asRecord(value);
+  const id = normalizedNonEmptyString(rawSuite?.id);
+  const name = normalizedNonEmptyString(rawSuite?.name);
+  const environmentId = normalizedNonEmptyString(rawSuite?.environmentId);
+  const createdAt = normalizedNonEmptyString(rawSuite?.createdAt);
+  const updatedAt = normalizedNonEmptyString(rawSuite?.updatedAt);
+  const execution = asRecord(rawSuite?.execution);
+  if (
+    !rawSuite ||
+    rawSuite.schemaVersion !== 1 ||
+    !id ||
+    !name ||
+    !environmentId ||
+    !createdAt ||
+    !updatedAt ||
+    Number.isNaN(Date.parse(createdAt)) ||
+    Number.isNaN(Date.parse(updatedAt)) ||
+    !Array.isArray(rawSuite.caseReferences) ||
+    !Array.isArray(rawSuite.tags) ||
+    !execution ||
+    rawSuite.version === undefined
+  ) {
+    return undefined;
+  }
+  const version = normalizeTestCaseVersion(rawSuite.version);
+  if (version !== rawSuite.version) {
+    return undefined;
+  }
+  const caseReferences = rawSuite.caseReferences.map(normalizeSuiteCaseReference);
+  if (caseReferences.some((reference) => !reference)) {
+    return undefined;
+  }
+  const normalizedReferences = caseReferences as SuiteCaseReference[];
+  const referenceKeys = normalizedReferences.map(versionedReferenceKey);
+  if (new Set(referenceKeys).size !== referenceKeys.length) {
+    return undefined;
+  }
+  const tags = rawSuite.tags.map(normalizedNonEmptyString);
+  if (tags.some((tag) => !tag)) {
+    return undefined;
+  }
+  const normalizedTags = tags as string[];
+  if (new Set(normalizedTags).size !== normalizedTags.length) {
+    return undefined;
+  }
+  const concurrency = execution.concurrency;
+  const failurePolicy = execution.failurePolicy;
+  const retryLimit = execution.retryLimit;
+  if (
+    typeof concurrency !== 'number' ||
+    !Number.isSafeInteger(concurrency) ||
+    concurrency < 1 ||
+    concurrency > 10 ||
+    (failurePolicy !== 'continue' && failurePolicy !== 'failFast') ||
+    typeof retryLimit !== 'number' ||
+    !Number.isSafeInteger(retryLimit) ||
+    retryLimit < 0 ||
+    retryLimit > 3
+  ) {
+    return undefined;
+  }
+  return {
+    schemaVersion: 1,
+    id,
+    version,
+    name,
+    description: typeof rawSuite.description === 'string' ? rawSuite.description.trim() : '',
+    tags: normalizedTags,
+    environmentId,
+    caseReferences: normalizedReferences,
+    execution: {
+      concurrency,
+      failurePolicy,
+      retryLimit,
+    },
+    createdAt,
+    updatedAt,
+  };
+}
+
+function normalizeUniqueStrings(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return Array.from(new Set(value.map(normalizedNonEmptyString).filter((item): item is string => Boolean(item))));
 }
 
 function normalizeTestLocatorFingerprint(value: unknown): TestLocatorFingerprint | undefined {
@@ -2056,11 +3018,59 @@ function normalizeTestStepDraft(step: unknown): TestStepDraft | undefined {
   } as TestStepDraft;
 }
 
+function normalizeStorageStateRef(value: unknown): StorageStateRef | undefined {
+  const rawRef = asRecord(value);
+  const id = normalizedNonEmptyString(rawRef?.id);
+  const label = normalizedNonEmptyString(rawRef?.label);
+  const createdAt = normalizedNonEmptyString(rawRef?.createdAt);
+  const updatedAt = normalizedNonEmptyString(rawRef?.updatedAt);
+  if (
+    !id ||
+    !label ||
+    !createdAt ||
+    !updatedAt ||
+    Number.isNaN(Date.parse(createdAt)) ||
+    Number.isNaN(Date.parse(updatedAt)) ||
+    (rawRef?.availability !== 'available' && rawRef?.availability !== 'expired' && rawRef?.availability !== 'unknown')
+  ) {
+    return undefined;
+  }
+  const expiresAt = normalizedNonEmptyString(rawRef.expiresAt);
+  if (expiresAt && Number.isNaN(Date.parse(expiresAt))) {
+    return undefined;
+  }
+  return {
+    id,
+    label,
+    createdAt,
+    updatedAt,
+    availability: rawRef.availability,
+    ...(expiresAt ? { expiresAt } : {}),
+  };
+}
+
 function normalizeProjectDraft(rawProject: ProjectDraft): ProjectDraft {
   const fallback = createEmptyProject(1);
-  const environments = Array.isArray(rawProject.environments) && rawProject.environments.length
+  const storageStateRefs = Array.isArray(rawProject.storageStateRefs)
+    ? Array.from(new Map(
+      rawProject.storageStateRefs
+        .map(normalizeStorageStateRef)
+        .filter((reference): reference is StorageStateRef => Boolean(reference))
+        .map((reference) => [reference.id, reference]),
+    ).values())
+    : [];
+  const knownStorageStateIds = new Set(storageStateRefs.map((reference) => reference.id));
+  const rawEnvironments = Array.isArray(rawProject.environments) && rawProject.environments.length
     ? rawProject.environments
     : fallback.environments;
+  const environments = rawEnvironments.map((environment) => {
+    const { storageStateId: rawStorageStateId, ...environmentWithoutStorageState } = environment;
+    const storageStateId = normalizedNonEmptyString(rawStorageStateId);
+    return {
+      ...environmentWithoutStorageState,
+      ...(storageStateId && knownStorageStateIds.has(storageStateId) ? { storageStateId } : {}),
+    };
+  });
   const groups = Array.isArray(rawProject.groups) && rawProject.groups.length
     ? rawProject.groups
     : fallback.groups;
@@ -2095,6 +3105,21 @@ function normalizeProjectDraft(rawProject: ProjectDraft): ProjectDraft {
   const documents = Array.isArray(rawProject.documents)
     ? rawProject.documents.map(normalizePrdDocument)
     : [];
+  const credentialRefs = Array.isArray(rawProject.credentialRefs) ? rawProject.credentialRefs : [];
+  const fixtures = Array.isArray(rawProject.fixtures)
+    ? rawProject.fixtures
+        .map((fixture) => normalizeFixtureAsset(
+          fixture,
+          new Set(environments.map((environment) => environment.id)),
+          new Set(credentialRefs.map((credential) => credential.id)),
+        ))
+        .filter((fixture): fixture is FixtureAsset => Boolean(fixture))
+    : [];
+  const suites = Array.isArray(rawProject.suites)
+    ? rawProject.suites
+        .map(normalizeSuiteAsset)
+        .filter((suite): suite is SuiteAsset => Boolean(suite))
+    : [];
   const recordingsById = new Map(recordings.map((recording) => [recording.id, recording]));
 
   return {
@@ -2103,9 +3128,12 @@ function normalizeProjectDraft(rawProject: ProjectDraft): ProjectDraft {
     selectedEnvironmentId: environmentId,
     environments,
     groups,
-    credentialRefs: Array.isArray(rawProject.credentialRefs) ? rawProject.credentialRefs : [],
+    credentialRefs,
+    storageStateRefs,
     recordings,
     documents,
+    fixtures,
+    suites,
     prdCoverageTriage: prunePrdCoverageTriage(documents, rawProject.prdCoverageTriage),
     testCases: Array.isArray(rawProject.testCases)
       ? rawProject.testCases.map((testCase) => {
@@ -2388,8 +3416,11 @@ export function createEmptyProject(nextId: number): ProjectDraft {
     createdAt: now,
     updatedAt: now,
     credentialRefs: [],
+    storageStateRefs: [],
     recordings: [],
     documents: [],
+    fixtures: [],
+    suites: [],
     prdCoverageTriage: [],
     environments: [
       {

@@ -26,7 +26,7 @@ TestBuddy 已经从 UI 原型进入“具备本地执行与结果治理基础，
 - 当前用例还不是完整 Hybrid Case V2。
 - 长期资产仍未按 project directory 拆分。
 - `neutral` 仍混合表达多种无法继续/未执行情形。
-- CLI 批量入口不等于 10–100 case Suite 调度和资源锁已完成。
+- Suite V1 已有版本化资产、依赖解析、资源锁策略和 CLI 入口；桌面入口、隔离浏览器并发和 10–100 case 真实验收尚未完成。
 - Workflow/Recording 的统一运行链不等于固定版本公共流程已完成。
 - 恢复草稿基础不等于完整维护队列、安全和保留策略已完成。
 
@@ -87,7 +87,7 @@ TestBuddy 已经从 UI 原型进入“具备本地执行与结果治理基础，
 - `TestCaseDraft.provenance` 是 V2 的统一来源关联：自然语言用例记录已验证 Agent Run 和实际转入用例的计划步骤 ID，录制用例记录录制资产与节点 ID，并继承录制关联的 PRD `documentId + pathId`；PRD 用例直接记录该路径。旧 `prdPath` 在 hydration 和运行链路中兼容读取，但不再是唯一关联依据。
 - `TestStepDraft.execution` 以 schema version `2` 保存待审阅的结构化 action、定位 fingerprint、风险级别和 Agent Run 来源。
 - 所有当前 Case 创建入口都会写入初始 `version: 1` 与空的 fixture、reusable flow、baseline 引用位；旧 Case 在 hydration 时稳定补为 version 1，并局部丢弃非法或重复的版本引用。编辑保存、分组迁移和录制绑定删除会创建下一 Case version，不会静默复用已发布版本。
-- `navigate`、明确 selector 的 `click`、明确 selector 或超时的 `wait`、selector `scroll` 可以在保存时保留为候选确定性动作；Agent Run 的 `input/select` 原值不写入资产，只保留结构化目标。编辑器只能把目标绑定到当前项目已保存凭据的 `username` 或 `secret` 字段，变更后必须由用户明确确认才可执行；变量和 fixture 输出绑定仍不在当前范围。
+- `navigate`、明确 selector 的 `click`、明确 selector 或超时的 `wait`、selector `scroll` 可以在保存时保留为候选确定性动作；Agent Run 的 `input/select` 原值不写入资产，只保留结构化目标。编辑器可把目标绑定到当前项目已保存凭据的 `username` 或 `secret` 字段，或当前 Case 已绑定精确 Fixture 版本的显式 string 输出；变更后必须由用户明确确认才可执行。通用变量、跨 Case 输出与表达式求值仍不在当前范围。
 - 语义断言、自由文本断言和 `aiQuery` 仍由派生规则标记为需要模型；显式 assertion contract 才能成为无模型断言。
 - hydration 保留旧步骤不变，局部丢弃畸形 V2 execution，不丢 legacy 文本、用例或项目。
 - Target locator quality 已收敛为 `strong/acceptable/weak/unresolved`；hydration 会把早期的 `fragile/unknown` 映射为 `weak/unresolved`。`unresolved` 定位不得被人工确认进入确定性执行，必须先替换为可审阅目标。
@@ -99,7 +99,7 @@ TestBuddy 已经从 UI 原型进入“具备本地执行与结果治理基础，
 - 受控 `input/select` 的值只在主进程通过项目范围 `CredentialStore` 和本机安全存储解析，并仅传给一次 BrowserRuntime 调用；Case JSON、Agent plan、运行事件、详情和编辑器状态均不接收解析值。绑定缺失、跨项目、已删除或无法解密时步骤为 `neutral`，不调用浏览器、模型、重试或重规划。
 - 合法且已确认的 V2 `aiAssert` 显式断言也可在编辑器确认或撤销，并在同一无模型执行链路中读取真实页面 URL、标题、文本或公开 DOM。断言失败立即停止后续步骤；没有真实页面、取消、畸形断言或未支持结构均为 `neutral`，不会回退到 Workflow、Planner、Verifier 或 Reporter。每条显式断言证据保留 assertion ID、version、kind 和当次计划中的 expected/evidence，后续编辑 Case 不会改写历史运行的断言归属。
 
-尚未在本阶段完成：从录制节点或 PRD 文本生成可人工确认的完整 locator/action/assertion contract、完整 assertion evidence contract 和六种终态迁移。Case 顶层 schema version `2`、初始 Case version 和空的版本引用位均已由 hydration 与所有当前创建入口兼容写入；实际 fixture、flow 和 baseline 资产仍待后续阶段定义与解析。
+尚未在本阶段完成：从录制节点或 PRD 文本生成可人工确认的完整 locator/action/assertion contract、完整 assertion evidence contract 和六种终态迁移。Case 顶层 schema version `2`、初始 Case version 和空的版本引用位均已由 hydration 与所有当前创建入口兼容写入；Fixture V1 已在下一阶段定义、解析并接入运行前阻断，reusable flow 和 baseline 资产仍待定义与解析。
 
 ### 3.1 目标
 
@@ -147,7 +147,7 @@ Project Asset Store 开始写入前，V2 schema、版本引用和迁移规则必
 
 ## 4. Phase 2：Project Asset Store
 
-**当前状态：已有独立 Project Asset Store 基础。桌面端可在项目配置中选择目录、预览待写文件或冲突，并仅在空目录计划通过后由用户二次确认原子写入 `project.json`、Case、Recording 和 PRD 文档资产。成功写入后，`studio-data` 会保存目录与 revision 指针，并可诊断本地未快照修改、外部修改或目录失效；外部修改可先生成重载计划，只有不存在本地修改且 revision 仍匹配时才能二次确认重载。它尚未接管现有 `studio-data/state.json`，完整资产分类和正式迁移切换仍未完成。**
+**当前状态：已有独立 Project Asset Store 基础。桌面端可在项目配置中选择目录、预览待写文件或冲突，并仅在空目录计划通过后由用户二次确认原子写入 `project.json`、Case、Recording 和 PRD 文档资产。成功写入后，`studio-data` 会保存目录与 revision 指针，并可诊断本地未快照修改、外部修改或目录失效；本地修改可生成更新计划，只有目录、已登记 revision、持久化编辑态和计划目标均未变化时才能二次确认 CAS 发布。外部修改可先生成重载计划，只有不存在本地修改且 revision 仍匹配时才能二次确认重载。普通状态保存不会自动写入或重载 project directory。它尚未接管现有 `studio-data/state.json`，完整资产分类和正式迁移切换仍未完成。**
 
 ### 4.1 目标
 
@@ -172,7 +172,7 @@ studio-data/
 ```
 
 - Project Asset Store：schema 校验、原子写入、稳定 ID 和版本引用。
-- `ProjectAssetStore` 目前只提供独立迁移计划、首次写入和读取验证：桌面端目录选择器授权目标目录，项目配置展示待写文件或冲突；只有 `ready` 计划才显示二次确认写入命令。计划和写入都携带当前编辑态 revision，项目在预览后发生变化时必须重新生成计划。成功后，`studio-data` 的 `projectAssetBindings` 记录项目目录、revision 和登记时间；诊断只读比较当前已保存的编辑态、登记 revision 和目录快照，区分本地未快照修改、外部修改和目录不可用。外部修改的重载同样先生成计划，只有当前 UI 与持久化编辑态均没有本地修改、目录仍可读取且 snapshot revision 未变化时，二次确认才会把外部资产写回 `studio-data` 并更新绑定。目录非空时不覆盖，录制步骤中的 screenshot/artifact path 会在写入前剥离，运行数据仍留在 `studio-data`。普通状态保存不会自动写入或重新加载 project directory。
+- `ProjectAssetStore` 提供独立迁移计划、首次写入、读取验证与受控更新：桌面端目录选择器授权首次目标目录，项目配置展示待写文件或冲突；只有 `ready` 计划才显示二次确认写入命令。已绑定项目存在本地修改时，可生成不写文件的更新计划；计划比较当前编辑态、已登记 revision、目录内快照和受管目录布局，确认时再次计算计划并以 CAS 原子替换目录。任何外部文件、外部 revision、持久化编辑态或计划目标变化都会阻止发布。成功后，`studio-data` 的 `projectAssetBindings` 记录项目目录、revision 和登记时间；诊断只读比较当前已保存的编辑态、登记 revision 和目录快照，区分本地未快照修改、外部修改和目录不可用。外部修改的重载同样先生成计划，只有当前 UI 与持久化编辑态均没有本地修改、目录仍可读取且 snapshot revision 未变化时，二次确认才会把外部资产写回 `studio-data` 并更新绑定。目录非空时不覆盖，录制步骤中的 screenshot/artifact path 会在写入前剥离，运行数据仍留在 `studio-data`。普通状态保存不会自动写入或重新加载 project directory。
 - Studio Data Store：run/artifact/credential/cache 生命周期。
 - 旧 `state.json` 到 project directory 的审阅式迁移。
 - 引用完整性、冲突和损坏诊断。
@@ -199,7 +199,7 @@ Fixtures/Auth 必须基于稳定逻辑引用和双存储边界实现，不能把
 
 ## 5. Phase 3：Fixtures / Auth
 
-**当前状态：环境和项目范围凭据引用已有基础；Case 已能显式绑定用户名或密钥字段并在主进程受控解析，typed fixture、storageState 生命周期和脚本信任未完成。**
+**当前状态：环境和项目范围凭据引用已有基础；Case 已能显式绑定用户名或密钥字段并在主进程受控解析。Fixture V1 已完成 typed 输入/输出、不可变版本、环境/凭据/资源锁声明、项目资产快照、用例精确版本绑定与 hydration 校验。脚本信任记录保存在 `studio-data`，绑定项目目录、Fixture 版本、生命周期、相对路径、声明内容哈希和确认时间；哈希或路径变更会自动失效。Playwright `storageState` 已支持主进程文件选择与当前真实 BrowserSession 捕获、结构校验、本机加密存储、项目环境逻辑引用、原地刷新、显式撤销、过期诊断和启动前注入；序列化认证内容、来源文件路径均不会进入项目资产、renderer 或报告。默认 HTTP Fixture 已可在浏览器启动前按绑定顺序执行 setup，并在 setup 部分成功、Case 失败、浏览器启动失败或用户取消后反向尽力 cleanup；每次请求只接受同源根路径、固定方法、显式状态码和受限非敏感 JSON，并单独保留无响应体的结构化证据。setup 可受控提取声明的顶层 JSON 输出；编辑器只展示当前 Case 已绑定精确版本的 string 输出，解析值只存在于本次主进程运行并只传给一条已确认 `input/select`，不会进入资产、事件、报告或 renderer。已信任的自包含 `.mjs` 脚本 Fixture 会在浏览器启动前由短时主进程子进程执行，并再次校验绑定目录、相对路径、内容哈希和精确生命周期信任；脚本只从标准输入读取固定上下文、从标准输出返回一份受限 JSON 结果，输出文本和解析值均不持久化。UI Fixture、未信任脚本、多文件导入、环境变量注入与脚本输出以外的副作用审计仍以 `neutral` 阻断。**
 
 ### 5.1 目标
 
@@ -216,6 +216,17 @@ Fixtures/Auth 必须基于稳定逻辑引用和双存储边界实现，不能把
 - Script trust：project identity + relative path + content hash。
 - 账号、租户、环境和 fixture 的资源声明。
 
+已离线完成的 Fixture V1 边界：
+
+- Fixture 作为 `fixtures/<id>@<version>.json` 独立写入项目资产快照；旧 manifest 缺少 fixture 字段时仍可读取。
+- 项目配置可新建 Fixture 或从既有版本创建新版本；旧版本不会被原地修改。
+- 用例只可绑定明确的 `fixtureId@version`，不会隐式升级到最新版本；编辑器仅提供当前环境可用且尚未绑定的版本，已保存但后续失配的引用仍保留给运行前诊断和人工解除。
+- fixture 引用、环境和凭据关联均在 hydration 与资产快照边界校验；缺失或不匹配不会触发浏览器、模型、artifact 或 workflow。
+- 已绑定项目的脚本 Fixture 可由用户显式创建本地信任记录；记录不会进入项目资产或报告，也不会向 renderer 返回项目目录。信任仅匹配当前声明的自包含 `.mjs` `relativePath + contentHash`。运行时会再次比较项目目录、Fixture 精确版本和生命周期；通过后才允许短时子进程执行，不传入凭据、模型配置或业务环境变量。
+- `storageState` 仅可由主进程从用户选择的 JSON 文件导入，或从属于该项目的当前真实 BrowserSession 捕获；原始 cookies/origin storage 以本机安全存储加密保存。项目仅保存引用元数据，环境绑定会在 hydration 时清理失效引用；捕获可原地刷新既有逻辑 ID，显式撤销会移除该引用和环境绑定；浏览器必须在创建 context 前重新解密、校验并拒绝缺失、损坏或已过期状态。
+- 完整配置的 HTTP Fixture 通过隔离的主进程执行器调用；该执行器不接受 headers、API Key、Cookie、绝对 URL 或变量插值，固定超时且响应体不进入运行记录。HTTP 顶层映射和受信任脚本 JSON 结果都只能生成已声明的非敏感输出；TestRunner 仅在当前运行内存中保存该值，先验证 Fixture 精确绑定、输出类型和值存在，再把 string 值交给单条已确认的 `input/select`。缺失、类型不符、陈旧或未绑定输出均在浏览器启动前 `neutral` 阻断。setup 失败会阻断浏览器启动；cleanup 失败只追加独立证据，不覆盖 Case 终态。
+- UI Fixture、未配置 HTTP Fixture、未信任脚本和不满足自包含 `.mjs` 内容契约的脚本仍由运行前 preflight 以 `neutral` 阻断。脚本运行只接受固定 JSON 输入/输出；stdout、stderr、上下文和输出值不进入 run evidence、资产或报告。
+
 ### 5.3 状态规则
 
 - fixture 前置条件不满足、认证过期、脚本未信任 -> `blocked`。
@@ -226,8 +237,8 @@ Fixtures/Auth 必须基于稳定逻辑引用和双存储边界实现，不能把
 ### 5.4 验收
 
 - HTTP fixture 可把 typed output 传给 Case 并在结束后 cleanup。
-- 未信任或 hash 变化的脚本不会执行。
-- storageState 不进入 project directory 或报告。
+- 未信任、目录/生命周期不匹配、hash 变化或非自包含 `.mjs` 的脚本不会执行；受信任脚本超时或取消后会终止且不泄露 stdout/stderr。
+- `storageState` 序列化内容和本地来源路径不进入 project directory、renderer 或报告；只有逻辑引用可进入项目配置。
 - setup、Case 和 cleanup 的证据可以分别诊断。
 
 ### 5.5 下阶段门禁
@@ -236,7 +247,7 @@ Suite Runner 只有在 fixture 依赖、认证和资源声明可解析后才能�
 
 ## 6. Phase 4：Suite Runner
 
-**当前状态：桌面/CLI 复用执行组件并支持批量 case 参数，但尚未形成完整 Suite 调度。**
+**当前状态：Suite V1 已作为 `suites/<id>@<version>.json` 写入项目资产，固定引用 Case 版本、目标环境、标签、依赖图和调度策略。共享 `SuiteRunner` 已离线实现依赖拓扑、有限并发、Fixture/凭据/声明资源锁、fail-fast/continue、失败重试、取消后不再派发以及 flaky 标记；CLI 可通过 `--suite-id <id@version>` 使用该调度器，并因当前 BrowserRuntime 只有一个受控会话而安全限制为串行。桌面 Suite 编辑/运行入口、隔离浏览器池、六种终态迁移、JSON/JUnit/桌面同一完整 Suite RunResult 和 10–100 case 真实验收尚未完成。**
 
 ### 6.1 目标
 
@@ -244,11 +255,11 @@ Suite Runner 只有在 fixture 依赖、认证和资源声明可解析后才能�
 
 ### 6.2 交付
 
-- Suite asset：用例选择、标签、顺序依赖和环境。
-- Shared Runner：Desktop/CLI 单一入口。
-- 本地有限并发。
-- account/tenant/environment/fixture 等资源锁。
-- fail-fast、continue、retry 和 cancel 策略。
+- Suite asset：用例选择、标签、顺序依赖和环境。已完成 V1 资产、精确 Case 引用与 project directory 快照。
+- Shared Runner：Desktop/CLI 单一入口。已完成共享调度器与 CLI 适配；桌面适配待完成。
+- 本地有限并发。已完成纯调度边界；当前 CLI 因单 BrowserRuntime 会话强制为 1。
+- account/tenant/environment/fixture 等资源锁。已完成 Fixture 的 exclusive、credential 和显式 resource lock 解析；真实账号/租户/环境样本待验收。
+- fail-fast、continue、retry 和 cancel 策略。已完成失败重试、fail-fast/continue 以及取消停止派发；六种终态待迁移。
 - 六种终态聚合和独立 flaky。
 - 无后台 daemon 的一次性 Runner 生命周期。
 - JSON/JUnit/桌面视图适配同一 RunResult。

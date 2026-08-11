@@ -36,6 +36,7 @@ import {
   createManualStepAutomationReplacement,
   getConfirmedDeterministicTestStep,
   getConfirmedExplicitTestAssertion,
+  getTestCaseFixtureOutputBindingOptions,
   getTestStepRunBlocker,
 } from '../../../shared/studio.js';
 import { StatusPill } from '../../components/StatusPill.js';
@@ -288,6 +289,7 @@ function CaseSettingsDialog({
   const targetUrlId = useId();
   const groupLabelId = useId();
   const environmentLabelId = useId();
+  const fixtureLabelId = useId();
   const businessGoalId = useId();
   const preconditionsId = useId();
   const successCriteriaId = useId();
@@ -313,6 +315,49 @@ function CaseSettingsDialog({
 
   function parseIntentLines(value: string): string[] {
     return Array.from(new Set(value.split(/\r?\n/u).map((line) => line.trim()).filter(Boolean)));
+  }
+
+  const boundFixtureReferences = testCase.assetReferences?.fixtures ?? [];
+  const boundFixtureKeys = new Set(boundFixtureReferences.map((fixture) => `${fixture.id}@${fixture.version}`));
+  const availableFixtures = project.fixtures.filter((fixture) => (
+    !boundFixtureKeys.has(`${fixture.id}@${fixture.version}`) &&
+    (!fixture.environmentIds.length || fixture.environmentIds.includes(testCase.environmentId))
+  ));
+
+  function attachFixture(value: string) {
+    const fixture = project.fixtures.find((candidate) => `${candidate.id}@${candidate.version}` === value);
+    if (!fixture) {
+      return;
+    }
+    onUpdateTestCase((item) => {
+      const assetReferences = item.assetReferences ?? { fixtures: [], reusableFlows: [] };
+      const fixtures = assetReferences.fixtures ?? [];
+      if (fixtures.some((reference) => reference.id === fixture.id && reference.version === fixture.version)) {
+        return item;
+      }
+      return {
+        ...item,
+        assetReferences: {
+          ...assetReferences,
+          fixtures: [...fixtures, { id: fixture.id, version: fixture.version }],
+        },
+      };
+    }, 'immediate');
+  }
+
+  function removeFixture(fixtureId: string, version: number) {
+    onUpdateTestCase((item) => {
+      const assetReferences = item.assetReferences ?? { fixtures: [], reusableFlows: [] };
+      return {
+        ...item,
+        assetReferences: {
+          ...assetReferences,
+          fixtures: (assetReferences.fixtures ?? []).filter((reference) => (
+            reference.id !== fixtureId || reference.version !== version
+          )),
+        },
+      };
+    }, 'immediate');
   }
 
   return (
@@ -365,6 +410,46 @@ function CaseSettingsDialog({
             </div>
           </div>
           <div className="grid gap-2">
+            <Label id={fixtureLabelId}>{t('cases.fixture.title')}</Label>
+            <Select onValueChange={attachFixture}>
+              <SelectTrigger aria-labelledby={fixtureLabelId} disabled={!availableFixtures.length}>
+                <SelectValue placeholder={availableFixtures.length ? t('cases.fixture.choose') : t('cases.fixture.noAvailable')} />
+              </SelectTrigger>
+              <SelectContent>
+                {availableFixtures.map((fixture) => (
+                  <SelectItem key={`${fixture.id}@${fixture.version}`} value={`${fixture.id}@${fixture.version}`}>
+                    {fixture.name} v{fixture.version}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {boundFixtureReferences.length ? (
+              <div className="grid gap-2 rounded-[4px] border border-border bg-muted/20 p-3">
+                {boundFixtureReferences.map((reference) => {
+                  const fixture = project.fixtures.find((candidate) => (
+                    candidate.id === reference.id && candidate.version === reference.version
+                  ));
+                  const name = fixture?.name ?? reference.id;
+                  return (
+                    <div className="flex items-center justify-between gap-3" key={`${reference.id}@${reference.version}`}>
+                      <span className="min-w-0 truncate text-sm">{name} <span className="text-muted-foreground">v{reference.version}</span></span>
+                      <Button
+                        aria-label={t('cases.fixture.remove', { name, version: reference.version })}
+                        onClick={() => removeFixture(reference.id, reference.version)}
+                        size="icon"
+                        title={t('cases.fixture.remove', { name, version: reference.version })}
+                        type="button"
+                        variant="ghost"
+                      >
+                        <Unlink className="size-4" />
+                      </Button>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : <p className="text-sm leading-6 text-muted-foreground">{t('cases.fixture.noBound')}</p>}
+          </div>
+          <div className="grid gap-2">
             <Label htmlFor={businessGoalId}>{t('cases.intent.businessGoal')}</Label>
             <Textarea
               className="min-h-20"
@@ -414,12 +499,14 @@ function StepInspector({
   onUpdateTestCase,
   project,
   step,
+  testCase,
 }: {
   focusTitle: boolean;
   onFocused: () => void;
   onUpdateTestCase: (updater: (testCase: TestCaseDraft) => TestCaseDraft, mode?: SaveMode) => void;
   project: ProjectDraft;
   step: TestStepDraft;
+  testCase: TestCaseDraft;
 }) {
   const { t } = useI18n();
   const titleInputRef = useRef<HTMLInputElement>(null);
@@ -428,6 +515,7 @@ function StepInspector({
   const recordingLabelId = useId();
   const inputBindingCredentialLabelId = useId();
   const inputBindingFieldLabelId = useId();
+  const inputBindingFixtureOutputLabelId = useId();
   const instructionId = useId();
   const blocker = getTestStepRunBlocker(step, project.recordings);
   const boundRecording = project.recordings.find((recording) => recording.id === step.recordingId);
@@ -503,6 +591,9 @@ function StepInspector({
   const inputBinding = action?.kind === 'input' || action?.kind === 'select'
     ? action.binding
     : undefined;
+  const credentialBinding = inputBinding?.kind === 'credential' ? inputBinding : undefined;
+  const fixtureOutputBinding = inputBinding?.kind === 'fixtureOutput' ? inputBinding : undefined;
+  const fixtureOutputOptions = getTestCaseFixtureOutputBindingOptions(project, testCase);
   const hasInputBindingTarget = Boolean(inputBindingTarget);
   const hasStructuredExecution = hasStructuredAction || hasStructuredAssertion || hasInputBindingTarget;
   const supportsDeterministicExecution = canConfirmStructuredExecution(step);
@@ -678,7 +769,7 @@ function StepInspector({
                           field: credential.username?.trim() ? 'username' : 'secret',
                         });
                       }}
-                      value={inputBinding?.credentialId}
+                      value={credentialBinding?.credentialId ?? ''}
                     >
                       <SelectTrigger aria-labelledby={inputBindingCredentialLabelId}>
                         <SelectValue placeholder={t('cases.binding.chooseCredential')} />
@@ -693,30 +784,66 @@ function StepInspector({
                   <div className="grid gap-2">
                     <Label id={inputBindingFieldLabelId}>{t('cases.binding.field')}</Label>
                     <Select
-                      disabled={!inputBinding}
+                      disabled={!credentialBinding}
                       onValueChange={(field) => {
-                        if (!inputBinding || (field !== 'username' && field !== 'secret')) {
+                        if (!credentialBinding || (field !== 'username' && field !== 'secret')) {
                           return;
                         }
-                        updateInputBinding({ ...inputBinding, field });
+                        updateInputBinding({ ...credentialBinding, field });
                       }}
-                      value={inputBinding?.field}
+                      value={credentialBinding?.field ?? ''}
                     >
                       <SelectTrigger aria-labelledby={inputBindingFieldLabelId}>
                         <SelectValue placeholder={t('cases.binding.chooseField')} />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem disabled={!project.credentialRefs.find((item) => item.id === inputBinding?.credentialId)?.username?.trim()} value="username">
+                        <SelectItem disabled={!project.credentialRefs.find((item) => item.id === credentialBinding?.credentialId)?.username?.trim()} value="username">
                           {t('cases.binding.username')}
                         </SelectItem>
-                        <SelectItem disabled={!project.credentialRefs.find((item) => item.id === inputBinding?.credentialId)?.hasSecret} value="secret">
+                        <SelectItem disabled={!project.credentialRefs.find((item) => item.id === credentialBinding?.credentialId)?.hasSecret} value="secret">
                           {t('cases.binding.secret')}
                         </SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
                 </div>
-              ) : <p className="text-sm text-muted-foreground">{t('cases.binding.noCredentials')}</p>}
+              ) : null}
+              {fixtureOutputOptions.length ? (
+                <div className="grid gap-2">
+                  <Label id={inputBindingFixtureOutputLabelId}>{t('cases.binding.fixtureOutput')}</Label>
+                  <Select
+                    onValueChange={(value) => {
+                      const option = fixtureOutputOptions.find((candidate) => (
+                        `${candidate.fixtureId}@${candidate.fixtureVersion}:${candidate.output.name}` === value
+                      ));
+                      if (!option) {
+                        return;
+                      }
+                      updateInputBinding({
+                        kind: 'fixtureOutput',
+                        fixtureId: option.fixtureId,
+                        fixtureVersion: option.fixtureVersion,
+                        outputName: option.output.name,
+                      });
+                    }}
+                    value={fixtureOutputBinding ? `${fixtureOutputBinding.fixtureId}@${fixtureOutputBinding.fixtureVersion}:${fixtureOutputBinding.outputName}` : ''}
+                  >
+                    <SelectTrigger aria-labelledby={inputBindingFixtureOutputLabelId}>
+                      <SelectValue placeholder={t('cases.binding.chooseFixtureOutput')} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {fixtureOutputOptions.map((option) => (
+                        <SelectItem key={`${option.fixtureId}@${option.fixtureVersion}:${option.output.name}`} value={`${option.fixtureId}@${option.fixtureVersion}:${option.output.name}`}>
+                          {option.fixtureName} v{option.fixtureVersion} / {option.output.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              ) : null}
+              {!project.credentialRefs.length && !fixtureOutputOptions.length ? (
+                <p className="text-sm text-muted-foreground">{t('cases.binding.noCredentials')} {t('cases.binding.noFixtureOutputs')}</p>
+              ) : null}
             </div>
           ) : null}
           {supportsDeterministicExecution ? (
@@ -1133,6 +1260,7 @@ export function TestCaseManagementPage({
                     onUpdateTestCase={onUpdateTestCase}
                     project={project}
                     step={selectedStep}
+                    testCase={selectedTestCase}
                   />
                 ) : (
                   <EvidenceCard description={t('cases.empty.noStepsDescription')} title={t('cases.empty.noStepsTitle')} />

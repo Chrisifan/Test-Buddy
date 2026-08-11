@@ -3,6 +3,9 @@ import type {
   RunArtifact,
   RunEventPayload,
   RunStepLog,
+  FixtureAsset,
+  FixtureHttpJsonValue,
+  FixtureLifecycleEvidence,
   RunTestCaseRequest,
   RunTestCaseResponse,
   RunRecordingRequest,
@@ -17,10 +20,17 @@ import {
   getConfirmedDeterministicTestInputBinding,
   getConfirmedDeterministicTestStep,
   getConfirmedExplicitTestAssertion,
+  getTestCaseFixtureRunBlocker,
   getTestCasePrdPath,
+  normalizeFixtureHttpDeclaration,
+  resolveTestCaseFixtures,
 } from '../../shared/studio.js';
 import type { AgentPlanStepDraft, AgentRunResult } from '../../shared/agent.js';
-import type { RunDeterministicStepRequest, RunDeterministicStepResponse } from '../studioRuntime.js';
+import type {
+  DeterministicInputBindingResolver,
+  RunDeterministicStepRequest,
+  RunDeterministicStepResponse,
+} from '../studioRuntime.js';
 import {
   awaitWithRunCancellation,
   createUserRunCancellation,
@@ -30,6 +40,7 @@ import {
 import { createTestCaseAgentRun } from '../../shared/agentStub.js';
 import { ArtifactManager } from './artifact-manager.js';
 import { BrowserRuntime } from './browser-runtime.js';
+import type { FixtureLifecycleExecutor, FixtureLifecycleExecutionResult } from './fixture-http-executor.js';
 
 interface RecordingReplayRunner {
   run(request: RunRecordingRequest): Promise<RunRecordingResponse>;
@@ -51,6 +62,7 @@ export class TestRunner {
     private readonly recordingRunner?: RecordingReplayRunner,
     private readonly workflowRunner?: WorkflowSegmentRunner,
     private readonly deterministicRunner?: DeterministicStepRunner,
+    private readonly fixtureExecutor?: FixtureLifecycleExecutor,
   ) {}
 
   async run(request: RunTestCaseRequest): Promise<RunTestCaseResponse> {
@@ -73,6 +85,119 @@ export class TestRunner {
 
     logs.forEach((line) => this.emitRunEvent({ runId, title, type: 'log', line }));
 
+    const fixtureEvidence: FixtureLifecycleEvidence[] = [];
+    const preparedFixtures: FixtureAsset[] = [];
+    // Response values live only for this invocation and never enter detail/log/artifact state.
+    const fixtureOutputValues = new Map<string, Readonly<Record<string, FixtureHttpJsonValue>>>();
+    let fixturesCleanedUp = false;
+    const appendFixtureLog = (result: FixtureLifecycleExecutionResult) => {
+      fixtureEvidence.push(result.evidence);
+      const status = result.evidence.httpStatus === undefined
+        ? result.evidence.outcome
+        : `${result.evidence.outcome} (${result.evidence.httpStatus})`;
+      const target = result.evidence.mode === 'script'
+        ? `script ${result.evidence.scriptPath ?? '[unconfigured]'}`
+        : `${result.evidence.method ?? 'HTTP'} ${result.evidence.path ?? '/'}`;
+      const line = `[${timeLabel(new Date())}] Fixture ${result.evidence.fixtureId}@${result.evidence.fixtureVersion} ${result.evidence.lifecycle} ${target}: ${status}`;
+      logs.push(line);
+      this.emitRunEvent({ runId, title, type: 'log', line });
+    };
+    const cleanupPreparedFixtures = async () => {
+      if (fixturesCleanedUp || !this.fixtureExecutor) {
+        return;
+      }
+      fixturesCleanedUp = true;
+      for (const fixture of [...preparedFixtures].reverse()) {
+        if (!fixture.cleanup) {
+          continue;
+        }
+        appendFixtureLog(await this.executeFixtureLifecycle(fixture, 'cleanup', request));
+      }
+    };
+
+    const fixtureBlocker = getTestCaseFixtureRunBlocker(
+      request.project,
+      request.testCase,
+      request.environment.id,
+      {
+        projectId: request.project.id,
+        projectDirectory: request.fixtureScriptTrustDirectory,
+        records: request.fixtureScriptTrustRecords,
+        scriptExecutionEnabled: Boolean(this.fixtureExecutor?.supports?.('script')),
+      },
+    );
+    if (fixtureBlocker) {
+      return this.createPreflightBlockedResponse(request, runId, title, startedAt, logs, `Fixture 前置条件未满足：${fixtureBlocker.message}`);
+    }
+
+    const resolvedFixtures = resolveTestCaseFixtures(
+      request.project,
+      request.testCase.assetReferences?.fixtures ?? [],
+      request.environment.id,
+    ).fixtures;
+    if (resolvedFixtures.length && !this.fixtureExecutor) {
+      return this.createPreflightBlockedResponse(
+        request,
+        runId,
+        title,
+        startedAt,
+        logs,
+        'Fixture 前置条件未满足：HTTP Fixture 受控执行器不可用，当前不会执行。',
+      );
+    }
+    for (const fixture of resolvedFixtures) {
+      const result = await this.executeFixtureLifecycle(fixture, 'setup', request, request.cancellationSignal);
+      appendFixtureLog(result);
+      if (result.evidence.outcome !== 'passed') {
+        await cleanupPreparedFixtures();
+        if (request.cancellationSignal?.aborted) {
+          return this.createCancelledResponse(request, runId, title, startedAt, logs, [], fixtureEvidence);
+        }
+        return this.createPreflightBlockedResponse(
+          request,
+          runId,
+          title,
+          startedAt,
+          logs,
+          `Fixture 前置条件未满足：${result.message}`,
+          fixtureEvidence,
+        );
+      }
+      if (result.outputValues) {
+        fixtureOutputValues.set(fixtureReferenceKey(fixture), result.outputValues);
+      }
+      preparedFixtures.push(fixture);
+    }
+
+    const fixtureOutputBindingIssue = getFixtureOutputBindingIssue(request.testCase.steps, resolvedFixtures, fixtureOutputValues);
+    if (fixtureOutputBindingIssue) {
+      await cleanupPreparedFixtures();
+      if (request.cancellationSignal?.aborted) {
+        return this.createCancelledResponse(request, runId, title, startedAt, logs, [], fixtureEvidence);
+      }
+      return this.createPreflightBlockedResponse(
+        request,
+        runId,
+        title,
+        startedAt,
+        logs,
+        `Fixture 前置条件未满足：${fixtureOutputBindingIssue}`,
+        fixtureEvidence,
+      );
+    }
+    const fixtureOutputBindingResolver: DeterministicInputBindingResolver = {
+      resolve: async ({ projectId, binding }) => {
+        if (projectId !== request.project.id || binding.kind !== 'fixtureOutput') {
+          throw new Error('Fixture 输出绑定不属于当前受控运行。');
+        }
+        const value = fixtureOutputValues.get(`${binding.fixtureId}@${binding.fixtureVersion}`)?.[binding.outputName];
+        if (typeof value !== 'string') {
+          throw new Error('Fixture 输出未在当前运行中生成可用于输入的字符串值。');
+        }
+        return value;
+      },
+    };
+
     let artifact: RunArtifact;
     try {
       throwIfRunCancelled(request.cancellationSignal);
@@ -84,6 +209,18 @@ export class TestRunner {
         }),
         request.cancellationSignal,
       );
+      if (session.status === 'error') {
+        await cleanupPreparedFixtures();
+        return this.createPreflightBlockedResponse(
+          request,
+          runId,
+          title,
+          startedAt,
+          logs,
+          `浏览器会话未启动：${session.message}`,
+          fixtureEvidence,
+        );
+      }
       artifact = await awaitWithRunCancellation(
         this.artifacts.createSnapshot(
           runId,
@@ -95,9 +232,11 @@ export class TestRunner {
       );
     } catch (error) {
       if (!isRunCancelled(error)) {
+        await cleanupPreparedFixtures();
         throw error;
       }
-      return this.createCancelledResponse(request, runId, title, startedAt, logs, []);
+      await cleanupPreparedFixtures();
+      return this.createCancelledResponse(request, runId, title, startedAt, logs, [], fixtureEvidence);
     }
 
     const artifacts = [artifact];
@@ -200,6 +339,7 @@ export class TestRunner {
           replayResults = await awaitWithRunCancellation(replay, request.cancellationSignal);
         } catch (error) {
           if (!isRunCancelled(error)) {
+            await cleanupPreparedFixtures();
             throw error;
           }
           cancellation = createUserCancellation();
@@ -282,6 +422,7 @@ export class TestRunner {
           sourceStep: step,
           plannedStep: deterministicStep,
           ...(deterministicInputBinding ? { inputBinding: deterministicInputBinding } : {}),
+          ...(deterministicInputBinding?.kind === 'fixtureOutput' ? { inputBindingResolver: fixtureOutputBindingResolver } : {}),
           ...(deterministicAssertion ? { assertion: deterministicAssertion } : {}),
           testCaseId: request.testCase.id,
           targetEnvironment: request.environment.name,
@@ -446,6 +587,7 @@ export class TestRunner {
       break;
     }
 
+    await cleanupPreparedFixtures();
     const endedAt = new Date();
     const agentRun = agentRuns.length
       ? createTestCaseAgentRun({
@@ -477,6 +619,7 @@ export class TestRunner {
       logs,
       steps,
       artifacts,
+      ...(fixtureEvidence.length ? { fixtureLifecycles: fixtureEvidence } : {}),
       ...(agentRun ? { agentRun } : {}),
       ...(agentRuns.length ? { agentRuns } : {}),
       ...(hasFailure && !cancellation ? { failureReason } : {}),
@@ -503,6 +646,7 @@ export class TestRunner {
     startedAt: Date,
     logs: string[],
     artifacts: RunArtifact[],
+    fixtureLifecycles: FixtureLifecycleEvidence[] = [],
   ): RunTestCaseResponse {
     const cancellation = createUserCancellation();
     const documentId = getTestCasePrdPath(request.testCase)?.documentId;
@@ -527,6 +671,7 @@ export class TestRunner {
         message: cancellation.message,
       })),
       artifacts,
+      ...(fixtureLifecycles.length ? { fixtureLifecycles } : {}),
       cancellation,
     };
     this.emitRunEvent({
@@ -539,6 +684,111 @@ export class TestRunner {
       detail,
     });
     return { runId, title, detail };
+  }
+
+  private createPreflightBlockedResponse(
+    request: RunTestCaseRequest,
+    runId: string,
+    title: string,
+    startedAt: Date,
+    logs: string[],
+    reason: string,
+    fixtureLifecycles: FixtureLifecycleEvidence[] = [],
+  ): RunTestCaseResponse {
+    const message = reason;
+    const documentId = getTestCasePrdPath(request.testCase)?.documentId;
+    const detail: RunDetail = {
+      id: runId,
+      projectId: request.project.id,
+      testCaseId: request.testCase.id,
+      ...(documentId ? { documentId } : {}),
+      environmentId: request.environment.id,
+      title,
+      status: 'neutral',
+      startedAt: startedAt.toISOString(),
+      endedAt: new Date().toISOString(),
+      duration: '00:00:00',
+      summary: message,
+      logs: [...logs, `[${timeLabel(new Date())}] ${message}`],
+      steps: request.testCase.steps.map((step, index) => ({
+        id: `run-step-${runId}-${index}`,
+        stepId: step.id,
+        title: step.title,
+        status: 'neutral',
+        message,
+      })),
+      artifacts: [],
+      ...(fixtureLifecycles.length ? { fixtureLifecycles } : {}),
+    };
+    this.emitRunEvent({
+      runId,
+      title,
+      type: 'complete',
+      status: detail.status,
+      duration: detail.duration,
+      summary: detail.summary,
+      detail,
+    });
+    return { runId, title, detail };
+  }
+
+  private async executeFixtureLifecycle(
+    fixture: FixtureAsset,
+    lifecycle: 'setup' | 'cleanup',
+    request: RunTestCaseRequest,
+    cancellationSignal?: AbortSignal,
+  ): Promise<FixtureLifecycleExecutionResult> {
+    const declaration = lifecycle === 'setup' ? fixture.setup : fixture.cleanup;
+    if (!this.fixtureExecutor || !declaration) {
+      return {
+        evidence: {
+          fixtureId: fixture.id,
+          fixtureVersion: fixture.version,
+          lifecycle,
+          ...(declaration?.mode === 'script'
+            ? { mode: 'script' as const, scriptPath: declaration.script?.relativePath }
+            : {
+                mode: 'http' as const,
+                method: declaration?.mode === 'http' ? declaration.http?.method ?? 'POST' : 'POST',
+                path: declaration?.mode === 'http' ? declaration.http?.path ?? '/' : '/',
+                expectedStatuses: declaration?.mode === 'http' ? declaration.http?.expectedStatuses ?? [] : [],
+              }),
+          outcome: 'neutral',
+          durationMs: 0,
+        },
+        message: 'Fixture lifecycle is not executable.',
+      };
+    }
+    try {
+      return await this.fixtureExecutor.execute({
+        fixture,
+        lifecycle,
+        environment: request.environment,
+        projectId: request.project.id,
+        projectDirectory: request.fixtureScriptTrustDirectory,
+        scriptTrustRecords: request.fixtureScriptTrustRecords,
+        ...(cancellationSignal ? { cancellationSignal } : {}),
+      });
+    } catch {
+      return {
+        evidence: {
+          fixtureId: fixture.id,
+          fixtureVersion: fixture.version,
+          lifecycle,
+          ...(declaration.mode === 'script'
+            ? { mode: 'script' as const, scriptPath: declaration.script?.relativePath }
+            : {
+                mode: 'http' as const,
+                method: declaration.http?.method ?? 'POST',
+                path: declaration.http?.path ?? '/',
+                expectedStatuses: declaration.http?.expectedStatuses ?? [],
+              }),
+          outcome: 'failed',
+          durationMs: 0,
+        },
+        message: `Fixture ${declaration.mode === 'script' ? 'script' : 'HTTP'} lifecycle failed.`,
+      };
+    }
   }
 }
 
@@ -564,6 +814,45 @@ function appendUnexecutedSteps(
       screenshotPath,
     });
   });
+}
+
+function getFixtureOutputBindingIssue(
+  steps: TestStepDraft[],
+  fixtures: FixtureAsset[],
+  outputValues: ReadonlyMap<string, Readonly<Record<string, FixtureHttpJsonValue>>>,
+): string | undefined {
+  for (const step of steps) {
+    const binding = getConfirmedDeterministicTestInputBinding(step);
+    if (binding?.kind !== 'fixtureOutput') {
+      continue;
+    }
+    const fixture = fixtures.find((candidate) => (
+      candidate.id === binding.fixtureId && candidate.version === binding.fixtureVersion
+    ));
+    if (!fixture) {
+      return `步骤“${step.title}”引用的 fixture ${binding.fixtureId}@${binding.fixtureVersion} 未绑定到当前用例。`;
+    }
+    const output = fixture.outputs.find((candidate) => candidate.name === binding.outputName);
+    if (output?.type !== 'string') {
+      return `步骤“${step.title}”引用的 fixture 输出 ${binding.outputName} 未声明为可输入的字符串。`;
+    }
+    const setupHttp = fixture.setup.mode === 'http' ? normalizeFixtureHttpDeclaration(fixture.setup.http) : undefined;
+    if (
+      fixture.setup.mode !== 'script' &&
+      !setupHttp?.responseOutputs?.some((mapping) => mapping.outputName === binding.outputName)
+    ) {
+      return `步骤“${step.title}”引用的 fixture 输出 ${binding.outputName} 没有受控 setup 响应映射。`;
+    }
+    const value = outputValues.get(fixtureReferenceKey(fixture))?.[binding.outputName];
+    if (typeof value !== 'string') {
+      return `步骤“${step.title}”引用的 fixture 输出 ${binding.outputName} 未在当前准备请求中生成。`;
+    }
+  }
+  return undefined;
+}
+
+function fixtureReferenceKey(fixture: Pick<FixtureAsset, 'id' | 'version'>): string {
+  return `${fixture.id}@${fixture.version}`;
 }
 
 function isAgentStep(step: TestStepDraft): step is TestStepDraft & { type: StepType } {

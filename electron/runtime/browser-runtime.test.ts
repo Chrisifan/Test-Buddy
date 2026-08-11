@@ -4,6 +4,7 @@ import path from 'node:path';
 
 import { describe, expect, it, vi } from 'vitest';
 
+import { createEmptyProject } from '../../shared/studio.js';
 import { ArtifactManager } from './artifact-manager.js';
 import { BrowserRuntime } from './browser-runtime.js';
 
@@ -13,6 +14,46 @@ describe('BrowserRuntime page access', () => {
 
     expect(runtime.getPage()).toBeNull();
     expect(runtime.hasRealPage()).toBe(false);
+  });
+
+  it('resolves a bound authentication state before loading Playwright and refuses an unavailable reference', async () => {
+    const project = createEmptyProject(1);
+    const environment = { ...project.environments[0]!, storageStateId: 'state-missing' };
+    const resolve = vi.fn().mockRejectedValue(new Error('认证状态引用不存在或不属于当前项目。'));
+    const runtime = new BrowserRuntime(
+      '/tmp/playtest-browser-runtime-test',
+      new ArtifactManager('/tmp'),
+      undefined,
+      { resolve },
+    );
+
+    const session = await runtime.start({ project, environment, record: false });
+
+    expect(resolve).toHaveBeenCalledWith(project.id, 'state-missing');
+    expect(session).toMatchObject({ status: 'error', message: '认证状态引用不存在或不属于当前项目。' });
+    expect(runtime.getPage()).toBeNull();
+  });
+
+  it('captures storageState only from the current real session for the requested project', async () => {
+    const project = createEmptyProject(1);
+    const runtime = new BrowserRuntime('/tmp/playtest-browser-runtime-test', new ArtifactManager('/tmp'));
+    const capturedState = { cookies: [], origins: [{ origin: 'https://app.example.test', localStorage: [] }] };
+    const storageState = vi.fn().mockResolvedValue(capturedState);
+    (runtime as unknown as { context: { storageState: typeof storageState }; state: Record<string, unknown> }).context = { storageState };
+    (runtime as unknown as { state: Record<string, unknown> }).state = {
+      id: 'session-authenticated',
+      status: 'ready',
+      projectId: project.id,
+      environmentId: project.environments[0]!.id,
+      currentUrl: project.defaultUrl,
+      pageTitle: project.name,
+      message: 'ready',
+      updatedAt: new Date(0).toISOString(),
+    };
+
+    await expect(runtime.captureStorageState(project.id)).resolves.toBe(JSON.stringify(capturedState));
+    expect(storageState).toHaveBeenCalledOnce();
+    await expect(runtime.captureStorageState('project-other')).rejects.toThrow('没有属于此项目');
   });
 
   it('archives a Playwright trace only when a real browser context is available', async () => {

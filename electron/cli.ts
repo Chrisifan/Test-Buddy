@@ -12,19 +12,23 @@ import {
   type RunTone,
   type StudioState,
   type TestCaseDraft,
+  type SuiteAsset,
+  type VersionedTestAssetReference,
 } from '../shared/studio.js';
 import { nodePngImageAdapter } from './runtime/node-png-image-adapter.js';
 import { appendRunToStudioState } from './runtime/run-history.js';
 import { createRuntimeBundle } from './runtime/runtime-bundle.js';
 import { StudioStore } from './studioStore.js';
+import { SuiteRunner } from './runtime/suite-runner.js';
 
 const usage = `Usage:
-  testbuddy run --data-dir <path> --project-id <id> --case-id <id> [--case-id <id> ...] [--environment-id <id>] [--junit <path>] [--json <path>]
+  testbuddy run --data-dir <path> --project-id <id> (--case-id <id> [--case-id <id> ...] | --suite-id <id@version>) [--environment-id <id>] [--junit <path>] [--json <path>]
 
 Options:
   --data-dir        TestBuddy data root containing studio-data/state.json
   --project-id      Stable project ID
   --case-id         Stable test case ID; repeat for multiple cases
+  --suite-id        Exact Suite ID and version, formatted as <id@version>
   --environment-id  Override the environment saved on every selected case
   --junit           JUnit XML destination; defaults to studio-data/artifacts
   --json            Optional JSON report file; JSON is always written to stdout
@@ -37,6 +41,7 @@ type ParsedCommand =
       dataDir: string;
       projectId: string;
       caseIds: string[];
+      suiteReference?: VersionedTestAssetReference;
       environmentId?: string;
       junitPath?: string;
       jsonPath?: string;
@@ -53,6 +58,16 @@ export interface CliCaseResult {
   summary: string;
   failureReason?: string;
   artifacts: string[];
+  attempts?: number;
+  flaky?: boolean;
+}
+
+export interface CliSuiteRunInfo {
+  id: string;
+  version: number;
+  status: Exclude<RunTone, 'running'>;
+  effectiveConcurrency: number;
+  issues: string[];
 }
 
 export interface CliRunSummary {
@@ -66,6 +81,7 @@ export interface CliRunSummary {
     json?: string;
   };
   results: CliCaseResult[];
+  suite?: CliSuiteRunInfo;
 }
 
 class CliUsageError extends Error {}
@@ -85,7 +101,7 @@ export function parseCliArguments(argv: string[]): ParsedCommand {
     if (!option?.startsWith('--')) {
       throw new CliUsageError(`无法识别参数：${option ?? ''}`);
     }
-    if (!['--data-dir', '--project-id', '--case-id', '--environment-id', '--junit', '--json'].includes(option)) {
+    if (!['--data-dir', '--project-id', '--case-id', '--suite-id', '--environment-id', '--junit', '--json'].includes(option)) {
       throw new CliUsageError(`未知选项：${option}`);
     }
     const value = argumentsWithoutScriptSeparator[index + 1];
@@ -106,15 +122,23 @@ export function parseCliArguments(argv: string[]): ParsedCommand {
   const dataDir = singleValue('--data-dir');
   const projectId = singleValue('--project-id');
   const caseIds = [...new Set(values.get('--case-id') ?? [])];
-  if (!dataDir || !projectId || !caseIds.length) {
-    throw new CliUsageError('run 命令必须提供 --data-dir、--project-id 和至少一个 --case-id。');
+  const suiteId = singleValue('--suite-id');
+  if (!dataDir || !projectId || (!caseIds.length && !suiteId)) {
+    throw new CliUsageError('run 命令必须提供 --data-dir、--project-id 和至少一个 --case-id 或 --suite-id。');
+  }
+  if (caseIds.length && suiteId) {
+    throw new CliUsageError('--case-id 与 --suite-id 不能同时使用。');
+  }
+  if (suiteId && singleValue('--environment-id')) {
+    throw new CliUsageError('Suite 已固定目标环境，不能与 --environment-id 同时使用。');
   }
 
   return {
     kind: 'run',
     dataDir,
-    projectId,
-    caseIds,
+      projectId,
+      caseIds,
+      ...(suiteId ? { suiteReference: parseVersionedReference(suiteId, '--suite-id') } : {}),
     ...(singleValue('--environment-id') ? { environmentId: singleValue('--environment-id') } : {}),
     ...(singleValue('--junit') ? { junitPath: singleValue('--junit') } : {}),
     ...(singleValue('--json') ? { jsonPath: singleValue('--json') } : {}),
@@ -122,13 +146,25 @@ export function parseCliArguments(argv: string[]): ParsedCommand {
 }
 
 export function renderJUnitReport(summary: CliRunSummary): string {
-  const failures = summary.results.filter((result) => result.status === 'failed').length;
-  const errors = summary.results.filter((result) => result.status === 'neutral').length;
+  const suitePreflight: CliCaseResult[] = summary.suite?.issues.length
+    ? [{
+        projectId: 'suite',
+        testCaseId: 'suite-preflight',
+        environmentId: '',
+        title: `Suite ${summary.suite.id}@${summary.suite.version} preflight`,
+        status: 'neutral' as const,
+        summary: summary.suite.issues.join('\n'),
+        artifacts: [],
+      } satisfies CliCaseResult]
+    : [];
+  const reportResults = [...summary.results, ...suitePreflight];
+  const failures = reportResults.filter((result) => result.status === 'failed').length;
+  const errors = reportResults.filter((result) => result.status === 'neutral').length;
   const elapsedSeconds = Math.max(
     0,
     (new Date(summary.endedAt).getTime() - new Date(summary.startedAt).getTime()) / 1_000,
   );
-  const cases = summary.results
+  const cases = reportResults
     .map((result) => {
       const testcase = `  <testcase classname="${escapeXml(result.projectId)}" name="${escapeXml(result.title)}" time="${durationToSeconds(result.duration).toFixed(3)}">`;
       const reason = escapeXml(result.failureReason ?? result.summary);
@@ -144,7 +180,7 @@ export function renderJUnitReport(summary: CliRunSummary): string {
     .join('\n');
 
   return `<?xml version="1.0" encoding="UTF-8"?>
-<testsuite name="TestBuddy CLI" tests="${summary.results.length}" failures="${failures}" errors="${errors}" time="${elapsedSeconds.toFixed(3)}" timestamp="${escapeXml(summary.startedAt)}">
+<testsuite name="TestBuddy CLI" tests="${reportResults.length}" failures="${failures}" errors="${errors}" time="${elapsedSeconds.toFixed(3)}" timestamp="${escapeXml(summary.startedAt)}">
 ${cases}
 </testsuite>
 `;
@@ -157,18 +193,20 @@ export async function executeCliCommand(command: Exclude<ParsedCommand, { kind: 
   let state = hydrateStudioState(rawState);
   const project = findProject(state, command.projectId);
   const selections = command.caseIds.map((caseId) => selectTestCase(project, caseId, command.environmentId));
+  const suite = command.suiteReference ? selectSuite(project, command.suiteReference) : undefined;
   const startedAt = new Date();
   const runtime = createRuntimeBundle({
     rootDir: dataDir,
     visualDiffImageAdapter: nodePngImageAdapter,
   });
   const results: CliCaseResult[] = [];
+  let suiteInfo: CliSuiteRunInfo | undefined;
 
   try {
     await runtime.ensureReady();
-    for (const selection of selections) {
+    const executeSelection = async (selection: { testCase: TestCaseDraft; environment: ProjectEnvironment }): Promise<CliCaseResult> => {
       if (isAgentRunnableTestCase(selection.testCase) && !isMidsceneConfigured(state.midsceneConfig)) {
-        results.push({
+        return {
           projectId: project.id,
           testCaseId: selection.testCase.id,
           environmentId: selection.environment.id,
@@ -177,10 +215,8 @@ export async function executeCliCommand(command: Exclude<ParsedCommand, { kind: 
           summary: '该 Agent 用例需要已配置的 Midscene 模型，当前数据目录未包含可用模型配置。',
           failureReason: 'Midscene 模型未配置。',
           artifacts: [],
-        });
-        continue;
+        };
       }
-
       try {
         const result = await runtime.runTestCase({
           project,
@@ -199,9 +235,9 @@ export async function executeCliCommand(command: Exclude<ParsedCommand, { kind: 
         });
         state = appendRunToStudioState(state, result, selection.environment, runtime.browserRuntime.getState());
         await store.save(state);
-        results.push(toCliCaseResult(result, selection.environment));
+        return toCliCaseResult(result, selection.environment);
       } catch (error) {
-        results.push({
+        return {
           projectId: project.id,
           testCaseId: selection.testCase.id,
           environmentId: selection.environment.id,
@@ -210,7 +246,54 @@ export async function executeCliCommand(command: Exclude<ParsedCommand, { kind: 
           summary: `执行异常：${messageFor(error)}`,
           failureReason: messageFor(error),
           artifacts: [],
-        });
+        };
+      }
+    };
+
+    if (suite) {
+      const attemptedResults = new Map<string, CliCaseResult>();
+      const suiteResult = await new SuiteRunner({
+        execute: async ({ testCase, environment }) => {
+          const result = await executeSelection({ testCase, environment });
+          attemptedResults.set(`${testCase.id}@${testCase.version ?? 1}`, result);
+          return {
+            status: result.status === 'running' ? 'neutral' : result.status,
+            summary: result.summary,
+            ...(result.runId ? { runId: result.runId } : {}),
+          };
+        },
+      }).run(project, suite);
+      suiteInfo = {
+        id: suiteResult.suiteId,
+        version: suiteResult.suiteVersion,
+        status: suiteResult.status,
+        effectiveConcurrency: suiteResult.effectiveConcurrency,
+        issues: suiteResult.issues,
+      };
+      suiteResult.results.forEach((suiteCaseResult) => {
+        const testCase = project.testCases.find((item) => item.id === suiteCaseResult.testCaseId);
+        if (!testCase) {
+          return;
+        }
+        const attempted = attemptedResults.get(`${suiteCaseResult.testCaseId}@${suiteCaseResult.testCaseVersion}`);
+        results.push(attempted
+          ? { ...attempted, summary: suiteCaseResult.summary, attempts: suiteCaseResult.attempts, flaky: suiteCaseResult.flaky }
+          : {
+              projectId: project.id,
+              testCaseId: testCase.id,
+              environmentId: suite.environmentId,
+              title: testCase.name,
+              status: suiteCaseResult.status,
+              summary: suiteCaseResult.summary,
+              ...(suiteCaseResult.status === 'failed' ? { failureReason: suiteCaseResult.summary } : {}),
+              artifacts: [],
+              attempts: suiteCaseResult.attempts,
+              flaky: suiteCaseResult.flaky,
+            });
+      });
+    } else {
+      for (const selection of selections) {
+        results.push(await executeSelection(selection));
       }
     }
   } finally {
@@ -225,12 +308,15 @@ export async function executeCliCommand(command: Exclude<ParsedCommand, { kind: 
   );
   const summary: CliRunSummary = {
     command: 'run',
-    status: results.every((result) => result.status === 'passed') ? 'passed' : 'failed',
+    status: suiteInfo
+      ? suiteInfo.status === 'passed' ? 'passed' : 'failed'
+      : results.every((result) => result.status === 'passed') ? 'passed' : 'failed',
     dataDir,
     startedAt: startedAt.toISOString(),
     endedAt: endedAt.toISOString(),
     reports: { junit: junitPath },
     results,
+    ...(suiteInfo ? { suite: suiteInfo } : {}),
   };
   await writeFile(junitPath, renderJUnitReport(summary));
   if (command.jsonPath) {
@@ -265,6 +351,14 @@ function findProject(state: StudioState, projectId: string): ProjectDraft {
   return project;
 }
 
+function selectSuite(project: ProjectDraft, reference: VersionedTestAssetReference): SuiteAsset {
+  const suite = project.suites.find((item) => item.id === reference.id && item.version === reference.version);
+  if (!suite) {
+    throw new CliUsageError(`项目 ${project.id} 中未找到 Suite：${reference.id}@${reference.version}`);
+  }
+  return suite;
+}
+
 function selectTestCase(
   project: ProjectDraft,
   testCaseId: string,
@@ -280,6 +374,16 @@ function selectTestCase(
     throw new CliUsageError(`项目 ${project.id} 中未找到环境 ID：${environmentId}`);
   }
   return { testCase, environment };
+}
+
+function parseVersionedReference(value: string, option: string): VersionedTestAssetReference {
+  const separator = value.lastIndexOf('@');
+  const id = separator > 0 ? value.slice(0, separator).trim() : '';
+  const version = separator > 0 ? Number(value.slice(separator + 1)) : Number.NaN;
+  if (!id || !Number.isSafeInteger(version) || version < 1) {
+    throw new CliUsageError(`${option} 必须使用 <id@version> 格式。`);
+  }
+  return { id, version };
 }
 
 async function loadExistingState(store: StudioStore): Promise<StudioState> {

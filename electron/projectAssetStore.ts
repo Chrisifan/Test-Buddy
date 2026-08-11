@@ -8,20 +8,29 @@ import type {
   PrdDocumentAsset,
   ProjectAssetMigrationPlan,
   ProjectAssetReloadPlan,
+  ProjectAssetUpdatePlan,
   ProjectDraft,
   RecordingAsset,
   TestCaseDraft,
+  FixtureAsset,
+  SuiteAsset,
+  VersionedTestAssetReference,
 } from '../shared/studio.js';
+import { hasValidFixtureHttpOutputConfiguration, normalizeFixtureHttpDeclaration, resolveSuiteTestCases } from '../shared/studio.js';
 
 const projectAssetSchemaVersion = 1 as const;
 
-export interface ProjectAssetManifest extends Omit<ProjectDraft, 'testCases' | 'recordings' | 'documents'> {
+export interface ProjectAssetManifest extends Omit<ProjectDraft, 'testCases' | 'recordings' | 'documents' | 'fixtures' | 'suites'> {
   schemaVersion: typeof projectAssetSchemaVersion;
   revision?: string;
   assetIds: {
     cases: string[];
     recordings: string[];
     documents: string[];
+    /** Absent only in snapshots written before fixtures were introduced. */
+    fixtures?: VersionedTestAssetReference[];
+    /** Absent only in snapshots written before Suites were introduced. */
+    suites?: VersionedTestAssetReference[];
   };
 }
 
@@ -30,6 +39,8 @@ export interface ProjectAssetSnapshot {
   testCases: TestCaseDraft[];
   recordings: RecordingAsset[];
   documents: PrdDocumentAsset[];
+  fixtures: FixtureAsset[];
+  suites: SuiteAsset[];
 }
 
 export interface ProjectAssetReadResult {
@@ -119,6 +130,71 @@ export async function planProjectAssetReload(
   }
 }
 
+/**
+ * Produces a read-only CAS publish plan for local edits. It never writes the
+ * bound directory and deliberately rejects a changed directory, an unchanged
+ * local project, or unmanaged files beside the snapshot.
+ */
+export async function planProjectAssetUpdate(
+  project: ProjectDraft,
+  binding: ProjectAssetBinding,
+): Promise<ProjectAssetUpdatePlan> {
+  const nextSnapshot = createProjectAssetSnapshot(project);
+  const localRevision = nextSnapshot.manifest.revision!;
+  const files = listAssetFiles(nextSnapshot);
+  const snapshotIssues = validateProjectAssetSnapshot(nextSnapshot);
+  if (snapshotIssues.length) {
+    return {
+      projectId: project.id,
+      projectDirectory: binding.projectDirectory,
+      snapshotRevision: localRevision,
+      files,
+      status: 'requiresReview',
+      issues: snapshotIssues,
+    };
+  }
+
+  try {
+    const published = await new ProjectAssetStore(binding.projectDirectory).loadWithRevision();
+    const issues = [] as ProjectAssetUpdatePlan['issues'];
+    const layoutIssues = await validateProjectDirectoryLayout(
+      binding.projectDirectory,
+      createProjectAssetSnapshot(published.project),
+    );
+    issues.push(...layoutIssues);
+    if (published.project.id !== project.id) {
+      issues.push({ path: 'project.json.id', message: '项目资产目录属于另一个项目。' });
+    }
+    if (published.revision !== binding.revision) {
+      issues.push({ path: 'project.json.revision', message: '项目资产已被外部修改，请先重载后再更新。' });
+    }
+    if (localRevision === binding.revision) {
+      issues.push({ path: 'studio-data', message: '本地项目没有待发布的资产修改。' });
+    }
+
+    return {
+      projectId: project.id,
+      projectDirectory: binding.projectDirectory,
+      publishedRevision: published.revision,
+      snapshotRevision: localRevision,
+      files,
+      status: issues.length ? 'requiresReview' : 'ready',
+      issues,
+    };
+  } catch (error) {
+    return {
+      projectId: project.id,
+      projectDirectory: binding.projectDirectory,
+      snapshotRevision: localRevision,
+      files,
+      status: 'unavailable',
+      issues: error instanceof ProjectAssetStoreError
+        ? error.issues
+        : [{ path: binding.projectDirectory, message: errorMessage(error) }],
+    };
+  }
+}
+
 export interface ProjectAssetStoreFileSystem {
   rename(source: string, destination: string): Promise<void>;
   remove?(directory: string): Promise<void>;
@@ -141,7 +217,7 @@ export class ProjectAssetStoreError extends Error {
 
 export function createProjectAssetSnapshot(project: ProjectDraft): ProjectAssetSnapshot {
   const sanitizedProject = sanitizeProjectAsset(project);
-  const { testCases, recordings, documents, ...projectMetadata } = sanitizedProject;
+  const { testCases, recordings, documents, fixtures, suites, ...projectMetadata } = sanitizedProject;
   return {
     manifest: {
       ...projectMetadata,
@@ -151,11 +227,15 @@ export function createProjectAssetSnapshot(project: ProjectDraft): ProjectAssetS
         cases: testCases.map((testCase) => testCase.id),
         recordings: recordings.map((recording) => recording.id),
         documents: documents.map((document) => document.id),
+        fixtures: fixtures.map((fixture) => ({ id: fixture.id, version: fixture.version })),
+        suites: suites.map((suite) => ({ id: suite.id, version: suite.version })),
       },
     },
     testCases,
     recordings,
     documents,
+    fixtures,
+    suites,
   };
 }
 
@@ -172,6 +252,8 @@ export function validateProjectAssetSnapshot(snapshot: ProjectAssetSnapshot): Pr
   validateAssetCollection('cases', snapshot.testCases, manifest.assetIds.cases, issues);
   validateAssetCollection('recordings', snapshot.recordings, manifest.assetIds.recordings, issues);
   validateAssetCollection('documents', snapshot.documents, manifest.assetIds.documents, issues);
+  validateFixtureCollection(snapshot.fixtures, manifest.assetIds.fixtures, manifest, snapshot.testCases, issues);
+  validateSuiteCollection(snapshot.suites, manifest.assetIds.suites, manifest, snapshot.testCases, issues);
 
   if (manifest.revision !== undefined) {
     if (!isRevision(manifest.revision)) {
@@ -272,15 +354,17 @@ export class ProjectAssetStore {
     const manifest = await readJson(this.manifestPath, 'project.json') as ProjectAssetManifest;
     validateManifest(manifest);
 
-    const [testCases, storedRecordings, documents] = await Promise.all([
+    const [testCases, storedRecordings, documents, fixtures, suites] = await Promise.all([
       readAssetCollection<TestCaseDraft>(this.projectDirectory, 'cases', manifest.assetIds.cases),
       readAssetCollection<RecordingAsset>(this.projectDirectory, 'recordings', manifest.assetIds.recordings),
       readAssetCollection<PrdDocumentAsset>(this.projectDirectory, 'documents', manifest.assetIds.documents),
+      readFixtureCollection(this.projectDirectory, manifest.assetIds.fixtures ?? []),
+      readSuiteCollection(this.projectDirectory, manifest.assetIds.suites ?? []),
     ]);
     const recordings = manifest.revision === undefined
       ? storedRecordings.map(stripRecordingRuntimeData)
       : storedRecordings;
-    const snapshot: ProjectAssetSnapshot = { manifest, testCases, recordings, documents };
+    const snapshot: ProjectAssetSnapshot = { manifest, testCases, recordings, documents, fixtures, suites };
     const issues = validateProjectAssetSnapshot(snapshot);
     if (issues.length) {
       throw new ProjectAssetStoreError('项目资产文件已损坏或引用不一致。', issues);
@@ -348,6 +432,8 @@ export class ProjectAssetStore {
       await writeAssetCollection(temporaryDirectory, 'cases', snapshot.testCases);
       await writeAssetCollection(temporaryDirectory, 'recordings', snapshot.recordings);
       await writeAssetCollection(temporaryDirectory, 'documents', snapshot.documents);
+      await writeFixtureCollection(temporaryDirectory, snapshot.fixtures);
+      await writeSuiteCollection(temporaryDirectory, snapshot.suites);
 
       const targetExists = await pathExists(this.projectDirectory);
       if (!targetExists && !options.allowMissingTarget) {
@@ -469,6 +555,254 @@ function validateAssetCollection(
   }
 }
 
+function validateFixtureCollection(
+  fixtures: FixtureAsset[],
+  expectedReferences: VersionedTestAssetReference[] | undefined,
+  manifest: ProjectAssetManifest,
+  testCases: TestCaseDraft[],
+  issues: ProjectAssetValidationIssue[],
+): void {
+  if (expectedReferences === undefined) {
+    if (fixtures.length) {
+      issues.push({ path: 'project.json.assetIds.fixtures', message: 'manifest 缺少 fixture 版本引用。' });
+    }
+    return;
+  }
+  if (!Array.isArray(expectedReferences)) {
+    issues.push({ path: 'project.json.assetIds.fixtures', message: 'fixture 版本引用必须是数组。' });
+    return;
+  }
+  const expectedKeys = expectedReferences.map(fixtureReferenceKey);
+  if (
+    expectedReferences.some((reference) => !isVersionedAssetReference(reference)) ||
+    new Set(expectedKeys).size !== expectedKeys.length
+  ) {
+    issues.push({ path: 'project.json.assetIds.fixtures', message: 'fixture 版本引用必须唯一且有效。' });
+  }
+
+  const fixtureKeys = fixtures.map(fixtureReferenceKey);
+  if (fixtureKeys.length !== fixtures.length || new Set(fixtureKeys).size !== fixtureKeys.length) {
+    issues.push({ path: 'fixtures', message: 'fixture ID 或版本缺失或重复。' });
+  }
+  if (!sameKeys(expectedKeys, fixtureKeys)) {
+    issues.push({ path: 'project.json.assetIds.fixtures', message: 'manifest 与 fixture 文件的版本引用不一致。' });
+  }
+
+  const environmentIds = new Set(manifest.environments.map((environment) => environment.id));
+  const credentialIds = new Set(manifest.credentialRefs.map((credential) => credential.id));
+  fixtures.forEach((fixture) => validateFixtureAsset(fixture, environmentIds, credentialIds, issues));
+
+  const fixtureKeysSet = new Set(fixtureKeys);
+  testCases.forEach((testCase) => {
+    testCase.assetReferences?.fixtures.forEach((reference) => {
+      if (!fixtureKeysSet.has(fixtureReferenceKey(reference))) {
+        issues.push({
+          path: `cases/${testCase.id}.assetReferences.fixtures`,
+          message: `未找到 fixture ${reference.id}@${reference.version}。`,
+        });
+      }
+    });
+  });
+}
+
+function validateSuiteCollection(
+  suites: SuiteAsset[],
+  expectedReferences: VersionedTestAssetReference[] | undefined,
+  manifest: ProjectAssetManifest,
+  testCases: TestCaseDraft[],
+  issues: ProjectAssetValidationIssue[],
+): void {
+  if (expectedReferences === undefined) {
+    if (suites.length) {
+      issues.push({ path: 'project.json.assetIds.suites', message: 'manifest 缺少 suite 版本引用。' });
+    }
+    return;
+  }
+  if (!Array.isArray(expectedReferences)) {
+    issues.push({ path: 'project.json.assetIds.suites', message: 'suite 版本引用必须是数组。' });
+    return;
+  }
+  const expectedKeys = expectedReferences.map(suiteReferenceKey);
+  if (
+    expectedReferences.some((reference) => !isVersionedAssetReference(reference)) ||
+    new Set(expectedKeys).size !== expectedKeys.length
+  ) {
+    issues.push({ path: 'project.json.assetIds.suites', message: 'suite 版本引用必须唯一且有效。' });
+  }
+  const suiteKeys = suites.map(suiteReferenceKey);
+  if (suiteKeys.length !== suites.length || new Set(suiteKeys).size !== suiteKeys.length) {
+    issues.push({ path: 'suites', message: 'suite ID 或版本缺失或重复。' });
+  }
+  if (!sameKeys(expectedKeys, suiteKeys)) {
+    issues.push({ path: 'project.json.assetIds.suites', message: 'manifest 与 suite 文件的版本引用不一致。' });
+  }
+  suites.forEach((suite) => validateSuiteAsset(suite, manifest.environments, testCases, issues));
+}
+
+function validateSuiteAsset(
+  suite: SuiteAsset,
+  environments: ProjectAssetManifest['environments'],
+  testCases: TestCaseDraft[],
+  issues: ProjectAssetValidationIssue[],
+): void {
+  const suitePath = suite?.id ? suiteRelativePath(suite) : 'suites';
+  if (!suite || suite.schemaVersion !== 1 || !isNonEmptyString(suite.id) || !isPositiveInteger(suite.version)) {
+    issues.push({ path: suitePath, message: 'suite 必须包含 schema version、稳定 ID 和正整数版本。' });
+    return;
+  }
+  if (!isNonEmptyString(suite.name) || typeof suite.description !== 'string') {
+    issues.push({ path: suitePath, message: 'suite 名称或描述无效。' });
+  }
+  if (!environments.some((environment) => environment.id === suite.environmentId)) {
+    issues.push({ path: `${suitePath}.environmentId`, message: 'suite 引用了不存在的项目环境。' });
+  }
+  if (!Array.isArray(suite.tags) || suite.tags.some((tag) => !isNonEmptyString(tag)) || new Set(suite.tags).size !== suite.tags.length) {
+    issues.push({ path: `${suitePath}.tags`, message: 'suite 标签必须是唯一的非空字符串。' });
+  }
+  if (
+    !suite.execution ||
+    !Number.isSafeInteger(suite.execution.concurrency) ||
+    suite.execution.concurrency < 1 ||
+    suite.execution.concurrency > 10 ||
+    (suite.execution.failurePolicy !== 'continue' && suite.execution.failurePolicy !== 'failFast') ||
+    !Number.isSafeInteger(suite.execution.retryLimit) ||
+    suite.execution.retryLimit < 0 ||
+    suite.execution.retryLimit > 3
+  ) {
+    issues.push({ path: `${suitePath}.execution`, message: 'suite 执行策略无效。' });
+  }
+  if (!Array.isArray(suite.caseReferences) || !suite.caseReferences.length) {
+    issues.push({ path: `${suitePath}.caseReferences`, message: 'suite 至少需要一个用例引用。' });
+    return;
+  }
+  const referenceKeys = suite.caseReferences.map(suiteReferenceKey);
+  const validReferences = suite.caseReferences.every((reference) =>
+    isVersionedAssetReference(reference) &&
+    Array.isArray(reference.dependsOn) &&
+    reference.dependsOn.every(isVersionedAssetReference),
+  );
+  if (!validReferences || new Set(referenceKeys).size !== referenceKeys.length) {
+    issues.push({ path: `${suitePath}.caseReferences`, message: 'suite 用例引用或依赖声明无效。' });
+    return;
+  }
+  if (Number.isNaN(Date.parse(suite.createdAt)) || Number.isNaN(Date.parse(suite.updatedAt))) {
+    issues.push({ path: suitePath, message: 'suite 创建或更新时间无效。' });
+  }
+  resolveSuiteTestCases({ environments, testCases }, suite).issues.forEach((issue) => {
+    issues.push({
+      path: issue.kind === 'missingEnvironment' ? `${suitePath}.environmentId` : `${suitePath}.caseReferences`,
+      message: issue.message,
+    });
+  });
+}
+
+function validateFixtureAsset(
+  fixture: FixtureAsset,
+  environmentIds: Set<string>,
+  credentialIds: Set<string>,
+  issues: ProjectAssetValidationIssue[],
+): void {
+  const fixturePath = fixture?.id ? fixtureRelativePath(fixture) : 'fixtures';
+  if (!fixture || fixture.schemaVersion !== 1 || !isNonEmptyString(fixture.id) || !isPositiveInteger(fixture.version)) {
+    issues.push({ path: fixturePath, message: 'fixture 必须包含 schema version、稳定 ID 和正整数版本。' });
+    return;
+  }
+  if (!isNonEmptyString(fixture.name) || typeof fixture.description !== 'string') {
+    issues.push({ path: fixturePath, message: 'fixture 名称或描述无效。' });
+  }
+  validateFixtureParameters(fixturePath, 'inputs', fixture.inputs, issues);
+  validateFixtureParameters(fixturePath, 'outputs', fixture.outputs, issues);
+  if (!hasValidFixtureHttpOutputConfiguration(fixture)) {
+    issues.push({ path: fixturePath, message: 'fixture HTTP 输出映射必须指向已声明的 setup 输出，cleanup 不可声明输出。' });
+  }
+  if (!Array.isArray(fixture.credentialIds) || fixture.credentialIds.some((credentialId) => !credentialIds.has(credentialId))) {
+    issues.push({ path: fixturePath, message: 'fixture 引用了不存在的项目凭据。' });
+  }
+  if (!Array.isArray(fixture.environmentIds) || fixture.environmentIds.some((environmentId) => !environmentIds.has(environmentId))) {
+    issues.push({ path: fixturePath, message: 'fixture 引用了不存在的项目环境。' });
+  }
+  if (!Array.isArray(fixture.resourceLocks) || fixture.resourceLocks.some((resource) => !isNonEmptyString(resource))) {
+    issues.push({ path: fixturePath, message: 'fixture 资源锁必须是非空字符串。' });
+  }
+  if (fixture.concurrency !== 'parallel' && fixture.concurrency !== 'exclusive') {
+    issues.push({ path: fixturePath, message: 'fixture 并发策略无效。' });
+  }
+  validateFixtureLifecycle(fixturePath, 'setup', fixture.setup, issues);
+  if (fixture.cleanup !== undefined) {
+    validateFixtureLifecycle(fixturePath, 'cleanup', fixture.cleanup, issues);
+  }
+  if (Number.isNaN(Date.parse(fixture.createdAt)) || Number.isNaN(Date.parse(fixture.updatedAt))) {
+    issues.push({ path: fixturePath, message: 'fixture 创建或更新时间无效。' });
+  }
+}
+
+function validateFixtureParameters(
+  fixturePath: string,
+  label: 'inputs' | 'outputs',
+  parameters: FixtureAsset['inputs'],
+  issues: ProjectAssetValidationIssue[],
+): void {
+  if (!Array.isArray(parameters)) {
+    issues.push({ path: `${fixturePath}.${label}`, message: 'fixture 参数必须是数组。' });
+    return;
+  }
+  const names = parameters.map((parameter) => parameter?.name);
+  if (
+    names.some((name) => !isNonEmptyString(name) || !/^[A-Za-z_][A-Za-z0-9_-]*$/.test(name)) ||
+    new Set(names).size !== names.length ||
+    parameters.some((parameter) =>
+      !parameter ||
+      (parameter.type !== 'string' && parameter.type !== 'number' && parameter.type !== 'boolean' && parameter.type !== 'json') ||
+      typeof parameter.required !== 'boolean',
+    )
+  ) {
+    issues.push({ path: `${fixturePath}.${label}`, message: 'fixture 参数名、类型或必填标记无效。' });
+  }
+}
+
+function validateFixtureLifecycle(
+  fixturePath: string,
+  label: 'setup' | 'cleanup',
+  lifecycle: FixtureAsset['setup'],
+  issues: ProjectAssetValidationIssue[],
+): void {
+  if (
+    !lifecycle ||
+    !isNonEmptyString(lifecycle.summary) ||
+    (lifecycle.mode !== 'http' && lifecycle.mode !== 'ui' && lifecycle.mode !== 'script')
+  ) {
+    issues.push({ path: `${fixturePath}.${label}`, message: 'fixture 生命周期声明无效。' });
+    return;
+  }
+  if (lifecycle.mode === 'http') {
+    if (lifecycle.script !== undefined) {
+      issues.push({ path: `${fixturePath}.${label}.script`, message: '仅 script fixture 可以声明脚本。' });
+    }
+    if (lifecycle.http !== undefined && !normalizeFixtureHttpDeclaration(lifecycle.http)) {
+      issues.push({ path: `${fixturePath}.${label}.http`, message: 'fixture HTTP 声明无效。' });
+    }
+    return;
+  }
+  if (lifecycle.mode !== 'script') {
+    if (lifecycle.script !== undefined) {
+      issues.push({ path: `${fixturePath}.${label}.script`, message: '仅 script fixture 可以声明脚本。' });
+    }
+    return;
+  }
+  const script = lifecycle.script;
+  if (
+    !script ||
+    !isNonEmptyString(script.relativePath) ||
+    script.relativePath.startsWith('/') ||
+    script.relativePath.split(/[\\/]/u).includes('..') ||
+    !isRevision(script.contentHash) ||
+    !Array.isArray(script.requiredEnvironment) ||
+    script.requiredEnvironment.some((name) => !isNonEmptyString(name))
+  ) {
+    issues.push({ path: `${fixturePath}.${label}.script`, message: 'fixture 脚本声明无效。' });
+  }
+}
+
 function validateManifest(manifest: ProjectAssetManifest): void {
   const issues: ProjectAssetValidationIssue[] = [];
   if (!manifest || typeof manifest !== 'object') {
@@ -506,6 +840,8 @@ function listAssetFiles(snapshot: ProjectAssetSnapshot): string[] {
     ...snapshot.testCases.map((asset) => assetRelativePath('cases', asset.id)),
     ...snapshot.recordings.map((asset) => assetRelativePath('recordings', asset.id)),
     ...snapshot.documents.map((asset) => assetRelativePath('documents', asset.id)),
+    ...snapshot.fixtures.map(fixtureRelativePath),
+    ...snapshot.suites.map(suiteRelativePath),
   ];
 }
 
@@ -517,6 +853,8 @@ async function validateProjectDirectoryLayout(
     'cases/',
     'documents/',
     'recordings/',
+    ...(snapshot.manifest.assetIds.fixtures === undefined ? [] : ['fixtures/']),
+    ...(snapshot.manifest.assetIds.suites === undefined ? [] : ['suites/']),
     ...listAssetFiles(snapshot),
   ]);
   const actualEntries = new Set(await listDirectoryTreeEntries(directory));
@@ -558,6 +896,14 @@ function assetRelativePath(kind: 'cases' | 'recordings' | 'documents', id: strin
   return path.posix.join(kind, `${encodeURIComponent(id)}.json`);
 }
 
+function fixtureRelativePath(fixture: Pick<FixtureAsset, 'id' | 'version'>): string {
+  return path.posix.join('fixtures', `${encodeURIComponent(fixture.id)}@${fixture.version}.json`);
+}
+
+function suiteRelativePath(suite: Pick<SuiteAsset, 'id' | 'version'>): string {
+  return path.posix.join('suites', `${encodeURIComponent(suite.id)}@${suite.version}.json`);
+}
+
 async function listDirectoryEntries(directory: string): Promise<string[]> {
   try {
     return (await fs.readdir(directory)).sort();
@@ -595,6 +941,50 @@ async function readAssetCollection<T extends { id: string }>(
   }));
 }
 
+async function writeFixtureCollection(rootDirectory: string, fixtures: FixtureAsset[]): Promise<void> {
+  const directory = path.join(rootDirectory, 'fixtures');
+  await fs.mkdir(directory, { recursive: true });
+  await Promise.all(fixtures.map((fixture) => writeJson(path.join(rootDirectory, fixtureRelativePath(fixture)), fixture)));
+}
+
+async function readFixtureCollection(
+  rootDirectory: string,
+  references: VersionedTestAssetReference[],
+): Promise<FixtureAsset[]> {
+  return Promise.all(references.map(async (reference) => {
+    const fixturePath = fixtureRelativePath(reference);
+    const fixture = await readJson(path.join(rootDirectory, fixturePath), fixturePath) as FixtureAsset;
+    if (!fixture || fixture.id !== reference.id || fixture.version !== reference.version) {
+      throw new ProjectAssetStoreError('fixture 文件与 manifest 引用不一致。', [
+        { path: fixturePath, message: 'fixture ID 或版本不匹配。' },
+      ]);
+    }
+    return fixture;
+  }));
+}
+
+async function writeSuiteCollection(rootDirectory: string, suites: SuiteAsset[]): Promise<void> {
+  const directory = path.join(rootDirectory, 'suites');
+  await fs.mkdir(directory, { recursive: true });
+  await Promise.all(suites.map((suite) => writeJson(path.join(rootDirectory, suiteRelativePath(suite)), suite)));
+}
+
+async function readSuiteCollection(
+  rootDirectory: string,
+  references: VersionedTestAssetReference[],
+): Promise<SuiteAsset[]> {
+  return Promise.all(references.map(async (reference) => {
+    const suitePath = suiteRelativePath(reference);
+    const suite = await readJson(path.join(rootDirectory, suitePath), suitePath) as SuiteAsset;
+    if (!suite || suite.id !== reference.id || suite.version !== reference.version) {
+      throw new ProjectAssetStoreError('suite 文件与 manifest 引用不一致。', [
+        { path: suitePath, message: 'suite ID 或版本不匹配。' },
+      ]);
+    }
+    return suite;
+  }));
+}
+
 async function writeJson(filePath: string, value: unknown): Promise<void> {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
@@ -622,6 +1012,8 @@ function projectFromSnapshot(snapshot: ProjectAssetSnapshot): ProjectDraft {
     testCases: structuredClone(snapshot.testCases),
     recordings: structuredClone(snapshot.recordings),
     documents: structuredClone(snapshot.documents),
+    fixtures: structuredClone(snapshot.fixtures),
+    suites: structuredClone(snapshot.suites),
   };
 }
 
@@ -665,6 +1057,30 @@ function errorMessage(error: unknown): string {
 
 function sameIds(expected: string[], actual: string[]): boolean {
   return expected.length === actual.length && expected.every((id) => actual.includes(id));
+}
+
+function fixtureReferenceKey(reference: Pick<VersionedTestAssetReference, 'id' | 'version'>): string {
+  return `${reference.id}@${reference.version}`;
+}
+
+function suiteReferenceKey(reference: Pick<VersionedTestAssetReference, 'id' | 'version'>): string {
+  return `${reference.id}@${reference.version}`;
+}
+
+function sameKeys(expected: string[], actual: string[]): boolean {
+  return expected.length === actual.length && expected.every((key) => actual.includes(key));
+}
+
+function isVersionedAssetReference(value: unknown): value is VersionedTestAssetReference {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+  const reference = value as Partial<VersionedTestAssetReference>;
+  return isNonEmptyString(reference.id) && isPositiveInteger(reference.version);
+}
+
+function isPositiveInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 1;
 }
 
 function isNonEmptyString(value: unknown): value is string {

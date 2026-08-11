@@ -46,14 +46,18 @@ export class CredentialStore {
   }
 
   async resolve(request: { projectId: string; binding: TestInputValueBinding }): Promise<string> {
+    const binding = request.binding;
+    if (binding.kind !== 'credential') {
+      throw new Error('Fixture 输出绑定必须在对应的 Case 运行中解析。');
+    }
     const credential = (await this.loadStoredCredentials()).find(
-      (candidate) => candidate.id === request.binding.credentialId && candidate.projectId === request.projectId,
+      (candidate) => candidate.id === binding.credentialId && candidate.projectId === request.projectId,
     );
     if (!credential) {
       throw new Error('凭据引用不存在、不属于当前项目，或需要重新保存后才能使用。');
     }
 
-    if (request.binding.field === 'username') {
+    if (binding.field === 'username') {
       if (!credential.username?.trim()) {
         throw new Error('所选凭据没有可用于输入的用户名。');
       }

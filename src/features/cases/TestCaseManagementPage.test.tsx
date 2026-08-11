@@ -125,7 +125,13 @@ function createStructuredAssertionCase(
   };
 }
 
-function CasePageHarness({ initialTestCase = selectedTestCase }: { initialTestCase?: typeof selectedTestCase }) {
+function CasePageHarness({
+  initialProject = project,
+  initialTestCase = selectedTestCase,
+}: {
+  initialProject?: typeof project;
+  initialTestCase?: typeof selectedTestCase;
+}) {
   const [testCase, setTestCase] = React.useState(initialTestCase);
   const nextStepId = React.useRef(1);
 
@@ -154,7 +160,7 @@ function CasePageHarness({ initialTestCase = selectedTestCase }: { initialTestCa
         onRunTestCase={vi.fn()}
         onSelectTestCase={vi.fn()}
         onUpdateTestCase={(updater) => setTestCase((current) => updater(current))}
-        project={{ ...project, testCases: [testCase] }}
+        project={{ ...initialProject, testCases: [testCase] }}
         runStatus="neutral"
         saveStatus="idle"
         selectedTestCase={testCase}
@@ -408,6 +414,66 @@ describe('TestCaseManagementPage', () => {
     expect(screen.getByText('已确认')).toBeInTheDocument();
   });
 
+  it('offers only mapped string outputs from Fixture versions bound to the edited Case', async () => {
+    const fixture = {
+      schemaVersion: 1 as const,
+      id: 'fixture-order-output',
+      version: 2,
+      name: '准备订单数据',
+      description: '',
+      inputs: [],
+      outputs: [
+        { name: 'orderId', type: 'string' as const, required: true },
+        { name: 'rowCount', type: 'number' as const, required: true },
+      ],
+      credentialIds: [],
+      environmentIds: [project.environments[0]!.id],
+      setup: {
+        mode: 'http' as const,
+        summary: '创建订单。',
+        http: {
+          method: 'POST' as const,
+          path: '/api/test-data/orders',
+          expectedStatuses: [201],
+          responseOutputs: [
+            { outputName: 'orderId', jsonPointer: '/orderId' },
+            { outputName: 'rowCount', jsonPointer: '/rowCount' },
+          ],
+        },
+      },
+      concurrency: 'exclusive' as const,
+      resourceLocks: [],
+      createdAt: '2026-08-11T00:00:00.000Z',
+      updatedAt: '2026-08-11T00:00:00.000Z',
+    };
+    const testCase: TestCaseDraft = {
+      ...selectedTestCase,
+      assetReferences: { fixtures: [{ id: fixture.id, version: fixture.version }], reusableFlows: [] },
+      steps: [{
+        id: 'fixture-output-input-step',
+        type: 'ai',
+        title: '填写订单号',
+        body: '填写已准备的订单号。',
+        execution: {
+          schemaVersion: 2,
+          intent: '填写已准备的订单号。',
+          reviewStatus: 'needsReview',
+          actionRisk: 'medium',
+          inputBindingTarget: { kind: 'input', locator: { selector: '#order-id', quality: 'acceptable' } },
+        },
+      }],
+    };
+
+    render(<CasePageHarness initialProject={{ ...project, fixtures: [fixture] }} initialTestCase={testCase} />);
+
+    fireEvent.click(screen.getByRole('combobox', { name: 'Fixture 输出' }));
+    expect(await screen.findByRole('option', { name: '准备订单数据 v2 / orderId' })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: /rowCount/u })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('option', { name: '准备订单数据 v2 / orderId' }));
+
+    expect(await screen.findByRole('button', { name: '确认确定性动作' })).toBeInTheDocument();
+  });
+
   it('edits structured business intent separately from case notes', () => {
     const testCase: TestCaseDraft = {
       ...selectedTestCase,
@@ -435,6 +501,40 @@ describe('TestCaseManagementPage', () => {
     expect(screen.getByLabelText('前置条件')).toHaveValue('使用已准备的测试账号\n订单数据存在');
     expect(screen.getByLabelText('成功标准')).toHaveValue('页面展示提交成功提示\n订单状态更新为已提交');
     expect(screen.getByLabelText('用例说明')).toHaveValue('保留给编辑者的补充说明。');
+  });
+
+  it('binds and removes an exact fixture version without changing the fixture asset', async () => {
+    const fixture = {
+      schemaVersion: 1 as const,
+      id: 'fixture-order-data',
+      version: 1,
+      name: '准备订单数据',
+      description: '创建可用于断言的订单。',
+      inputs: [],
+      outputs: [],
+      credentialIds: [],
+      environmentIds: [project.environments[0]!.id],
+      setup: { mode: 'http' as const, summary: '创建订单' },
+      concurrency: 'exclusive' as const,
+      resourceLocks: ['orders:seed'],
+      createdAt: '2026-08-11T00:00:00.000Z',
+      updatedAt: '2026-08-11T00:00:00.000Z',
+    };
+    const fixtureCase: TestCaseDraft = {
+      ...selectedTestCase,
+      assetReferences: { fixtures: [], reusableFlows: [] },
+    };
+
+    render(<CasePageHarness initialProject={{ ...project, fixtures: [fixture] }} initialTestCase={fixtureCase} />);
+
+    fireEvent.click(screen.getByRole('button', { name: '用例设置' }));
+    fireEvent.click(screen.getByRole('combobox', { name: 'Fixture 依赖' }));
+    fireEvent.click(await screen.findByRole('option', { name: '准备订单数据 v1' }));
+
+    const remove = await screen.findByRole('button', { name: '解除 准备订单数据 v1 绑定' });
+    fireEvent.click(remove);
+
+    expect(await screen.findByText('当前用例没有绑定 Fixture。')).toBeInTheDocument();
   });
 
   it('uses English labels for the editor controls', async () => {

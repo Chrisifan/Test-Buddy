@@ -10,14 +10,20 @@ import {
   normalizeProjectAssetBindings,
   type BrowserNavigateRequest,
   type BrowserSessionRequest,
+  type CaptureStorageStateRequest,
   type ChatCommandRequest,
+  type ImportStorageStateRequest,
   type MidsceneConfig,
+  type FixtureScriptTrustRequest,
+  type FixtureScriptTrustStatus,
   type ProjectAssetBinding,
   type ProjectAssetBindingStatus,
   type ProjectAssetMigrationRequest,
   type ProjectAssetReloadPlan,
   type ProjectAssetReloadRequest,
   type ProjectAssetReloadResult,
+  type ProjectAssetUpdatePlan,
+  type ProjectAssetUpdateRequest,
   type ProjectDraft,
   type ProjectReportExportRequest,
   type PrdSemanticAnalysisRequest,
@@ -25,11 +31,15 @@ import {
   type RunRecordingRequest,
   type RunTestCaseRequest,
   type RunWorkflowRequest,
+  type RevokeStorageStateRequest,
   type SaveCredentialRequest,
   type SessionStartRequest,
+  type StorageStateRef,
   type StudioState,
 } from '../shared/studio.js';
 import { CredentialStore } from './runtime/credential-store.js';
+import { ScriptTrustStore } from './runtime/script-trust-store.js';
+import { StorageStateStore } from './runtime/storage-state-store.js';
 import { testMidsceneConnection } from './runtime/midscene-connection.js';
 import { electronNativeImageAdapter } from './runtime/electron-native-image-adapter.js';
 import { PrdSemanticAnalysisRuntime } from './runtime/prd-semantic-analyzer.js';
@@ -40,6 +50,7 @@ import {
   calculateProjectAssetRevision,
   inspectProjectAssetBinding,
   planProjectAssetReload,
+  planProjectAssetUpdate,
   ProjectAssetStore,
 } from './projectAssetStore.js';
 
@@ -49,6 +60,8 @@ const __dirname = path.dirname(__filename);
 let mainWindow: BrowserWindow | null = null;
 let studioStore: StudioStore | null = null;
 let credentialStore: CredentialStore | null = null;
+let scriptTrustStore: ScriptTrustStore | null = null;
+let storageStateStore: StorageStateStore | null = null;
 let runtimeBundle: RuntimeBundle | null = null;
 let prdSemanticAnalysisRuntime: PrdSemanticAnalysisRuntime | null = null;
 const approvedProjectAssetDirectories = new Set<string>();
@@ -72,6 +85,20 @@ function getCredentialStoreOrThrow(): CredentialStore {
   }
 
   return credentialStore;
+}
+
+function getScriptTrustStoreOrThrow(): ScriptTrustStore {
+  if (!scriptTrustStore) {
+    throw new Error('脚本信任存储尚未初始化。');
+  }
+  return scriptTrustStore;
+}
+
+function getStorageStateStoreOrThrow(): StorageStateStore {
+  if (!storageStateStore) {
+    throw new Error('认证状态存储尚未初始化。');
+  }
+  return storageStateStore;
 }
 
 function getRuntimeBundleOrThrow(): RuntimeBundle {
@@ -164,6 +191,107 @@ async function createProjectAssetReloadPlan(request: ProjectAssetReloadRequest):
   };
 }
 
+async function getBoundProjectAssetUpdateRequest(request: ProjectAssetUpdateRequest): Promise<{
+  binding: ProjectAssetBinding;
+  project: ProjectDraft;
+  storedProject: ProjectDraft;
+}> {
+  if (!request || typeof request.projectId !== 'string' || !request.projectId.trim() || !request.project || request.project.id !== request.projectId) {
+    throw new Error('项目资产更新请求无效。');
+  }
+  const state = await getStoreOrThrow().load();
+  const storedProject = state.projects.find((candidate) => candidate.id === request.projectId);
+  if (!storedProject) {
+    throw new Error('项目不存在，无法更新资产快照。');
+  }
+  const binding = normalizeProjectAssetBindings(state.projectAssetBindings, state.projects)
+    .find((candidate) => candidate.projectId === request.projectId);
+  if (!binding) {
+    throw new Error('项目尚未登记资产快照，无法更新。');
+  }
+  return { binding, project: request.project, storedProject };
+}
+
+function toFixtureScriptTrustStatus(record: Awaited<ReturnType<ScriptTrustStore['approve']>>): FixtureScriptTrustStatus {
+  const { projectId: _projectId, projectDirectory: _projectDirectory, schemaVersion: _schemaVersion, ...status } = record;
+  return status;
+}
+
+async function getFixtureScriptTrustContext(projectId: string): Promise<{
+  projectDirectory?: string;
+  records: Awaited<ReturnType<ScriptTrustStore['list']>>;
+}> {
+  const state = await getStoreOrThrow().load();
+  const binding = normalizeProjectAssetBindings(state.projectAssetBindings, state.projects)
+    .find((candidate) => candidate.projectId === projectId);
+  if (!binding) {
+    return { records: [] };
+  }
+  return {
+    projectDirectory: binding.projectDirectory,
+    records: await getScriptTrustStoreOrThrow().list({
+      projectId,
+      projectDirectory: binding.projectDirectory,
+    }),
+  };
+}
+
+async function resolveFixtureScriptTrustRequest(request: FixtureScriptTrustRequest): Promise<{
+  identity: Parameters<ScriptTrustStore['approve']>[0];
+}> {
+  if (
+    !request ||
+    typeof request.projectId !== 'string' ||
+    !request.projectId.trim() ||
+    typeof request.fixtureId !== 'string' ||
+    !request.fixtureId.trim() ||
+    !Number.isInteger(request.fixtureVersion) ||
+    request.fixtureVersion < 1 ||
+    (request.lifecycle !== 'setup' && request.lifecycle !== 'cleanup')
+  ) {
+    throw new Error('脚本信任请求无效。');
+  }
+  const state = await getStoreOrThrow().load();
+  const project = state.projects.find((candidate) => candidate.id === request.projectId);
+  const binding = normalizeProjectAssetBindings(state.projectAssetBindings, state.projects)
+    .find((candidate) => candidate.projectId === request.projectId);
+  const fixture = project?.fixtures.find((candidate) => (
+    candidate.id === request.fixtureId && candidate.version === request.fixtureVersion
+  ));
+  const declaration = request.lifecycle === 'setup' ? fixture?.setup : fixture?.cleanup;
+  if (!project || !binding || !fixture || declaration?.mode !== 'script' || !declaration.script) {
+    throw new Error('只能为已绑定项目中的脚本 Fixture 创建信任记录。');
+  }
+  return {
+    identity: {
+      projectId: project.id,
+      projectDirectory: binding.projectDirectory,
+      fixtureId: fixture.id,
+      fixtureVersion: fixture.version,
+      lifecycle: request.lifecycle,
+      relativePath: declaration.script.relativePath,
+      contentHash: declaration.script.contentHash,
+    },
+  };
+}
+
+/** The renderer snapshot must still match studio-data before external writes are enabled. */
+async function createProjectAssetUpdatePlan(request: ProjectAssetUpdateRequest): Promise<ProjectAssetUpdatePlan> {
+  const { binding, project, storedProject } = await getBoundProjectAssetUpdateRequest(request);
+  const plan = await planProjectAssetUpdate(project, binding);
+  const issues = [...plan.issues];
+  if (request.expectedRevision !== binding.revision) {
+    issues.push({ path: 'projectAssetBindings.revision', message: '资产快照绑定已变化，请重新生成更新计划。' });
+  }
+  if (calculateProjectAssetRevision(storedProject) !== calculateProjectAssetRevision(project)) {
+    issues.push({ path: 'studio-data', message: '持久化项目已变化，请先刷新本地编辑态。' });
+  }
+  if (!issues.length || plan.status === 'unavailable') {
+    return plan;
+  }
+  return { ...plan, status: 'requiresReview', issues };
+}
+
 function createWindow(): BrowserWindow {
   const icon = loadApplicationIcon();
   const window = new BrowserWindow({
@@ -235,6 +363,80 @@ function registerIpcHandlers(): void {
   ipcMain.handle('studio:save-credential', async (_event, request: SaveCredentialRequest) =>
     getCredentialStoreOrThrow().save(request),
   );
+  ipcMain.handle('studio:import-storage-state', async (event, request: ImportStorageStateRequest): Promise<StorageStateRef | null> => {
+    if (
+      !request ||
+      typeof request.projectId !== 'string' ||
+      !request.projectId.trim() ||
+      typeof request.label !== 'string' ||
+      !request.label.trim()
+    ) {
+      throw new Error('认证状态导入请求无效。');
+    }
+    const project = (await getStoreOrThrow().load()).projects.find((candidate) => candidate.id === request.projectId);
+    if (!project) {
+      throw new Error('项目不存在，无法导入认证状态。');
+    }
+    const owner = BrowserWindow.fromWebContents(event.sender) ?? mainWindow;
+    const result = owner
+      ? await dialog.showOpenDialog(owner, {
+        title: '选择 Playwright storageState 文件',
+        properties: ['openFile'],
+        filters: [{ name: 'JSON', extensions: ['json'] }],
+      })
+      : await dialog.showOpenDialog({
+        title: '选择 Playwright storageState 文件',
+        properties: ['openFile'],
+        filters: [{ name: 'JSON', extensions: ['json'] }],
+      });
+    if (result.canceled || !result.filePaths[0]) {
+      return null;
+    }
+    return getStorageStateStoreOrThrow().importFile(project.id, request.label, result.filePaths[0]);
+  });
+  ipcMain.handle('studio:capture-storage-state', async (_event, request: CaptureStorageStateRequest): Promise<StorageStateRef> => {
+    if (
+      !request ||
+      typeof request.projectId !== 'string' ||
+      !request.projectId.trim() ||
+      typeof request.label !== 'string' ||
+      !request.label.trim() ||
+      (request.storageStateId !== undefined && (typeof request.storageStateId !== 'string' || !request.storageStateId.trim()))
+    ) {
+      throw new Error('认证状态捕获请求无效。');
+    }
+    const project = (await getStoreOrThrow().load()).projects.find((candidate) => candidate.id === request.projectId);
+    if (!project) {
+      throw new Error('项目不存在，无法捕获认证状态。');
+    }
+    const serializedState = await getRuntimeBundleOrThrow().browserRuntime.captureStorageState(project.id);
+    return request.storageStateId
+      ? getStorageStateStoreOrThrow().replace(project.id, request.storageStateId, serializedState)
+      : getStorageStateStoreOrThrow().save(project.id, request.label, serializedState);
+  });
+  ipcMain.handle('studio:revoke-storage-state', async (_event, request: RevokeStorageStateRequest): Promise<void> => {
+    if (
+      !request ||
+      typeof request.projectId !== 'string' ||
+      !request.projectId.trim() ||
+      typeof request.storageStateId !== 'string' ||
+      !request.storageStateId.trim()
+    ) {
+      throw new Error('认证状态撤销请求无效。');
+    }
+    await getStorageStateStoreOrThrow().revoke(request.projectId, request.storageStateId);
+  });
+  ipcMain.handle('studio:list-fixture-script-trusts', async (_event, projectId: string): Promise<FixtureScriptTrustStatus[]> => {
+    if (typeof projectId !== 'string' || !projectId.trim()) {
+      throw new Error('项目 ID 无效。');
+    }
+    const context = await getFixtureScriptTrustContext(projectId);
+    return context.records.map(toFixtureScriptTrustStatus);
+  });
+  ipcMain.handle('studio:approve-fixture-script-trust', async (_event, request: FixtureScriptTrustRequest): Promise<FixtureScriptTrustStatus> => {
+    const { identity } = await resolveFixtureScriptTrustRequest(request);
+    return toFixtureScriptTrustStatus(await getScriptTrustStoreOrThrow().approve(identity));
+  });
   ipcMain.handle('studio:select-project-asset-directory', async (event): Promise<string | null> => {
     const options: Electron.OpenDialogOptions = {
       title: '选择空目录以写入项目资产快照',
@@ -325,6 +527,45 @@ function registerIpcHandlers(): void {
     });
     return { project: snapshot.project, binding };
   });
+  ipcMain.handle('studio:plan-project-asset-update', async (_event, request: ProjectAssetUpdateRequest): Promise<ProjectAssetUpdatePlan> =>
+    createProjectAssetUpdatePlan(request),
+  );
+  ipcMain.handle('studio:update-project-asset-snapshot', async (_event, request: ProjectAssetUpdateRequest): Promise<ProjectAssetBinding> => {
+    const { binding: expectedBinding } = await getBoundProjectAssetUpdateRequest(request);
+    const plan = await createProjectAssetUpdatePlan(request);
+    if (
+      plan.status !== 'ready' ||
+      !plan.snapshotRevision ||
+      plan.snapshotRevision !== request.plannedRevision ||
+      plan.publishedRevision !== expectedBinding.revision
+    ) {
+      throw new Error('项目资产更新计划已失效，请重新生成计划。');
+    }
+
+    const assetStore = new ProjectAssetStore(expectedBinding.projectDirectory);
+    await assetStore.save(request.project, expectedBinding.revision);
+    const snapshot = await assetStore.loadWithRevision();
+    if (snapshot.project.id !== request.projectId || snapshot.revision !== request.plannedRevision) {
+      throw new Error('项目资产快照提交结果不一致，请刷新状态后再试。');
+    }
+
+    // Reload after the external commit so a queued renderer save cannot be overwritten.
+    const currentState = await getStoreOrThrow().load();
+    if (!currentState.projects.some((candidate) => candidate.id === request.projectId)) {
+      throw new Error('项目已删除，资产快照已发布但无法登记绑定。');
+    }
+    const binding: ProjectAssetBinding = {
+      projectId: request.projectId,
+      projectDirectory: expectedBinding.projectDirectory,
+      revision: snapshot.revision,
+      boundAt: new Date().toISOString(),
+    };
+    await getStoreOrThrow().save({
+      ...currentState,
+      projectAssetBindings: mergeProjectAssetBindings(currentState.projectAssetBindings, [binding], currentState.projects),
+    });
+    return binding;
+  });
   ipcMain.handle('runtime:get-info', async (): Promise<RuntimeInfo> => ({
     platform: 'desktop',
     persistence: 'file',
@@ -343,7 +584,12 @@ function registerIpcHandlers(): void {
     getRuntimeBundleOrThrow().browserRuntime.capture(),
   );
   ipcMain.handle('runtime:run-test-case', async (_event, request: RunTestCaseRequest) => {
-    const result = await getRuntimeBundleOrThrow().runTestCase(request);
+    const scriptTrust = await getFixtureScriptTrustContext(request.project.id);
+    const result = await getRuntimeBundleOrThrow().runTestCase({
+      ...request,
+      fixtureScriptTrustRecords: scriptTrust.records,
+      fixtureScriptTrustDirectory: scriptTrust.projectDirectory,
+    });
     const state = await getStoreOrThrow().load();
     await getStoreOrThrow().save(
       appendRunToStudioState(
@@ -487,11 +733,18 @@ app.whenReady().then(async () => {
   await studioStore.ensureReady();
   credentialStore = new CredentialStore(rootDir);
   await credentialStore.ensureReady();
+  scriptTrustStore = new ScriptTrustStore(rootDir);
+  await scriptTrustStore.ensureReady();
+  storageStateStore = new StorageStateStore(rootDir);
+  await storageStateStore.ensureReady();
   runtimeBundle = createRuntimeBundle({
     rootDir,
     visualDiffImageAdapter: electronNativeImageAdapter,
     deterministicInputBindingResolver: {
       resolve: (request) => getCredentialStoreOrThrow().resolve(request),
+    },
+    storageStateResolver: {
+      resolve: (projectId, storageStateId) => getStorageStateStoreOrThrow().resolve(projectId, storageStateId),
     },
     emitRunEvent: (event) => {
       for (const window of BrowserWindow.getAllWindows()) {

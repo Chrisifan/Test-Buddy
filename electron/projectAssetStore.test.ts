@@ -10,6 +10,7 @@ import {
   calculateProjectAssetRevision,
   inspectProjectAssetBinding,
   planProjectAssetReload,
+  planProjectAssetUpdate,
   ProjectAssetStore,
   ProjectAssetStoreError,
   validateProjectAssetSnapshot,
@@ -41,7 +42,7 @@ describe('ProjectAssetStore', () => {
 
     await store.saveInitial(project);
 
-    await expect(fs.readdir(projectDirectory)).resolves.toEqual(['cases', 'documents', 'project.json', 'recordings']);
+    await expect(fs.readdir(projectDirectory)).resolves.toEqual(['cases', 'documents', 'fixtures', 'project.json', 'recordings', 'suites']);
     const manifest = JSON.parse(await fs.readFile(path.join(projectDirectory, 'project.json'), 'utf8')) as { revision?: string };
     expect(manifest.revision).toMatch(/^[a-f0-9]{64}$/);
     const recordingFile = await fs.readFile(path.join(projectDirectory, 'recordings', 'recording%2Fcheckout.json'), 'utf8');
@@ -120,6 +121,134 @@ describe('ProjectAssetStore', () => {
     expect(JSON.parse(await fs.readFile(manifestPath, 'utf8'))).not.toHaveProperty('revision');
   });
 
+  it('loads a pre-fixture-and-suite snapshot whose manifest has no newer asset collections', async () => {
+    const rootDirectory = await createTemporaryDirectory();
+    const projectDirectory = path.join(rootDirectory, 'legacy-project');
+    const project = createAssetProject();
+    const store = new ProjectAssetStore(projectDirectory);
+    await store.saveInitial(project);
+    const manifestPath = path.join(projectDirectory, 'project.json');
+    const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8')) as { assetIds: Record<string, unknown> };
+    delete manifest.assetIds.fixtures;
+    delete manifest.assetIds.suites;
+    await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+    await fs.rm(path.join(projectDirectory, 'fixtures'), { recursive: true, force: true });
+    await fs.rm(path.join(projectDirectory, 'suites'), { recursive: true, force: true });
+
+    await expect(store.loadWithRevision()).resolves.toMatchObject({
+      project: { id: project.id, fixtures: [], suites: [] },
+    });
+  });
+
+  it('writes versioned fixture assets and rejects missing case references', async () => {
+    const rootDirectory = await createTemporaryDirectory();
+    const projectDirectory = path.join(rootDirectory, 'fixture-project');
+    const project = createAssetProject();
+    const fixture = {
+      schemaVersion: 1 as const,
+      id: 'fixture/seed-order',
+      version: 1,
+      name: '准备订单数据',
+      description: '为结算用例创建可清理的订单数据。',
+      inputs: [{ name: 'accountId', type: 'string' as const, required: true }],
+      outputs: [{ name: 'orderId', type: 'string' as const, required: true }],
+      credentialIds: [],
+      environmentIds: [project.environments[0]!.id],
+      setup: { mode: 'http' as const, summary: '通过受控 HTTP fixture 创建订单。' },
+      cleanup: { mode: 'http' as const, summary: '通过受控 HTTP fixture 删除测试订单。' },
+      concurrency: 'exclusive' as const,
+      resourceLocks: ['orders:seed'],
+      createdAt: '2026-08-11T00:00:00.000Z',
+      updatedAt: '2026-08-11T00:00:00.000Z',
+    };
+    project.fixtures = [fixture];
+    project.testCases[0] = {
+      ...project.testCases[0]!,
+      assetReferences: { fixtures: [{ id: fixture.id, version: fixture.version }], reusableFlows: [] },
+    };
+    const store = new ProjectAssetStore(projectDirectory);
+
+    const plan = await store.planMigration(project);
+    expect(plan.files).toContain('fixtures/fixture%2Fseed-order@1.json');
+    await store.saveInitial(project);
+    await expect(store.load()).resolves.toMatchObject({
+      fixtures: [expect.objectContaining({ id: fixture.id, version: 1, setup: fixture.setup })],
+      testCases: [expect.objectContaining({
+        assetReferences: expect.objectContaining({ fixtures: [{ id: fixture.id, version: 1 }] }),
+      })],
+    });
+
+    const invalidSnapshot = createProjectAssetSnapshot({
+      ...project,
+      testCases: [{
+        ...project.testCases[0]!,
+        assetReferences: { fixtures: [{ id: 'fixture/missing', version: 1 }], reusableFlows: [] },
+      }],
+    });
+    expect(validateProjectAssetSnapshot(invalidSnapshot)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: `cases/${project.testCases[0]!.id}.assetReferences.fixtures` }),
+    ]));
+
+    const invalidOutputMappingSnapshot = createProjectAssetSnapshot({
+      ...project,
+      fixtures: [{
+        ...fixture,
+        setup: {
+          mode: 'http',
+          summary: fixture.setup.summary,
+          http: {
+            method: 'POST',
+            path: '/api/test-data/orders',
+            expectedStatuses: [201],
+            responseOutputs: [{ outputName: 'missingOutput', jsonPointer: '/orderId' }],
+          },
+        },
+      }],
+    });
+    expect(validateProjectAssetSnapshot(invalidOutputMappingSnapshot)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: 'fixtures/fixture%2Fseed-order@1.json' }),
+    ]));
+  });
+
+  it('writes versioned Suite assets and rejects stale Case references before publishing', async () => {
+    const rootDirectory = await createTemporaryDirectory();
+    const projectDirectory = path.join(rootDirectory, 'suite-project');
+    const project = createAssetProject();
+    const testCase = project.testCases[0]!;
+    const suite = {
+      schemaVersion: 1 as const,
+      id: 'suite/release',
+      version: 1,
+      name: '发布回归',
+      description: '运行结算核心链路。',
+      tags: ['release'],
+      environmentId: project.environments[0]!.id,
+      caseReferences: [{ id: testCase.id, version: testCase.version!, dependsOn: [] }],
+      execution: { concurrency: 1, failurePolicy: 'continue' as const, retryLimit: 0 },
+      createdAt: '2026-08-11T00:00:00.000Z',
+      updatedAt: '2026-08-11T00:00:00.000Z',
+    };
+    project.suites = [suite];
+    const store = new ProjectAssetStore(projectDirectory);
+
+    expect((await store.planMigration(project)).files).toContain('suites/suite%2Frelease@1.json');
+    await store.saveInitial(project);
+    await expect(store.load()).resolves.toMatchObject({
+      suites: [expect.objectContaining({ id: suite.id, version: suite.version, caseReferences: suite.caseReferences })],
+    });
+
+    const staleReferenceSnapshot = createProjectAssetSnapshot({
+      ...project,
+      suites: [{
+        ...suite,
+        caseReferences: [{ id: testCase.id, version: testCase.version! + 1, dependsOn: [] }],
+      }],
+    });
+    expect(validateProjectAssetSnapshot(staleReferenceSnapshot)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: 'suites/suite%2Frelease@1.json.caseReferences', message: expect.stringContaining('当前版本') }),
+    ]));
+  });
+
   it('updates a bound project when the expected revision matches', async () => {
     const rootDirectory = await createTemporaryDirectory();
     const projectDirectory = path.join(rootDirectory, 'orders-project');
@@ -143,6 +272,100 @@ describe('ProjectAssetStore', () => {
     expect(updated.revision).toMatch(/^[a-f0-9]{64}$/);
     expect(updated.revision).not.toBe(current.revision);
     await expect(fs.readdir(rootDirectory)).resolves.toEqual(['orders-project']);
+  });
+
+  it('creates a reviewed update plan before publishing local project edits', async () => {
+    const rootDirectory = await createTemporaryDirectory();
+    const projectDirectory = path.join(rootDirectory, 'orders-project');
+    const store = new ProjectAssetStore(projectDirectory);
+    await store.saveInitial(createAssetProject());
+    const current = await store.loadWithRevision();
+    const binding = {
+      projectId: current.project.id,
+      projectDirectory,
+      revision: current.revision,
+      boundAt: '2026-08-11T00:00:00.000Z',
+    };
+    const updatedProject = { ...current.project, name: '待发布的本地修改' };
+
+    const plan = await planProjectAssetUpdate(updatedProject, binding);
+
+    expect(plan).toMatchObject({
+      projectId: current.project.id,
+      projectDirectory,
+      publishedRevision: current.revision,
+      snapshotRevision: calculateProjectAssetRevision(updatedProject),
+      status: 'ready',
+      issues: [],
+    });
+    expect(plan.files).toEqual(expect.arrayContaining(['project.json', 'cases/case%2Fcheckout.json']));
+    await expect(store.load()).resolves.toMatchObject({ name: current.project.name });
+  });
+
+  it('blocks update plans for unchanged, externally changed, or unmanaged bound directories', async () => {
+    const rootDirectory = await createTemporaryDirectory();
+    const projectDirectory = path.join(rootDirectory, 'orders-project');
+    const store = new ProjectAssetStore(projectDirectory);
+    await store.saveInitial(createAssetProject());
+    const current = await store.loadWithRevision();
+    const binding = {
+      projectId: current.project.id,
+      projectDirectory,
+      revision: current.revision,
+      boundAt: '2026-08-11T00:00:00.000Z',
+    };
+    const updatedProject = { ...current.project, name: '本地待发布修改' };
+
+    await expect(planProjectAssetUpdate(current.project, binding)).resolves.toMatchObject({
+      status: 'requiresReview',
+      issues: expect.arrayContaining([expect.objectContaining({ path: 'studio-data' })]),
+    });
+
+    await fs.writeFile(path.join(projectDirectory, 'notes.md'), '# External note\n', 'utf8');
+    await expect(planProjectAssetUpdate(updatedProject, binding)).resolves.toMatchObject({
+      status: 'requiresReview',
+      issues: expect.arrayContaining([expect.objectContaining({ path: 'notes.md' })]),
+    });
+    await fs.rm(path.join(projectDirectory, 'notes.md'));
+
+    await store.save({ ...current.project, name: '外部已发布修改' }, current.revision);
+    await expect(planProjectAssetUpdate(updatedProject, binding)).resolves.toMatchObject({
+      status: 'requiresReview',
+      issues: expect.arrayContaining([expect.objectContaining({ path: 'project.json.revision' })]),
+    });
+  });
+
+  it('strips runtime recording data when a reviewed update is published', async () => {
+    const rootDirectory = await createTemporaryDirectory();
+    const projectDirectory = path.join(rootDirectory, 'orders-project');
+    const store = new ProjectAssetStore(projectDirectory);
+    await store.saveInitial(createAssetProject());
+    const current = await store.loadWithRevision();
+    const binding = {
+      projectId: current.project.id,
+      projectDirectory,
+      revision: current.revision,
+      boundAt: '2026-08-11T00:00:00.000Z',
+    };
+    const updatedProject = {
+      ...current.project,
+      name: '录制运行数据不发布',
+      recordings: current.project.recordings.map((recording) => ({
+        ...recording,
+        steps: recording.steps.map((step) => ({
+          ...step,
+          screenshotPath: '/private/runtime-artifacts/new.png',
+          value: 'private-updated-value',
+        })),
+      })),
+    };
+
+    await expect(planProjectAssetUpdate(updatedProject, binding)).resolves.toMatchObject({ status: 'ready' });
+    await store.save(updatedProject, binding.revision);
+
+    const recordingFile = await fs.readFile(path.join(projectDirectory, 'recordings', 'recording%2Fcheckout.json'), 'utf8');
+    expect(recordingFile).not.toContain('/private/runtime-artifacts/new.png');
+    expect(recordingFile).not.toContain('private-updated-value');
   });
 
   it('rejects a stale expected revision without modifying the current snapshot', async () => {
