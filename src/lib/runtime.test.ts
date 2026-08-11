@@ -3,7 +3,19 @@ import { describe, expect, it, vi } from 'vitest';
 import { createEmptyProject, type ChatCommandRequest, type DesktopApi } from '../../shared/studio.js';
 import * as runtime from './runtime.js';
 
-const { runRecording, runTestCase, runWorkflow, sendChatCommand, testMidsceneConnection } = runtime;
+const {
+  inspectProjectAssetBinding,
+  planProjectAssetMigration,
+  planProjectAssetReload,
+  reloadProjectAssetSnapshot,
+  runRecording,
+  runTestCase,
+  runWorkflow,
+  selectProjectAssetDirectory,
+  sendChatCommand,
+  testMidsceneConnection,
+  writeProjectAssetSnapshot,
+} = runtime;
 
 const request: ChatCommandRequest = {
   mode: 'ai',
@@ -76,7 +88,7 @@ describe('browser fallback agent runtime', () => {
     expect(response.detail.summary).toContain('等待完成执行');
   });
 
-  it('routes Agent-only test cases through the workflow runtime', async () => {
+  it('routes Agent-only test cases through the workflow runtime with canonical PRD provenance', async () => {
     const project = createEmptyProject(1);
     const environment = project.environments[0];
     const response = await runTestCase({
@@ -89,7 +101,7 @@ describe('browser fallback agent runtime', () => {
         groupId: project.groups[0].id,
         environmentId: environment.id,
         source: 'prd',
-        prdPath: { documentId: 'doc-login', pathId: 'path-login' },
+        provenance: [{ kind: 'prdPath', documentId: 'doc-login', pathId: 'path-login' }],
         name: '登录验证',
         category: '核心链路',
         lastEdited: '刚刚',
@@ -232,6 +244,72 @@ describe('browser fallback agent runtime', () => {
     await expect(runtime.exportProjectReport({ projectId: 'project-1', locale: 'zh-CN' })).resolves.toBe(true);
 
     expect(desktopApi.exportProjectReport).toHaveBeenCalledWith({ projectId: 'project-1', locale: 'zh-CN' });
+    window.desktopApi = originalDesktopApi;
+  });
+
+  it('delegates the reviewed project asset snapshot flow to the desktop bridge', async () => {
+    const originalDesktopApi = window.desktopApi;
+    const request = { projectId: 'project-orders', projectDirectory: '/tmp/orders-assets' };
+    const plan = {
+      ...request,
+      snapshotRevision: 'a'.repeat(64),
+      files: ['project.json', 'cases/case-orders.json'],
+      status: 'ready' as const,
+      conflicts: [],
+    };
+    const binding = {
+      projectId: request.projectId,
+      projectDirectory: request.projectDirectory,
+      revision: 'a'.repeat(64),
+      boundAt: '2026-08-11T00:00:00.000Z',
+    };
+    const bindingStatus = {
+      projectId: request.projectId,
+      projectDirectory: request.projectDirectory,
+      state: 'inSync' as const,
+      issues: [],
+    };
+    const reloadPlan = {
+      projectId: request.projectId,
+      projectDirectory: request.projectDirectory,
+      snapshotRevision: 'b'.repeat(64),
+      status: 'ready' as const,
+      issues: [],
+    };
+    const reloadedProject = createEmptyProject(1);
+    reloadedProject.id = request.projectId;
+    const reloadResult = {
+      project: reloadedProject,
+      binding: { ...binding, revision: reloadPlan.snapshotRevision },
+    };
+    const reloadRequest = {
+      projectId: request.projectId,
+      project: reloadedProject,
+      snapshotRevision: reloadPlan.snapshotRevision,
+    };
+    const desktopApi = {
+      selectProjectAssetDirectory: vi.fn().mockResolvedValue(request.projectDirectory),
+      planProjectAssetMigration: vi.fn().mockResolvedValue(plan),
+      writeProjectAssetSnapshot: vi.fn().mockResolvedValue(binding),
+      inspectProjectAssetBinding: vi.fn().mockResolvedValue(bindingStatus),
+      planProjectAssetReload: vi.fn().mockResolvedValue(reloadPlan),
+      reloadProjectAssetSnapshot: vi.fn().mockResolvedValue(reloadResult),
+    } as unknown as DesktopApi;
+    window.desktopApi = desktopApi;
+
+    await expect(selectProjectAssetDirectory()).resolves.toBe(request.projectDirectory);
+    await expect(planProjectAssetMigration(request)).resolves.toEqual(plan);
+    await expect(writeProjectAssetSnapshot(request)).resolves.toEqual(binding);
+    await expect(inspectProjectAssetBinding(request.projectId)).resolves.toEqual(bindingStatus);
+    await expect(planProjectAssetReload({ projectId: request.projectId, project: reloadedProject })).resolves.toEqual(reloadPlan);
+    await expect(reloadProjectAssetSnapshot(reloadRequest)).resolves.toEqual(reloadResult);
+
+    expect(desktopApi.selectProjectAssetDirectory).toHaveBeenCalledOnce();
+    expect(desktopApi.planProjectAssetMigration).toHaveBeenCalledWith(request);
+    expect(desktopApi.writeProjectAssetSnapshot).toHaveBeenCalledWith(request);
+    expect(desktopApi.inspectProjectAssetBinding).toHaveBeenCalledWith(request.projectId);
+    expect(desktopApi.planProjectAssetReload).toHaveBeenCalledWith({ projectId: request.projectId, project: reloadedProject });
+    expect(desktopApi.reloadProjectAssetSnapshot).toHaveBeenCalledWith(reloadRequest);
     window.desktopApi = originalDesktopApi;
   });
 

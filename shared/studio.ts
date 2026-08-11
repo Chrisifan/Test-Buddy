@@ -78,11 +78,29 @@ export interface TestLocatorFingerprint {
   quality: TestLocatorQuality;
 }
 
+/** A persisted input value source. It never contains the resolved value. */
+export interface CredentialTestInputBinding {
+  kind: 'credential';
+  credentialId: string;
+  field: 'username' | 'secret';
+}
+
+export type TestInputValueBinding = CredentialTestInputBinding;
+
+/**
+ * A structured input target captured from a passed Agent Run. The Agent value
+ * is intentionally absent; an editor must attach an approved value binding.
+ */
+export interface TestInputBindingTarget {
+  kind: 'input' | 'select';
+  locator: TestLocatorFingerprint;
+}
+
 export type DeterministicTestAction =
   | { kind: 'navigate'; url: string }
   | { kind: 'click'; locator: TestLocatorFingerprint }
-  | { kind: 'input'; locator: TestLocatorFingerprint; value: string }
-  | { kind: 'select'; locator: TestLocatorFingerprint; value: string }
+  | { kind: 'input'; locator: TestLocatorFingerprint; binding: TestInputValueBinding }
+  | { kind: 'select'; locator: TestLocatorFingerprint; binding: TestInputValueBinding }
   | { kind: 'waitForSelector'; locator: TestLocatorFingerprint; timeoutMs?: number }
   | { kind: 'waitForTimeout'; timeoutMs: number }
   | { kind: 'scrollTo'; locator: TestLocatorFingerprint };
@@ -98,6 +116,7 @@ export interface TestStepExecutionDraft {
   reviewStatus: TestStepReviewStatus;
   actionRisk: TestStepActionRisk;
   action?: DeterministicTestAction;
+  inputBindingTarget?: TestInputBindingTarget;
   assertion?: ExplicitTestAssertion;
   provenance?: {
     source: 'agentRun';
@@ -115,19 +134,71 @@ export interface TestStepDraft {
   execution?: TestStepExecutionDraft;
 }
 
+export interface VersionedTestAssetReference {
+  id: string;
+  version: number;
+}
+
+export interface TestCaseAssetReferences {
+  fixtures: VersionedTestAssetReference[];
+  reusableFlows: VersionedTestAssetReference[];
+  baseline?: VersionedTestAssetReference;
+}
+
+export function createEmptyTestCaseAssetReferences(): TestCaseAssetReferences {
+  return {
+    fixtures: [],
+    reusableFlows: [],
+  };
+}
+
+/** Returns the immutable revision assigned to the next editor save. */
+export function nextTestCaseVersion(version: number): number {
+  return normalizeTestCaseVersion(version) + 1;
+}
+
 export interface PrdPathReference {
   documentId: string;
   pathId: string;
 }
 
+/**
+ * Stable, non-executable links back to the inputs that produced a Hybrid
+ * Case. Source prose stays in its owning PRD, recording, or Agent Run.
+ */
+export type TestCaseProvenanceReference =
+  | { kind: 'agentRun'; runId: string; stepIds: string[] }
+  | { kind: 'recording'; recordingId: string; stepIds: string[] }
+  | { kind: 'prdPath'; documentId: string; pathId: string }
+  | { kind: 'prdDocument'; documentId: string };
+
+/**
+ * Non-executable business context for a Hybrid Case. It is deliberately kept
+ * apart from editable notes and from the typed steps that may run a browser.
+ */
+export interface TestCaseIntent {
+  schemaVersion: 1;
+  businessGoal: string;
+  preconditions: string[];
+  successCriteria: string[];
+}
+
 export interface TestCaseDraft extends Omit<WorkflowDraft, 'kind' | 'steps'> {
   /** Legacy cases are upgraded to this value during hydration. */
   schemaVersion?: 2;
+  /** Immutable asset revision. Legacy cases receive version 1 during hydration. */
+  version?: number;
+  /** Reserved, versioned references for future fixtures, reusable flows, and baselines. */
+  assetReferences?: TestCaseAssetReferences;
   kind: TestCaseKind;
   groupId: string;
   environmentId: string;
   source: TestCaseSource;
   sourceIntent?: string;
+  /** Structured business intent. Legacy cases may not have this contract yet. */
+  intent?: TestCaseIntent;
+  /** Canonical V2 source association; `prdPath` remains a legacy projection. */
+  provenance?: TestCaseProvenanceReference[];
   prdPath?: PrdPathReference;
   steps: TestStepDraft[];
 }
@@ -270,6 +341,67 @@ export interface ProjectDraft {
   credentialRefs: CredentialRef[];
   createdAt: string;
   updatedAt: string;
+}
+
+/** A review-only request to materialize project assets in a user-selected directory. */
+export interface ProjectAssetMigrationRequest {
+  projectId: string;
+  projectDirectory: string;
+  /** Current editor state, used only for the reviewed snapshot request. */
+  project?: ProjectDraft;
+  /** Revision returned by the reviewed migration plan. */
+  plannedRevision?: string;
+}
+
+export interface ProjectAssetMigrationPlan {
+  projectId: string;
+  projectDirectory: string;
+  snapshotRevision: string;
+  files: string[];
+  status: 'ready' | 'requiresReview';
+  conflicts: string[];
+}
+
+/** A studio-data pointer to an explicitly reviewed project asset snapshot. */
+export interface ProjectAssetBinding {
+  projectId: string;
+  projectDirectory: string;
+  revision: string;
+  boundAt: string;
+}
+
+export type ProjectAssetBindingState = 'inSync' | 'localChanges' | 'externalChanges' | 'unavailable';
+
+export interface ProjectAssetDiagnostic {
+  path: string;
+  message: string;
+}
+
+export interface ProjectAssetBindingStatus {
+  projectId: string;
+  projectDirectory: string;
+  state: ProjectAssetBindingState;
+  issues: ProjectAssetDiagnostic[];
+}
+
+/** A request to preview or apply a reload from an already bound asset directory. */
+export interface ProjectAssetReloadRequest {
+  projectId: string;
+  project: ProjectDraft;
+  snapshotRevision?: string;
+}
+
+export interface ProjectAssetReloadPlan {
+  projectId: string;
+  projectDirectory: string;
+  snapshotRevision?: string;
+  status: 'ready' | 'requiresReview' | 'unavailable';
+  issues: ProjectAssetDiagnostic[];
+}
+
+export interface ProjectAssetReloadResult {
+  project: ProjectDraft;
+  binding: ProjectAssetBinding;
 }
 
 export interface RunArtifact {
@@ -456,6 +588,7 @@ export interface StudioState {
   selectedTestCaseId: string;
   selectedRecordingId: string;
   projects: ProjectDraft[];
+  projectAssetBindings: ProjectAssetBinding[];
   runDetails: RunDetail[];
   recentRuns: RunSummary[];
   chatEntries: ChatEntry[];
@@ -678,6 +811,12 @@ export interface DesktopApi {
   updateProject: (project: ProjectDraft) => Promise<ProjectDraft>;
   analyzePrdDocument: (request: PrdSemanticAnalysisRequest) => Promise<PrdSemanticAnalysisResponse>;
   saveCredential: (request: SaveCredentialRequest) => Promise<CredentialRef>;
+  selectProjectAssetDirectory: () => Promise<string | null>;
+  planProjectAssetMigration: (request: ProjectAssetMigrationRequest) => Promise<ProjectAssetMigrationPlan>;
+  writeProjectAssetSnapshot: (request: ProjectAssetMigrationRequest) => Promise<ProjectAssetBinding>;
+  inspectProjectAssetBinding: (projectId: string) => Promise<ProjectAssetBindingStatus | null>;
+  planProjectAssetReload: (request: ProjectAssetReloadRequest) => Promise<ProjectAssetReloadPlan>;
+  reloadProjectAssetSnapshot: (request: ProjectAssetReloadRequest) => Promise<ProjectAssetReloadResult>;
   startBrowserSession: (request: BrowserSessionRequest) => Promise<BrowserSessionState>;
   navigateBrowserSession: (request: BrowserNavigateRequest) => Promise<BrowserSessionState>;
   captureBrowserSnapshot: () => Promise<BrowserSessionState>;
@@ -931,12 +1070,17 @@ export function workflowToTestCase(
   groupId = 'group-core',
   environmentId = 'env-staging',
 ): TestCaseDraft {
+  const businessGoal = workflow.name.trim() || '未命名测试用例';
   return {
     ...workflow,
     schemaVersion: 2,
+    version: 1,
+    assetReferences: createEmptyTestCaseAssetReferences(),
     groupId,
     environmentId,
     source: 'manual',
+    intent: createTestCaseIntent(businessGoal),
+    provenance: [],
     steps: workflow.steps.map((step) => ({ ...step })),
   };
 }
@@ -986,6 +1130,9 @@ export function getConfirmedDeterministicTestStep(step: TestStepDraft): AgentPla
   if (action.kind === 'click' && hasSelector) {
     return { action: 'click', title, instruction, selector };
   }
+  if ((action.kind === 'input' || action.kind === 'select') && hasSelector && isTestInputValueBinding(action.binding)) {
+    return { action: action.kind, title, instruction, selector };
+  }
   if (action.kind === 'waitForSelector' && hasSelector && hasValidOptionalTimeout) {
     return {
       action: 'wait',
@@ -1006,6 +1153,18 @@ export function getConfirmedDeterministicTestStep(step: TestStepDraft): AgentPla
 
 export function isConfirmedDeterministicTestStep(step: TestStepDraft): boolean {
   return getConfirmedDeterministicTestStep(step) !== undefined;
+}
+
+/** Returns only the reference; the resolved credential value stays in the main process. */
+export function getConfirmedDeterministicTestInputBinding(
+  step: TestStepDraft,
+): TestInputValueBinding | undefined {
+  const action = step.execution?.action;
+  return step.execution?.reviewStatus === 'confirmed' &&
+    (action?.kind === 'input' || action?.kind === 'select') &&
+    isTestInputValueBinding(action.binding)
+    ? action.binding
+    : undefined;
 }
 
 export function getConfirmedExplicitTestAssertion(step: TestStepDraft): ExplicitTestAssertion | undefined {
@@ -1179,6 +1338,7 @@ export function createInitialStudioState(): StudioState {
     selectedTestCaseId: '',
     selectedRecordingId: '',
     projects: [],
+    projectAssetBindings: [],
     runDetails: [],
     recentRuns: [],
     chatEntries: [],
@@ -1230,6 +1390,7 @@ export function hydrateStudioState(
         .filter((project) => project?.id !== builtInMockProjectId)
         .map(normalizeProjectDraft)
     : [];
+  const projectAssetBindings = normalizeProjectAssetBindings(rawState.projectAssetBindings, migratedProjects);
 
   const selectedProjectId =
     rawState.selectedProjectId && migratedProjects.some((project) => project.id === rawState.selectedProjectId)
@@ -1279,6 +1440,7 @@ export function hydrateStudioState(
     selectedTestCaseId,
     selectedRecordingId,
     projects: migratedProjects,
+    projectAssetBindings,
     runDetails: Array.isArray(rawState.runDetails)
       ? rawState.runDetails.filter((run) => run.projectId !== builtInMockProjectId)
       : initialState.runDetails,
@@ -1313,6 +1475,76 @@ export function hydrateStudioState(
     selectedWorkflowId: selectedTestCaseId,
     workflows: selectedProject?.testCases.map(testCaseToWorkflow) ?? initialState.workflows,
   };
+}
+
+/** Drops malformed or stale pointers without reading any external project directory. */
+export function normalizeProjectAssetBindings(
+  rawBindings: unknown,
+  projects: Array<Pick<ProjectDraft, 'id'>>,
+): ProjectAssetBinding[] {
+  if (!Array.isArray(rawBindings)) {
+    return [];
+  }
+
+  const projectIds = new Set(projects.map((project) => project.id));
+  const seenProjectIds = new Set<string>();
+  return rawBindings.flatMap((candidate) => {
+    if (!candidate || typeof candidate !== 'object') {
+      return [];
+    }
+
+    const binding = candidate as Partial<ProjectAssetBinding>;
+    if (
+      typeof binding.projectId !== 'string' ||
+      !projectIds.has(binding.projectId) ||
+      seenProjectIds.has(binding.projectId) ||
+      typeof binding.projectDirectory !== 'string' ||
+      !binding.projectDirectory.trim() ||
+      typeof binding.revision !== 'string' ||
+      !/^[a-f0-9]{64}$/i.test(binding.revision) ||
+      typeof binding.boundAt !== 'string' ||
+      Number.isNaN(Date.parse(binding.boundAt))
+    ) {
+      return [];
+    }
+
+    seenProjectIds.add(binding.projectId);
+    return [{
+      projectId: binding.projectId,
+      projectDirectory: binding.projectDirectory,
+      revision: binding.revision,
+      boundAt: binding.boundAt,
+    }];
+  });
+}
+
+/**
+ * Renderer saves carry the full editing state and can be queued behind an IPC
+ * that records a new asset binding. Preserve existing bindings unless the
+ * incoming state supplies a newer pointer for the same surviving project.
+ */
+export function mergeProjectAssetBindings(
+  currentBindings: unknown,
+  incomingBindings: unknown,
+  projects: Array<Pick<ProjectDraft, 'id'>>,
+): ProjectAssetBinding[] {
+  const currentByProjectId = new Map(
+    normalizeProjectAssetBindings(currentBindings, projects).map((binding) => [binding.projectId, binding]),
+  );
+  const incomingByProjectId = new Map(
+    normalizeProjectAssetBindings(incomingBindings, projects).map((binding) => [binding.projectId, binding]),
+  );
+
+  return projects.flatMap((project) => {
+    const currentBinding = currentByProjectId.get(project.id);
+    const incomingBinding = incomingByProjectId.get(project.id);
+    const binding = currentBinding && incomingBinding
+      ? Date.parse(incomingBinding.boundAt) >= Date.parse(currentBinding.boundAt)
+        ? incomingBinding
+        : currentBinding
+      : incomingBinding ?? currentBinding;
+    return binding ? [binding] : [];
+  });
 }
 
 export function isMidsceneConfigured(config: MidsceneConfig): boolean {
@@ -1371,6 +1603,154 @@ function normalizePrdPathReference(rawReference: unknown): PrdPathReference | un
   const documentId = typeof reference.documentId === 'string' ? reference.documentId.trim() : '';
   const pathId = typeof reference.pathId === 'string' ? reference.pathId.trim() : '';
   return documentId && pathId ? { documentId, pathId } : undefined;
+}
+
+function normalizeProvenanceStepIds(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return Array.from(new Set(value.flatMap((stepId) => {
+    const normalized = normalizedNonEmptyString(stepId);
+    return normalized ? [normalized] : [];
+  })));
+}
+
+function normalizeTestCaseIntentEntries(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return Array.from(new Set(value.flatMap((entry) => {
+    const normalized = normalizedNonEmptyString(entry);
+    return normalized ? [normalized] : [];
+  })));
+}
+
+function normalizeTestCaseIntent(value: unknown): TestCaseIntent | undefined {
+  const rawIntent = asRecord(value);
+  if (!rawIntent || rawIntent.schemaVersion !== 1) {
+    return undefined;
+  }
+
+  const businessGoal = normalizedNonEmptyString(rawIntent.businessGoal);
+  if (!businessGoal) {
+    return undefined;
+  }
+
+  return {
+    schemaVersion: 1,
+    businessGoal,
+    preconditions: normalizeTestCaseIntentEntries(rawIntent.preconditions),
+    successCriteria: normalizeTestCaseIntentEntries(rawIntent.successCriteria),
+  };
+}
+
+export function createTestCaseIntent(
+  businessGoal: string,
+  options: Pick<TestCaseIntent, 'preconditions' | 'successCriteria'> = { preconditions: [], successCriteria: [] },
+): TestCaseIntent {
+  return {
+    schemaVersion: 1,
+    businessGoal: businessGoal.trim(),
+    preconditions: normalizeTestCaseIntentEntries(options.preconditions),
+    successCriteria: normalizeTestCaseIntentEntries(options.successCriteria),
+  };
+}
+
+function normalizeTestCaseProvenance(value: unknown): TestCaseProvenanceReference[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const references: TestCaseProvenanceReference[] = [];
+  const seen = new Set<string>();
+  value.forEach((candidate) => {
+    const raw = asRecord(candidate);
+    if (!raw || typeof raw.kind !== 'string') {
+      return;
+    }
+
+    if (raw.kind === 'agentRun') {
+      const runId = normalizedNonEmptyString(raw.runId);
+      if (!runId || seen.has(`agentRun:${runId}`)) {
+        return;
+      }
+      seen.add(`agentRun:${runId}`);
+      references.push({ kind: 'agentRun', runId, stepIds: normalizeProvenanceStepIds(raw.stepIds) });
+      return;
+    }
+
+    if (raw.kind === 'recording') {
+      const recordingId = normalizedNonEmptyString(raw.recordingId);
+      if (!recordingId || seen.has(`recording:${recordingId}`)) {
+        return;
+      }
+      seen.add(`recording:${recordingId}`);
+      references.push({ kind: 'recording', recordingId, stepIds: normalizeProvenanceStepIds(raw.stepIds) });
+      return;
+    }
+
+    if (raw.kind === 'prdPath') {
+      const documentId = normalizedNonEmptyString(raw.documentId);
+      const pathId = normalizedNonEmptyString(raw.pathId);
+      const key = `prdPath:${documentId}:${pathId}`;
+      if (!documentId || !pathId || seen.has(key)) {
+        return;
+      }
+      seen.add(key);
+      references.push({ kind: 'prdPath', documentId, pathId });
+      return;
+    }
+
+    if (raw.kind === 'prdDocument') {
+      const documentId = normalizedNonEmptyString(raw.documentId);
+      if (!documentId || seen.has(`prdDocument:${documentId}`)) {
+        return;
+      }
+      seen.add(`prdDocument:${documentId}`);
+      references.push({ kind: 'prdDocument', documentId });
+    }
+  });
+  return references;
+}
+
+function createLegacyTestCaseProvenance(
+  source: TestCaseSource,
+  prdPath: PrdPathReference | undefined,
+  steps: TestStepDraft[],
+  recordingsById: Map<string, RecordingAsset>,
+): TestCaseProvenanceReference[] {
+  const references: TestCaseProvenanceReference[] = prdPath
+    ? [{ kind: 'prdPath', ...prdPath }]
+    : [];
+  if (source !== 'recording') {
+    return references;
+  }
+
+  const recordingId = steps.find((step) => step.type === 'recordingReplay')?.recordingId;
+  if (!recordingId) {
+    return references;
+  }
+  const recording = recordingsById.get(recordingId);
+  references.unshift({
+    kind: 'recording',
+    recordingId,
+    stepIds: recording?.steps.map((step) => step.id) ?? [],
+  });
+  if (!prdPath && recording?.prdPath) {
+    references.push({ kind: 'prdPath', ...recording.prdPath });
+  }
+  return references;
+}
+
+export function getTestCasePrdPath(testCase: Pick<TestCaseDraft, 'provenance' | 'prdPath'>): PrdPathReference | undefined {
+  const reference = testCase.provenance?.find(
+    (candidate): candidate is Extract<TestCaseProvenanceReference, { kind: 'prdPath' }> => candidate.kind === 'prdPath',
+  );
+  return reference
+    ? { documentId: reference.documentId, pathId: reference.pathId }
+    : testCase.prdPath;
 }
 
 export function getPrdCoverageTriageKey(
@@ -1436,6 +1816,71 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 
 function normalizedNonEmptyString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function normalizeTestCaseVersion(value: unknown): number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0
+    ? value
+    : 1;
+}
+
+function normalizeVersionedTestAssetReference(value: unknown): VersionedTestAssetReference | undefined {
+  const rawReference = asRecord(value);
+  const id = normalizedNonEmptyString(rawReference?.id);
+  const version = rawReference?.version;
+  if (!id || typeof version !== 'number' || !Number.isSafeInteger(version) || version < 1) {
+    return undefined;
+  }
+  return { id, version };
+}
+
+function normalizeTestInputValueBinding(value: unknown): TestInputValueBinding | undefined {
+  const rawBinding = asRecord(value);
+  const credentialId = normalizedNonEmptyString(rawBinding?.credentialId);
+  if (!rawBinding || rawBinding.kind !== 'credential' || !credentialId) {
+    return undefined;
+  }
+  return rawBinding.field === 'username' || rawBinding.field === 'secret'
+    ? { kind: 'credential', credentialId, field: rawBinding.field }
+    : undefined;
+}
+
+function isTestInputValueBinding(value: unknown): value is TestInputValueBinding {
+  return Boolean(normalizeTestInputValueBinding(value));
+}
+
+function normalizeTestInputBindingTarget(value: unknown): TestInputBindingTarget | undefined {
+  const rawTarget = asRecord(value);
+  const locator = normalizeTestLocatorFingerprint(rawTarget?.locator);
+  if (!rawTarget || !locator || (rawTarget.kind !== 'input' && rawTarget.kind !== 'select')) {
+    return undefined;
+  }
+  return { kind: rawTarget.kind, locator };
+}
+
+function normalizeVersionedTestAssetReferences(value: unknown): VersionedTestAssetReference[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const references = new Map<string, VersionedTestAssetReference>();
+  value.forEach((rawReference) => {
+    const reference = normalizeVersionedTestAssetReference(rawReference);
+    if (reference && !references.has(reference.id)) {
+      references.set(reference.id, reference);
+    }
+  });
+  return Array.from(references.values());
+}
+
+function normalizeTestCaseAssetReferences(value: unknown): TestCaseAssetReferences {
+  const rawReferences = asRecord(value);
+  const baseline = normalizeVersionedTestAssetReference(rawReferences?.baseline);
+  return {
+    fixtures: normalizeVersionedTestAssetReferences(rawReferences?.fixtures),
+    reusableFlows: normalizeVersionedTestAssetReferences(rawReferences?.reusableFlows),
+    ...(baseline ? { baseline } : {}),
+  };
 }
 
 function normalizeTestLocatorFingerprint(value: unknown): TestLocatorFingerprint | undefined {
@@ -1520,8 +1965,9 @@ function normalizeDeterministicTestAction(value: unknown): DeterministicTestActi
     return locator ? { kind: 'click', locator } : undefined;
   }
   if (rawAction.kind === 'input' || rawAction.kind === 'select') {
-    return locator && typeof rawAction.value === 'string'
-      ? { kind: rawAction.kind, locator, value: rawAction.value }
+    const binding = normalizeTestInputValueBinding(rawAction.binding);
+    return locator && binding
+      ? { kind: rawAction.kind, locator, binding }
       : undefined;
   }
   if (rawAction.kind === 'waitForSelector') {
@@ -1583,6 +2029,7 @@ function normalizeTestStepExecution(value: unknown): TestStepExecutionDraft | un
   const source = rawProvenance?.source === 'agentRun' ? 'agentRun' : undefined;
   const runId = normalizedNonEmptyString(rawProvenance?.runId);
   const stepId = normalizedNonEmptyString(rawProvenance?.stepId);
+  const inputBindingTarget = normalizeTestInputBindingTarget(rawExecution.inputBindingTarget);
 
   return {
     schemaVersion: 2,
@@ -1590,6 +2037,7 @@ function normalizeTestStepExecution(value: unknown): TestStepExecutionDraft | un
     reviewStatus: rawExecution.reviewStatus,
     actionRisk: rawExecution.actionRisk,
     ...(action ? { action } : {}),
+    ...(inputBindingTarget ? { inputBindingTarget } : {}),
     ...(assertion ? { assertion } : {}),
     ...(source && runId && stepId ? { provenance: { source, runId, stepId } } : {}),
   };
@@ -1647,6 +2095,7 @@ function normalizeProjectDraft(rawProject: ProjectDraft): ProjectDraft {
   const documents = Array.isArray(rawProject.documents)
     ? rawProject.documents.map(normalizePrdDocument)
     : [];
+  const recordingsById = new Map(recordings.map((recording) => [recording.id, recording]));
 
   return {
     ...fallback,
@@ -1660,21 +2109,41 @@ function normalizeProjectDraft(rawProject: ProjectDraft): ProjectDraft {
     prdCoverageTriage: prunePrdCoverageTriage(documents, rawProject.prdCoverageTriage),
     testCases: Array.isArray(rawProject.testCases)
       ? rawProject.testCases.map((testCase) => {
-          const { sourceIntent: rawSourceIntent, schemaVersion: _schemaVersion, ...legacyTestCase } = testCase;
+          const {
+            sourceIntent: rawSourceIntent,
+            intent: rawIntent,
+            provenance: rawProvenance,
+            schemaVersion: _schemaVersion,
+            version: rawVersion,
+            assetReferences: rawAssetReferences,
+            ...legacyTestCase
+          } = testCase;
           const sourceIntent = normalizedNonEmptyString(rawSourceIntent);
+          const intent = normalizeTestCaseIntent(rawIntent);
+          const prdPath = normalizePrdPathReference(testCase.prdPath);
+          const steps = Array.isArray(testCase.steps)
+            ? testCase.steps
+                .map(normalizeTestStepDraft)
+                .filter((step): step is TestStepDraft => Boolean(step))
+            : [];
+          const source = testCase.source || 'manual';
+          const normalizedProvenance = normalizeTestCaseProvenance(rawProvenance);
+          const provenance = normalizedProvenance.length
+            ? normalizedProvenance
+            : createLegacyTestCaseProvenance(source, prdPath, steps, recordingsById);
           return {
             ...legacyTestCase,
             schemaVersion: 2,
+            version: normalizeTestCaseVersion(rawVersion),
+            assetReferences: normalizeTestCaseAssetReferences(rawAssetReferences),
             groupId: testCase.groupId || groups[0]?.id || '',
             environmentId: testCase.environmentId || environmentId,
-            source: testCase.source || 'manual',
+            source,
             ...(sourceIntent ? { sourceIntent } : {}),
-            prdPath: normalizePrdPathReference(testCase.prdPath),
-            steps: Array.isArray(testCase.steps)
-              ? testCase.steps
-                  .map(normalizeTestStepDraft)
-                  .filter((step): step is TestStepDraft => Boolean(step))
-              : [],
+            ...(intent ? { intent } : {}),
+            ...(provenance.length ? { provenance } : {}),
+            ...(prdPath ? { prdPath } : {}),
+            steps,
           };
         })
       : fallback.testCases,
@@ -2008,14 +2477,25 @@ export function createTestCaseFromGeneratedPath({
   url: string;
   seed: number;
 }): TestCaseDraft {
+  const sourceIntent = path.sourceExcerpt?.trim() || path.rationale.trim() || path.title;
+  const successCriteria = path.steps
+    .filter((step) => step.type === 'aiAssert')
+    .map((step) => step.body);
   return {
     schemaVersion: 2,
+    version: 1,
+    assetReferences: createEmptyTestCaseAssetReferences(),
     id: `case-prd-${Date.now()}-${seed}`,
     kind: 'scenario',
     groupId,
     environmentId,
     source: 'prd',
-    sourceIntent: path.sourceExcerpt?.trim() || path.rationale.trim() || path.title,
+    sourceIntent,
+    intent: createTestCaseIntent(path.sourceExcerpt?.trim() || path.title.trim() || 'PRD 测试路径', {
+      preconditions: [],
+      successCriteria,
+    }),
+    provenance: [{ kind: 'prdPath', documentId, pathId: path.id }],
     prdPath: {
       documentId,
       pathId: path.id,
@@ -2231,6 +2711,20 @@ function toDeterministicTestAction(
   return undefined;
 }
 
+function toInputBindingTarget(
+  step: AgentStep,
+  unreviewedInputValues: readonly string[],
+): TestInputBindingTarget | undefined {
+  if (step.action !== 'input' && step.action !== 'select') {
+    return undefined;
+  }
+  const selector = step.selector?.trim();
+  const redactedSelector = selector ? redactPersistedTestSelector(selector, unreviewedInputValues) : undefined;
+  return selector && selector === redactedSelector
+    ? { kind: step.action, locator: createTestLocatorFingerprint(selector) }
+    : undefined;
+}
+
 function inferTestStepActionRisk(step: AgentStep): TestStepActionRisk {
   const intent = `${step.title} ${step.instruction}`.toLocaleLowerCase();
   if (/(提交|删除|支付|审批|发送|购买|submit|delete|pay|approve|send|purchase)/u.test(intent)) {
@@ -2259,6 +2753,7 @@ function createTestStepFromAgentStep({
     : step.instruction.trim() || step.title.trim() || step.action;
   const intent = redactPersistedTestText(rawIntent, unreviewedInputValues);
   const action = toDeterministicTestAction(step, unreviewedInputValues);
+  const inputBindingTarget = toInputBindingTarget(step, unreviewedInputValues);
   return {
     id,
     type: testStepTypeForAgentAction(step.action),
@@ -2270,6 +2765,7 @@ function createTestStepFromAgentStep({
       reviewStatus: 'needsReview',
       actionRisk: inferTestStepActionRisk(step),
       ...(action ? { action } : {}),
+      ...(inputBindingTarget ? { inputBindingTarget } : {}),
       provenance: {
         source: 'agentRun',
         runId,
@@ -2325,15 +2821,24 @@ export function createTestCaseFromAgentRun({
     hasUnreviewedAgentInputValue(step) && typeof step.value === 'string' ? [step.value] : [],
   );
   const createdAt = Date.now();
+  const sourceIntent = redactPersistedTestText(agentRun.intent.prompt.trim(), unreviewedInputValues);
+  const name = redactPersistedTestText(agentRun.plan.title.trim(), unreviewedInputValues) || `自然语言测试 ${seed}`;
   return {
     schemaVersion: 2,
+    version: 1,
+    assetReferences: createEmptyTestCaseAssetReferences(),
     id: `case-nl-${createdAt}-${seed}`,
     kind: 'scenario',
     groupId,
     environmentId,
     source: 'naturalLanguage',
-    sourceIntent: redactPersistedTestText(agentRun.intent.prompt.trim(), unreviewedInputValues),
-    name: redactPersistedTestText(agentRun.plan.title.trim(), unreviewedInputValues) || `自然语言测试 ${seed}`,
+    sourceIntent,
+    intent: createTestCaseIntent(sourceIntent || name),
+    provenance: [
+      { kind: 'agentRun', runId: agentRun.runId, stepIds: planSteps.map((step) => step.id) },
+      ...(agentRun.intent.documentId ? [{ kind: 'prdDocument' as const, documentId: agentRun.intent.documentId }] : []),
+    ],
+    name,
     category: '自然语言',
     lastEdited: '刚刚',
     url: redactPersistedDirectTestUrl(agentRun.intent.targetUrl?.trim() || url, unreviewedInputValues),
@@ -2504,14 +3009,25 @@ export function createTestCaseFromRecording({
   recording: RecordingAsset;
   seed: number;
 }): TestCaseDraft {
+  const businessGoal = recording.comparisonGoal.trim() || recording.summary.trim() || recording.name;
   return {
     schemaVersion: 2,
+    version: 1,
+    assetReferences: createEmptyTestCaseAssetReferences(),
     id: `case-recording-${Date.now()}-${seed}`,
     kind: 'recording',
     groupId: recording.groupId,
     environmentId: recording.environmentId,
     source: 'recording',
-    sourceIntent: recording.comparisonGoal.trim() || recording.summary.trim() || recording.name,
+    sourceIntent: businessGoal,
+    intent: createTestCaseIntent(businessGoal, {
+      preconditions: [],
+      successCriteria: recording.comparisonGoal.trim() ? [recording.comparisonGoal] : [],
+    }),
+    provenance: [
+      { kind: 'recording', recordingId: recording.id, stepIds: recording.steps.map((step) => step.id) },
+      ...(recording.prdPath ? [{ kind: 'prdPath' as const, ...recording.prdPath }] : []),
+    ],
     name: `${recording.name} 回放校验`,
     category: '录制回放',
     lastEdited: '刚刚',
@@ -2577,14 +3093,19 @@ export function createEmptyTestCase(
   groupId: string,
   environmentId: string,
 ): TestCaseDraft {
+  const name = `新的测试用例 ${seed}`;
   return {
     schemaVersion: 2,
+    version: 1,
+    assetReferences: createEmptyTestCaseAssetReferences(),
     id: `case-${Date.now()}-${seed}`,
     kind: 'scenario',
     groupId,
     environmentId,
     source: 'manual',
-    name: `新的测试用例 ${seed}`,
+    intent: createTestCaseIntent(name),
+    provenance: [],
+    name,
     category: '核心链路',
     lastEdited: '刚刚',
     url: 'https://your-app.example.com',
@@ -2700,6 +3221,7 @@ export function createReporterFixDraft(
     ...source,
     id: draftId,
     source: 'reporter',
+    intent: source.intent ?? createTestCaseIntent(source.name.trim() || '测试修复草稿'),
     name: `${source.name} · 修复草稿`,
     lastEdited: '刚刚',
     notes,
@@ -2835,8 +3357,9 @@ export function isTestCaseLinkedToGeneratedPath(
   documentId: string,
   path: GeneratedTestPath,
 ): boolean {
-  if (testCase.prdPath) {
-    return testCase.prdPath.documentId === documentId && testCase.prdPath.pathId === path.id;
+  const prdPath = getTestCasePrdPath(testCase);
+  if (prdPath) {
+    return prdPath.documentId === documentId && prdPath.pathId === path.id;
   }
 
   return testCase.source === 'prd' && testCase.name === path.title;

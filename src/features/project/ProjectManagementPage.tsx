@@ -1,6 +1,11 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type {
   CredentialRef,
+  ProjectAssetBinding,
+  ProjectAssetBindingStatus,
+  ProjectAssetMigrationPlan,
+  ProjectAssetReloadPlan,
+  ProjectAssetReloadResult,
   ProjectDraft,
   ProjectEnvironment,
   ProjectGroup,
@@ -39,6 +44,15 @@ import {
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { useI18n } from '../../i18n/index.js';
+import {
+  canPublishProjectAssetSnapshot,
+  inspectProjectAssetBinding,
+  planProjectAssetMigration,
+  planProjectAssetReload,
+  reloadProjectAssetSnapshot,
+  selectProjectAssetDirectory,
+  writeProjectAssetSnapshot,
+} from '../../lib/runtime.js';
 
 export function ProjectManagementPage({
   projects,
@@ -46,12 +60,15 @@ export function ProjectManagementPage({
   selectedGroupId,
   onCreateProject,
   onDeleteProject,
+  onProjectAssetBound,
+  onProjectAssetReloaded,
   onSelectProject,
   onSelectGroup,
   onCreateGroup,
   onDeleteGroup,
   onUpdateProject,
   onSaveCredential,
+  projectAssetBindings = [],
 }: {
   projects: ProjectDraft[];
   selectedProject?: ProjectDraft;
@@ -63,6 +80,9 @@ export function ProjectManagementPage({
   onCreateGroup: () => void;
   onDeleteGroup: (groupId: string) => void;
   onUpdateProject: (updater: (project: ProjectDraft) => ProjectDraft) => void;
+  onProjectAssetBound?: (binding: ProjectAssetBinding) => void;
+  onProjectAssetReloaded?: (result: ProjectAssetReloadResult) => void;
+  projectAssetBindings?: ProjectAssetBinding[];
   onSaveCredential: (payload: {
     label: string;
     username: string;
@@ -142,11 +162,16 @@ export function ProjectManagementPage({
         onCreateGroup={onCreateGroup}
         onDeleteGroup={onDeleteGroup}
         onDeleteProject={onDeleteProject}
+        onProjectAssetBound={onProjectAssetBound}
+        onProjectAssetReloaded={onProjectAssetReloaded}
         onSaveCredential={onSaveCredential}
         onSelectGroup={onSelectGroup}
         onUpdateProject={onUpdateProject}
         open={Boolean(editingProject)}
         project={editingProject}
+        projectAssetBinding={editingProject
+          ? projectAssetBindings.find((binding) => binding.projectId === editingProject.id)
+          : undefined}
         selectedGroupId={selectedGroupId}
         setCredentialLabel={setCredentialLabel}
         setCredentialSecret={setCredentialSecret}
@@ -258,11 +283,14 @@ function ProjectConfigurationDialog({
   onCreateGroup,
   onDeleteGroup,
   onDeleteProject,
+  onProjectAssetBound,
+  onProjectAssetReloaded,
   onSaveCredential,
   onSelectGroup,
   onUpdateProject,
   open,
   project,
+  projectAssetBinding,
   selectedGroupId,
   setCredentialLabel,
   setCredentialSecret,
@@ -275,11 +303,14 @@ function ProjectConfigurationDialog({
   onCreateGroup: () => void;
   onDeleteGroup: (groupId: string) => void;
   onDeleteProject: (projectId: string) => void;
+  onProjectAssetBound?: (binding: ProjectAssetBinding) => void;
+  onProjectAssetReloaded?: (result: ProjectAssetReloadResult) => void;
   onSaveCredential: (payload: { label: string; username: string; secret: string }) => Promise<CredentialRef | null>;
   onSelectGroup: (groupId: string) => void;
   onUpdateProject: (updater: (project: ProjectDraft) => ProjectDraft) => void;
   open: boolean;
   project?: ProjectDraft;
+  projectAssetBinding?: ProjectAssetBinding;
   selectedGroupId: string;
   setCredentialLabel: (value: string) => void;
   setCredentialSecret: (value: string) => void;
@@ -443,6 +474,13 @@ function ProjectConfigurationDialog({
                 ) : null}
               </section>
 
+              <ProjectAssetSnapshotSection
+                binding={projectAssetBinding}
+                onProjectAssetBound={onProjectAssetBound}
+                onProjectAssetReloaded={onProjectAssetReloaded}
+                project={project}
+              />
+
               <Button
                 className="justify-start"
                 onClick={() => {
@@ -460,6 +498,276 @@ function ProjectConfigurationDialog({
         </div>
       </DialogContent>
     </Dialog>
+  );
+}
+
+function ProjectAssetSnapshotSection({
+  binding,
+  onProjectAssetBound,
+  onProjectAssetReloaded,
+  project,
+}: {
+  binding?: ProjectAssetBinding;
+  onProjectAssetBound?: (binding: ProjectAssetBinding) => void;
+  onProjectAssetReloaded?: (result: ProjectAssetReloadResult) => void;
+  project: ProjectDraft;
+}) {
+  const { t } = useI18n();
+  const [plan, setPlan] = useState<ProjectAssetMigrationPlan>();
+  const [bindingStatus, setBindingStatus] = useState<ProjectAssetBindingStatus>();
+  const [reloadPlan, setReloadPlan] = useState<ProjectAssetReloadPlan>();
+  const [status, setStatus] = useState<'idle' | 'planning' | 'writing' | 'written' | 'reloadPlanning' | 'reloading' | 'reloaded' | 'error'>('idle');
+  const [isInspecting, setIsInspecting] = useState(false);
+  const [error, setError] = useState('');
+
+  async function refreshBindingStatus() {
+    if (!binding) {
+      setBindingStatus(undefined);
+      return;
+    }
+
+    setIsInspecting(true);
+    try {
+      const nextStatus = await inspectProjectAssetBinding(project.id);
+      setBindingStatus(nextStatus);
+      if (nextStatus?.state !== 'externalChanges') {
+        setReloadPlan(undefined);
+      }
+    } catch (caughtError) {
+      setBindingStatus({
+        projectId: project.id,
+        projectDirectory: binding.projectDirectory,
+        state: 'unavailable',
+        issues: [{
+          path: binding.projectDirectory,
+          message: caughtError instanceof Error ? caughtError.message : t('project.assets.error'),
+        }],
+      });
+    } finally {
+      setIsInspecting(false);
+    }
+  }
+
+  useEffect(() => {
+    void refreshBindingStatus();
+  }, [binding?.projectDirectory, binding?.revision, project.id]);
+
+  useEffect(() => {
+    setPlan(undefined);
+    setReloadPlan(undefined);
+  }, [project.updatedAt]);
+
+  if (!canPublishProjectAssetSnapshot()) {
+    return null;
+  }
+
+  async function prepareSnapshot() {
+    setStatus('planning');
+    setError('');
+    try {
+      const projectDirectory = await selectProjectAssetDirectory();
+      if (!projectDirectory) {
+        setStatus('idle');
+        return;
+      }
+
+      const nextPlan = await planProjectAssetMigration({ projectId: project.id, projectDirectory, project });
+      if (!nextPlan) {
+        setStatus('idle');
+        return;
+      }
+      setPlan(nextPlan);
+      setStatus('idle');
+    } catch (caughtError) {
+      setPlan(undefined);
+      setStatus('error');
+      setError(caughtError instanceof Error ? caughtError.message : t('project.assets.error'));
+    }
+  }
+
+  async function prepareReload() {
+    if (!binding) {
+      return;
+    }
+
+    setStatus('reloadPlanning');
+    setError('');
+    try {
+      const nextPlan = await planProjectAssetReload({ projectId: project.id, project });
+      setReloadPlan(nextPlan);
+      setStatus('idle');
+    } catch (caughtError) {
+      setReloadPlan(undefined);
+      setStatus('error');
+      setError(caughtError instanceof Error ? caughtError.message : t('project.assets.error'));
+    }
+  }
+
+  async function writeSnapshot() {
+    if (!plan || plan.status !== 'ready') {
+      return;
+    }
+
+    setStatus('writing');
+    setError('');
+    try {
+      const nextBinding = await writeProjectAssetSnapshot({
+        projectId: project.id,
+        projectDirectory: plan.projectDirectory,
+        project,
+        plannedRevision: plan.snapshotRevision,
+      });
+      if (!nextBinding) {
+        setStatus('idle');
+        return;
+      }
+      onProjectAssetBound?.(nextBinding);
+      setBindingStatus({
+        projectId: project.id,
+        projectDirectory: nextBinding.projectDirectory,
+        state: 'inSync',
+        issues: [],
+      });
+      setStatus('written');
+    } catch (caughtError) {
+      setStatus('error');
+      setError(caughtError instanceof Error ? caughtError.message : t('project.assets.error'));
+    }
+  }
+
+  async function reloadSnapshot() {
+    if (!reloadPlan || reloadPlan.status !== 'ready' || !reloadPlan.snapshotRevision) {
+      return;
+    }
+
+    setStatus('reloading');
+    setError('');
+    try {
+      const result = await reloadProjectAssetSnapshot({
+        projectId: project.id,
+        project,
+        snapshotRevision: reloadPlan.snapshotRevision,
+      });
+      if (!result) {
+        setStatus('idle');
+        return;
+      }
+      onProjectAssetReloaded?.(result);
+      setBindingStatus({
+        projectId: result.project.id,
+        projectDirectory: result.binding.projectDirectory,
+        state: 'inSync',
+        issues: [],
+      });
+      setReloadPlan(undefined);
+      setStatus('reloaded');
+    } catch (caughtError) {
+      setStatus('error');
+      setError(caughtError instanceof Error ? caughtError.message : t('project.assets.error'));
+    }
+  }
+
+  const isBusy = status === 'planning' || status === 'writing' || status === 'reloadPlanning' || status === 'reloading';
+  const canWrite = plan?.status === 'ready' && status !== 'written';
+
+  return (
+    <section className="project-config-section">
+      <div className="project-config-section-heading">
+        <div>
+          <h3>{t('project.assets.title')}</h3>
+        </div>
+        <Boxes className="h-5 w-5 text-primary" />
+      </div>
+      <div className="grid gap-3">
+        <Button disabled={isBusy} onClick={prepareSnapshot} size="sm" type="button" variant="outline">
+          <Boxes className="h-4 w-4" />
+          {status === 'planning'
+            ? t('project.assets.planning')
+            : plan
+              ? t('project.assets.reselect')
+              : t('project.assets.prepare')}
+        </Button>
+        {plan ? (
+          <div className="grid gap-3 rounded-[4px] border border-border bg-muted/20 p-3">
+            <p className="break-all font-mono text-xs text-muted-foreground">
+              {t('project.assets.path')}: {plan.projectDirectory}
+            </p>
+            <Badge className="w-fit" variant="outline">
+              {plan.status === 'ready' ? t('project.assets.ready') : t('project.assets.conflicts')}
+            </Badge>
+            {plan.status === 'ready' ? (
+              <>
+                <p className="text-sm text-muted-foreground">{t('project.assets.files', { count: plan.files.length })}</p>
+                <ul className="max-h-36 space-y-1 overflow-y-auto font-mono text-xs text-muted-foreground">
+                  {plan.files.map((file) => <li key={file}>{file}</li>)}
+                </ul>
+                <Button disabled={!canWrite || isBusy} onClick={writeSnapshot} size="sm" type="button">
+                  <Boxes className="h-4 w-4" />
+                  {status === 'writing' ? t('project.assets.writing') : t('project.assets.confirm')}
+                </Button>
+              </>
+            ) : (
+              <ul className="max-h-28 space-y-1 overflow-y-auto font-mono text-xs text-destructive">
+                {plan.conflicts.map((conflict) => <li key={conflict}>{conflict}</li>)}
+              </ul>
+            )}
+          </div>
+        ) : null}
+        {binding ? (
+          <div className="grid gap-2 rounded-[4px] border border-border bg-muted/20 p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-sm font-medium text-foreground">{t('project.assets.bound')}</p>
+              <Badge className="w-fit" variant="outline">
+                {isInspecting
+                  ? t('project.assets.status.checking')
+                  : t(`project.assets.status.${bindingStatus?.state ?? 'unavailable'}`)}
+              </Badge>
+            </div>
+            <p className="break-all font-mono text-xs text-muted-foreground">{binding.projectDirectory}</p>
+            {bindingStatus?.issues.length ? (
+              <ul className="max-h-28 space-y-1 overflow-y-auto font-mono text-xs text-muted-foreground">
+                {bindingStatus.issues.map((issue) => <li key={`${issue.path}:${issue.message}`}>{issue.path}: {issue.message}</li>)}
+              </ul>
+            ) : null}
+            <Button disabled={isInspecting || isBusy} onClick={refreshBindingStatus} size="sm" type="button" variant="outline">
+              <Boxes className="h-4 w-4" />
+              {t('project.assets.refresh')}
+            </Button>
+            {bindingStatus?.state === 'externalChanges' ? (
+              <Button disabled={isBusy} onClick={prepareReload} size="sm" type="button" variant="outline">
+                <Boxes className="h-4 w-4" />
+                {status === 'reloadPlanning' ? t('project.assets.reloadPlanning') : t('project.assets.reloadPlan')}
+              </Button>
+            ) : null}
+            {reloadPlan ? (
+              <div className="grid gap-2 rounded-[4px] border border-border bg-background p-3">
+                <Badge className="w-fit" variant="outline">
+                  {reloadPlan.status === 'ready'
+                    ? t('project.assets.reloadReady')
+                    : reloadPlan.status === 'unavailable'
+                      ? t('project.assets.reloadUnavailable')
+                      : t('project.assets.reloadBlocked')}
+                </Badge>
+                {reloadPlan.issues.length ? (
+                  <ul className="max-h-28 space-y-1 overflow-y-auto font-mono text-xs text-muted-foreground">
+                    {reloadPlan.issues.map((issue) => <li key={`${issue.path}:${issue.message}`}>{issue.path}: {issue.message}</li>)}
+                  </ul>
+                ) : null}
+                {reloadPlan.status === 'ready' ? (
+                  <Button disabled={isBusy} onClick={reloadSnapshot} size="sm" type="button">
+                    <Boxes className="h-4 w-4" />
+                    {status === 'reloading' ? t('project.assets.reloading') : t('project.assets.reloadConfirm')}
+                  </Button>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+        {status === 'written' ? <p aria-live="polite" className="text-sm text-primary">{t('project.assets.written')}</p> : null}
+        {status === 'reloaded' ? <p aria-live="polite" className="text-sm text-primary">{t('project.assets.reloaded')}</p> : null}
+        {status === 'error' ? <p aria-live="polite" className="text-sm text-destructive">{error}</p> : null}
+      </div>
+    </section>
   );
 }
 

@@ -3,7 +3,11 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import type {
+  ProjectAssetBinding,
+  ProjectAssetBindingStatus,
   PrdDocumentAsset,
+  ProjectAssetMigrationPlan,
+  ProjectAssetReloadPlan,
   ProjectDraft,
   RecordingAsset,
   TestCaseDraft,
@@ -33,17 +37,91 @@ export interface ProjectAssetReadResult {
   revision: string;
 }
 
+/**
+ * Inspects a tracked snapshot without updating either storage location. The
+ * caller decides when a local edit should become a new reviewed snapshot.
+ */
+export async function inspectProjectAssetBinding(
+  project: ProjectDraft,
+  binding: ProjectAssetBinding,
+): Promise<ProjectAssetBindingStatus> {
+  const localRevision = calculateProjectAssetRevision(project);
+  try {
+    const snapshot = await new ProjectAssetStore(binding.projectDirectory).loadWithRevision();
+    if (snapshot.project.id !== project.id || snapshot.revision !== binding.revision) {
+      return {
+        projectId: project.id,
+        projectDirectory: binding.projectDirectory,
+        state: 'externalChanges',
+        issues: snapshot.project.id !== project.id
+          ? [{ path: 'project.json.id', message: '项目资产目录属于另一个项目。' }]
+          : [{ path: 'project.json.revision', message: '项目资产已被外部修改。' }],
+      };
+    }
+
+    return {
+      projectId: project.id,
+      projectDirectory: binding.projectDirectory,
+      state: localRevision === binding.revision ? 'inSync' : 'localChanges',
+      issues: localRevision === binding.revision
+        ? []
+        : [{ path: 'studio-data', message: '本地项目存在尚未写入资产快照的修改。' }],
+    };
+  } catch (error) {
+    return {
+      projectId: project.id,
+      projectDirectory: binding.projectDirectory,
+      state: 'unavailable',
+      issues: error instanceof ProjectAssetStoreError
+        ? error.issues
+        : [{ path: binding.projectDirectory, message: errorMessage(error) }],
+    };
+  }
+}
+
+/**
+ * Produces a read-only reload plan. A tracked directory is never authoritative
+ * while the local project contains edits that have not been snapshotted.
+ */
+export async function planProjectAssetReload(
+  project: ProjectDraft,
+  binding: ProjectAssetBinding,
+): Promise<ProjectAssetReloadPlan> {
+  const localRevision = calculateProjectAssetRevision(project);
+  try {
+    const snapshot = await new ProjectAssetStore(binding.projectDirectory).loadWithRevision();
+    const issues = [] as ProjectAssetReloadPlan['issues'];
+    if (snapshot.project.id !== project.id) {
+      issues.push({ path: 'project.json.id', message: '项目资产目录属于另一个项目。' });
+    }
+    if (snapshot.revision === binding.revision) {
+      issues.push({ path: 'project.json.revision', message: '未检测到可重载的外部资产修改。' });
+    }
+    if (localRevision !== binding.revision) {
+      issues.push({ path: 'studio-data', message: '本地项目存在未快照修改，不能覆盖。' });
+    }
+    return {
+      projectId: project.id,
+      projectDirectory: binding.projectDirectory,
+      ...(snapshot.revision !== binding.revision ? { snapshotRevision: snapshot.revision } : {}),
+      status: issues.length ? 'requiresReview' : 'ready',
+      issues,
+    };
+  } catch (error) {
+    return {
+      projectId: project.id,
+      projectDirectory: binding.projectDirectory,
+      status: 'unavailable',
+      issues: error instanceof ProjectAssetStoreError
+        ? error.issues
+        : [{ path: binding.projectDirectory, message: errorMessage(error) }],
+    };
+  }
+}
+
 export interface ProjectAssetStoreFileSystem {
   rename(source: string, destination: string): Promise<void>;
   remove?(directory: string): Promise<void>;
-}
-
-export interface ProjectAssetMigrationPlan {
-  projectId: string;
-  projectDirectory: string;
-  files: string[];
-  status: 'ready' | 'requiresReview';
-  conflicts: string[];
 }
 
 export interface ProjectAssetValidationIssue {
@@ -156,6 +234,7 @@ export class ProjectAssetStore {
     return {
       projectId: project.id,
       projectDirectory: this.projectDirectory,
+      snapshotRevision: snapshot.manifest.revision!,
       files: listAssetFiles(snapshot),
       status: conflicts.length ? 'requiresReview' : 'ready',
       conflicts,
@@ -546,8 +625,8 @@ function projectFromSnapshot(snapshot: ProjectAssetSnapshot): ProjectDraft {
   };
 }
 
-function calculateProjectAssetRevision(project: ProjectDraft): string {
-  const canonicalProject = JSON.stringify(canonicalize(project));
+export function calculateProjectAssetRevision(project: ProjectDraft): string {
+  const canonicalProject = JSON.stringify(canonicalize(sanitizeProjectAsset(project)));
   return createHash('sha256').update(canonicalProject, 'utf8').digest('hex');
 }
 

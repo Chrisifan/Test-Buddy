@@ -418,6 +418,98 @@ describe('TestRunner recording replay', () => {
     );
   });
 
+  it('forwards only a confirmed credential binding for deterministic input steps', async () => {
+    const project = createProjectWithRecording();
+    const environment = project.environments[0]!;
+    const testCase = {
+      ...project.testCases[0]!,
+      steps: [{
+        id: 'step-fill-email',
+        type: 'ai' as const,
+        title: '填写邮箱',
+        body: '填写已确认的测试账号。',
+        execution: {
+          schemaVersion: 2 as const,
+          intent: '填写已确认的测试账号。',
+          reviewStatus: 'confirmed' as const,
+          actionRisk: 'medium' as const,
+          action: {
+            kind: 'input' as const,
+            locator: { selector: '#email', quality: 'acceptable' as const },
+            binding: { kind: 'credential' as const, credentialId: 'cred-qa', field: 'username' as const },
+          },
+        },
+      }],
+    };
+    const browserRuntime = {
+      start: vi.fn().mockResolvedValue({
+        id: 'session-test',
+        status: 'ready',
+        projectId: project.id,
+        environmentId: environment.id,
+        currentUrl: environment.url,
+        pageTitle: project.name,
+        message: 'ready',
+        updatedAt: new Date(0).toISOString(),
+      }),
+    };
+    const artifacts = {
+      createSnapshot: vi.fn().mockResolvedValue({
+        id: 'artifact-start',
+        type: 'snapshot',
+        label: '运行起始快照',
+        path: '/tmp/start.svg',
+      }),
+    };
+    const deterministicAgentRun = createStubAgentRun({ mode: 'ai', prompt: '填写邮箱', verificationStatus: 'passed' });
+    const deterministicRunner = {
+      runDeterministicStep: vi.fn().mockResolvedValue({
+        runId: deterministicAgentRun.runId,
+        title: '填写邮箱',
+        agentRun: deterministicAgentRun,
+        detail: {
+          id: deterministicAgentRun.runId,
+          projectId: project.id,
+          testCaseId: testCase.id,
+          environmentId: environment.id,
+          title: '填写邮箱',
+          status: 'passed',
+          startedAt: new Date(0).toISOString(),
+          endedAt: new Date(0).toISOString(),
+          duration: '00:00:01',
+          summary: '凭据输入完成。',
+          logs: [],
+          steps: [{ id: 'input-step', stepId: 'step-fill-email', title: '填写邮箱', status: 'passed', message: '凭据输入完成。', screenshotPath: '/tmp/email.png' }],
+          artifacts: [],
+        },
+      }),
+    };
+    const runner = new TestRunner(
+      artifacts as never,
+      browserRuntime as never,
+      vi.fn(),
+      undefined,
+      undefined,
+      deterministicRunner as never,
+    );
+
+    const response = await runner.run({ project, testCase, environment });
+
+    expect(deterministicRunner.runDeterministicStep).toHaveBeenCalledWith(
+      expect.objectContaining({
+        plannedStep: {
+          action: 'input',
+          title: '填写邮箱',
+          instruction: '填写已确认的测试账号。',
+          selector: '#email',
+        },
+        inputBinding: { kind: 'credential', credentialId: 'cred-qa', field: 'username' },
+      }),
+    );
+    expect(deterministicRunner.runDeterministicStep.mock.calls[0]?.[0].plannedStep).not.toHaveProperty('value');
+    expect(response.detail.status).toBe('passed');
+  });
+
   it('keeps unsupported confirmed V2 actions neutral instead of sending them to the workflow runtime', async () => {
     const project = createProjectWithRecording();
     const environment = project.environments[0]!;
@@ -427,7 +519,7 @@ describe('TestRunner recording replay', () => {
         id: 'step-confirmed-input', type: 'ai' as const, title: '填写邮箱', body: '填写测试邮箱',
         execution: {
           schemaVersion: 2 as const, intent: '填写测试邮箱', reviewStatus: 'confirmed' as const, actionRisk: 'medium' as const,
-          action: { kind: 'input' as const, locator: { selector: '#email', quality: 'acceptable' as const }, value: 'qa@example.test' },
+          action: { kind: 'input' as const, locator: { selector: '#email', quality: 'acceptable' as const }, value: 'qa@example.test' } as never,
         },
       }],
     };

@@ -78,13 +78,16 @@ TestBuddy 已经从 UI 原型进入“具备本地执行与结果治理基础，
 
 ## 3. Phase 1：Regression Case V2
 
-**当前状态：V2 基础契约、编辑器人工确认、首批确定性动作与显式断言执行已实现并完成离线验证，完整 Hybrid Case contract 未完成。**
+**当前状态：V2 基础契约、结构化业务意图、来源关联、编辑器人工确认、受控凭据输入绑定、首批确定性动作与显式断言执行已实现并完成离线验证，完整 Hybrid Case contract 未完成。**
 
 本轮已经完成的基础能力：
 
 - `TestCaseDraft.sourceIntent` 保留自然语言探索、PRD 路径或录制对比目标的原始业务意图；PRD 与录制的自由文本仍只作为待审阅说明，不会提升为确定性浏览器动作。
+- `TestCaseDraft.intent` 以 schema version `1` 保存业务目标、前置条件和成功标准，独立于自由文本 `notes`、步骤和运行时 source intent。手工、自然语言、PRD 与录制入口均写入该合同；PRD 只从既有 `aiAssert` 步骤派生成功标准，录制只复用既有 comparison goal。旧 Case 不从任何旧说明或来源文本反推该字段，hydration 仅清理、去重有效的新格式文本。
+- `TestCaseDraft.provenance` 是 V2 的统一来源关联：自然语言用例记录已验证 Agent Run 和实际转入用例的计划步骤 ID，录制用例记录录制资产与节点 ID，并继承录制关联的 PRD `documentId + pathId`；PRD 用例直接记录该路径。旧 `prdPath` 在 hydration 和运行链路中兼容读取，但不再是唯一关联依据。
 - `TestStepDraft.execution` 以 schema version `2` 保存待审阅的结构化 action、定位 fingerprint、风险级别和 Agent Run 来源。
-- `navigate`、明确 selector 的 `click`、明确 selector 或超时的 `wait`、selector `scroll` 可以在保存时保留为候选确定性动作；Agent Run 的 `input/select` 原值不写入资产，必须在后续编辑器中通过变量、fixture 输出或凭据引用确认后才能执行。
+- 所有当前 Case 创建入口都会写入初始 `version: 1` 与空的 fixture、reusable flow、baseline 引用位；旧 Case 在 hydration 时稳定补为 version 1，并局部丢弃非法或重复的版本引用。编辑保存、分组迁移和录制绑定删除会创建下一 Case version，不会静默复用已发布版本。
+- `navigate`、明确 selector 的 `click`、明确 selector 或超时的 `wait`、selector `scroll` 可以在保存时保留为候选确定性动作；Agent Run 的 `input/select` 原值不写入资产，只保留结构化目标。编辑器只能把目标绑定到当前项目已保存凭据的 `username` 或 `secret` 字段，变更后必须由用户明确确认才可执行；变量和 fixture 输出绑定仍不在当前范围。
 - 语义断言、自由文本断言和 `aiQuery` 仍由派生规则标记为需要模型；显式 assertion contract 才能成为无模型断言。
 - hydration 保留旧步骤不变，局部丢弃畸形 V2 execution，不丢 legacy 文本、用例或项目。
 - Target locator quality 已收敛为 `strong/acceptable/weak/unresolved`；hydration 会把早期的 `fragile/unknown` 映射为 `weak/unresolved`。`unresolved` 定位不得被人工确认进入确定性执行，必须先替换为可审阅目标。
@@ -92,10 +95,11 @@ TestBuddy 已经从 UI 原型进入“具备本地执行与结果治理基础，
 - 已确认的 `navigate`、selector `click`、selector/超时 `wait`、selector `scroll` 会从 `RuntimeBundle -> TestRunner -> StudioRuntime` 进入无模型确定性执行路径。混合用例保持源步骤顺序；任一确定性步骤为 `failed` 或 `neutral` 时，后续步骤记录为未执行的 `neutral`。
 - 确定性执行只在 `BrowserRuntime.hasRealPage()` 为真时派发一次既有浏览器动作。没有真实页面、缺失能力、取消或确认但未支持的 V2 action 不会退回到 Workflow/Planner，也不会调用 Midscene、Verifier、Reporter、重试、fallback 或重规划。
 - 持久化脱敏区分结构化 `url` 字段与普通文本：结构化 URL 覆盖任意合法 scheme；普通文本只扫描 `http(s)`、`ftp`、`file`、`about`、`data`；CSS 选择器保留伪选择器，仅检查带引号属性值中的明确 URL，并在发生脱敏时移除候选确定性 action。
-- 编辑器仅为可离线执行的 V2 `ai` action 展示人工确认或撤销入口；`input/select` 等未支持动作保持审阅态。确认状态以步骤元数据持久化，编辑步骤标题、指令或类型会自动回退为待确认，避免结构化动作与可见意图脱节。
+- 编辑器仅为可离线执行的 V2 `ai` action 展示人工确认或撤销入口。`input/select` 先展示凭据绑定面板，缺少有效绑定时保持审阅态；绑定后仍需独立确认。确认状态以步骤元数据持久化，编辑步骤标题、指令或类型会自动回退为待确认，避免结构化动作与可见意图脱节。
+- 受控 `input/select` 的值只在主进程通过项目范围 `CredentialStore` 和本机安全存储解析，并仅传给一次 BrowserRuntime 调用；Case JSON、Agent plan、运行事件、详情和编辑器状态均不接收解析值。绑定缺失、跨项目、已删除或无法解密时步骤为 `neutral`，不调用浏览器、模型、重试或重规划。
 - 合法且已确认的 V2 `aiAssert` 显式断言也可在编辑器确认或撤销，并在同一无模型执行链路中读取真实页面 URL、标题、文本或公开 DOM。断言失败立即停止后续步骤；没有真实页面、取消、畸形断言或未支持结构均为 `neutral`，不会回退到 Workflow、Planner、Verifier 或 Reporter。每条显式断言证据保留 assertion ID、version、kind 和当次计划中的 expected/evidence，后续编辑 Case 不会改写历史运行的断言归属。
 
-尚未在本阶段完成：`input/select` 安全绑定、录制/PRD 到完整 Hybrid Case contract 的统一转换、完整 assertion evidence contract 和六种终态迁移。Case 顶层 schema version `2` 已由 hydration 兼容升级，所有当前官方创建入口也会直接写入该版本。
+尚未在本阶段完成：从录制节点或 PRD 文本生成可人工确认的完整 locator/action/assertion contract、完整 assertion evidence contract 和六种终态迁移。Case 顶层 schema version `2`、初始 Case version 和空的版本引用位均已由 hydration 与所有当前创建入口兼容写入；实际 fixture、flow 和 baseline 资产仍待后续阶段定义与解析。
 
 ### 3.1 目标
 
@@ -143,7 +147,7 @@ Project Asset Store 开始写入前，V2 schema、版本引用和迁移规则必
 
 ## 4. Phase 2：Project Asset Store
 
-**当前状态：已有独立 Project Asset Store 基础，可生成迁移计划并向空的、经审阅的目录原子写入 `project.json`、Case、Recording 和 PRD 文档资产；它尚未接管现有 `studio-data/state.json`，完整资产分类和审阅式迁移 UI 仍未完成。**
+**当前状态：已有独立 Project Asset Store 基础。桌面端可在项目配置中选择目录、预览待写文件或冲突，并仅在空目录计划通过后由用户二次确认原子写入 `project.json`、Case、Recording 和 PRD 文档资产。成功写入后，`studio-data` 会保存目录与 revision 指针，并可诊断本地未快照修改、外部修改或目录失效；外部修改可先生成重载计划，只有不存在本地修改且 revision 仍匹配时才能二次确认重载。它尚未接管现有 `studio-data/state.json`，完整资产分类和正式迁移切换仍未完成。**
 
 ### 4.1 目标
 
@@ -168,7 +172,7 @@ studio-data/
 ```
 
 - Project Asset Store：schema 校验、原子写入、稳定 ID 和版本引用。
-- `ProjectAssetStore` 目前只提供独立迁移计划、首次写入和读取验证：目录非空时不覆盖，录制步骤中的 screenshot/artifact path 会在写入前剥离，运行数据仍留在 `studio-data`。后续接入必须经过用户确认，不能在普通状态保存时自动迁移。
+- `ProjectAssetStore` 目前只提供独立迁移计划、首次写入和读取验证：桌面端目录选择器授权目标目录，项目配置展示待写文件或冲突；只有 `ready` 计划才显示二次确认写入命令。计划和写入都携带当前编辑态 revision，项目在预览后发生变化时必须重新生成计划。成功后，`studio-data` 的 `projectAssetBindings` 记录项目目录、revision 和登记时间；诊断只读比较当前已保存的编辑态、登记 revision 和目录快照，区分本地未快照修改、外部修改和目录不可用。外部修改的重载同样先生成计划，只有当前 UI 与持久化编辑态均没有本地修改、目录仍可读取且 snapshot revision 未变化时，二次确认才会把外部资产写回 `studio-data` 并更新绑定。目录非空时不覆盖，录制步骤中的 screenshot/artifact path 会在写入前剥离，运行数据仍留在 `studio-data`。普通状态保存不会自动写入或重新加载 project directory。
 - Studio Data Store：run/artifact/credential/cache 生命周期。
 - 旧 `state.json` 到 project directory 的审阅式迁移。
 - 引用完整性、冲突和损坏诊断。
@@ -195,7 +199,7 @@ Fixtures/Auth 必须基于稳定逻辑引用和双存储边界实现，不能把
 
 ## 5. Phase 3：Fixtures / Auth
 
-**当前状态：环境和凭证引用已有基础，typed fixture、storageState 生命周期和脚本信任未完成。**
+**当前状态：环境和项目范围凭据引用已有基础；Case 已能显式绑定用户名或密钥字段并在主进程受控解析，typed fixture、storageState 生命周期和脚本信任未完成。**
 
 ### 5.1 目标
 

@@ -14,6 +14,7 @@ import type {
 } from '../../shared/studio.js';
 import {
   getExclusiveRecordingReplayId,
+  getTestCasePrdPath,
   isAgentRunnableTestCase,
   testCaseToWorkflow,
 } from '../../shared/studio.js';
@@ -26,7 +27,7 @@ import { RecordingRunner } from './recording-runner.js';
 import { MidsceneSemanticActionRuntime } from './semantic-action-runtime.js';
 import { TestRunner } from './test-runner.js';
 import { PixelVisualDiffService, type VisualDiffImageAdapter } from './visual-diff.js';
-import { StudioRuntime } from '../studioRuntime.js';
+import { StudioRuntime, type DeterministicInputBindingResolver } from '../studioRuntime.js';
 
 export interface RuntimeBundle {
   artifactManager: ArtifactManager;
@@ -47,6 +48,7 @@ export interface RuntimeBundleOptions {
   visualDiffImageAdapter: VisualDiffImageAdapter;
   emitRunEvent?: (event: RunEventPayload) => void;
   emitRecordingEvent?: (event: RecordingCapturedEvent) => void;
+  deterministicInputBindingResolver?: DeterministicInputBindingResolver;
 }
 
 export function createRuntimeBundle(options: RuntimeBundleOptions): RuntimeBundle {
@@ -76,6 +78,7 @@ export function createRuntimeBundle(options: RuntimeBundleOptions): RuntimeBundl
         };
       },
     },
+    options.deterministicInputBindingResolver,
   );
   const recordingRunner = new RecordingRunner(
     browserRuntime,
@@ -119,7 +122,7 @@ export function createRuntimeBundle(options: RuntimeBundleOptions): RuntimeBundl
       const runId = request.runId ?? `run-${Date.now()}`;
       return withActiveRun(runId, async (cancellationSignal) => {
       const recordingId = getExclusiveRecordingReplayId(request.testCase);
-      const documentId = request.testCase.prdPath?.documentId;
+      const documentId = getTestCasePrdPath(request.testCase)?.documentId;
       const recording = recordingId
         ? request.project.recordings.find((item) => item.id === recordingId)
         : undefined;

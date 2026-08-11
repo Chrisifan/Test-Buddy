@@ -23,7 +23,7 @@ import {
   type AgentSourceStepType,
   type AgentUsageBucket,
 } from './agent.js';
-import type { TestCaseDraft } from './studio.js';
+import { getTestCasePrdPath, type TestCaseDraft } from './studio.js';
 
 export interface AgentStubRequest {
   mode: 'ai' | 'aiAssert' | 'aiQuery';
@@ -1103,6 +1103,7 @@ function testCaseStepAction(
 export function createTestCaseAgentRun(request: TestCaseAgentRunRequest): AgentRunResult {
   const now = new Date().toISOString();
   const runId = request.runId ?? `agent-run-test-case-${Date.now()}`;
+  const documentId = getTestCasePrdPath(request.testCase)?.documentId;
   const intent = createAgentIntent({
     source: 'workflow',
     prompt: `执行测试用例「${request.testCase.name}」`,
@@ -1112,7 +1113,7 @@ export function createTestCaseAgentRun(request: TestCaseAgentRunRequest): AgentR
     groupId: request.testCase.groupId,
     ...(request.projectId ? { projectId: request.projectId } : {}),
     ...(request.environmentId ? { environmentId: request.environmentId } : {}),
-    ...(request.testCase.prdPath?.documentId ? { documentId: request.testCase.prdPath.documentId } : {}),
+    ...(documentId ? { documentId } : {}),
   });
   const planSteps: AgentStep[] = request.testCase.steps.map((step, index) => {
     const stepRun = request.stepRuns[index];

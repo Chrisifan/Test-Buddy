@@ -6576,6 +6576,215 @@ describe('StudioRuntime agent observation', () => {
     ]);
   });
 
+  it('resolves a confirmed credential input only for browser dispatch and omits the value from run evidence', async () => {
+    const project = { ...createEmptyProject(1), id: 'project-orders' };
+    const currentState: BrowserSessionState = {
+      id: 'session-real',
+      status: 'ready',
+      projectId: project.id,
+      currentUrl: 'https://example.test/orders',
+      pageTitle: 'Orders',
+      screenshotPath: '/tmp/orders.png',
+      message: 'ready',
+      updatedAt: '2026-08-10T08:00:00.000Z',
+    };
+    const input = vi.fn().mockResolvedValue(currentState);
+    const createPlan = vi.fn();
+    const resolve = vi.fn().mockResolvedValue('resolved-test-value');
+    const runtime = new StudioRuntime(
+      vi.fn(),
+      {
+        hasRealPage: () => true,
+        start: vi.fn(),
+        navigate: vi.fn(),
+        click: vi.fn(),
+        input,
+        capture: vi.fn().mockResolvedValue(currentState),
+        getState: () => currentState,
+      },
+      undefined,
+      { createPlan },
+      undefined,
+      undefined,
+      undefined,
+      { resolve },
+    );
+
+    const response = await runtime.runDeterministicStep({
+      project,
+      testCaseId: 'case-orders',
+      sourceStep: {
+        id: 'step-fill-email',
+        type: 'ai',
+        title: '填写邮箱',
+        body: '填写已确认的测试账号。',
+        execution: {
+          schemaVersion: 2,
+          intent: '填写已确认的测试账号。',
+          reviewStatus: 'confirmed',
+          actionRisk: 'medium',
+          action: {
+            kind: 'input',
+            locator: { selector: '#email', quality: 'acceptable' },
+            binding: { kind: 'credential', credentialId: 'cred-qa', field: 'username' },
+          },
+        },
+      },
+      plannedStep: {
+        action: 'input',
+        title: '填写邮箱',
+        instruction: '填写已确认的测试账号。',
+        selector: '#email',
+        value: 'caller-supplied-value-must-not-persist',
+      },
+      inputBinding: { kind: 'credential', credentialId: 'cred-qa', field: 'username' },
+      targetEnvironment: 'staging',
+      runtimeProfile: { browser: 'chromium', baseUrl: 'https://example.test', viewport: 'desktop', locale: 'zh-CN', headless: true },
+    });
+
+    expect(resolve).toHaveBeenCalledWith({
+      projectId: project.id,
+      binding: { kind: 'credential', credentialId: 'cred-qa', field: 'username' },
+    });
+    expect(input).toHaveBeenCalledWith({ selector: '#email', value: 'resolved-test-value' });
+    expect(createPlan).not.toHaveBeenCalled();
+    expect(response.agentRun.status).toBe('passed');
+    const persistedInputPlanStep = response.agentRun.plan.steps.find((step) => step.action === 'input');
+    expect(persistedInputPlanStep).toEqual(expect.objectContaining({ action: 'input', selector: '#email' }));
+    expect(persistedInputPlanStep).not.toHaveProperty('value');
+    expect(JSON.stringify({ agentRun: response.agentRun, detail: response.detail })).not.toContain('resolved-test-value');
+    expect(JSON.stringify({ agentRun: response.agentRun, detail: response.detail })).not.toContain('caller-supplied-value-must-not-persist');
+  });
+
+  it('keeps an input step neutral when its credential binding cannot be resolved', async () => {
+    const project = { ...createEmptyProject(1), id: 'project-orders' };
+    const currentState: BrowserSessionState = {
+      id: 'session-real',
+      status: 'ready',
+      projectId: project.id,
+      currentUrl: 'https://example.test/orders',
+      pageTitle: 'Orders',
+      message: 'ready',
+      updatedAt: '2026-08-10T08:00:00.000Z',
+    };
+    const input = vi.fn();
+    const resolve = vi.fn().mockRejectedValue(new Error('凭据已删除'));
+    const runtime = new StudioRuntime(
+      vi.fn(),
+      {
+        hasRealPage: () => true,
+        start: vi.fn(),
+        navigate: vi.fn(),
+        click: vi.fn(),
+        input,
+        capture: vi.fn().mockResolvedValue(currentState),
+        getState: () => currentState,
+      },
+      undefined,
+      { createPlan: vi.fn() },
+      undefined,
+      undefined,
+      undefined,
+      { resolve },
+    );
+
+    const response = await runtime.runDeterministicStep({
+      project,
+      testCaseId: 'case-orders',
+      sourceStep: {
+        id: 'step-fill-email',
+        type: 'ai',
+        title: '填写邮箱',
+        body: '填写已确认的测试账号。',
+        execution: {
+          schemaVersion: 2,
+          intent: '填写已确认的测试账号。',
+          reviewStatus: 'confirmed',
+          actionRisk: 'medium',
+          action: {
+            kind: 'input',
+            locator: { selector: '#email', quality: 'acceptable' },
+            binding: { kind: 'credential', credentialId: 'cred-deleted', field: 'username' },
+          },
+        },
+      },
+      plannedStep: { action: 'input', title: '填写邮箱', instruction: '填写已确认的测试账号。', selector: '#email' },
+      inputBinding: { kind: 'credential', credentialId: 'cred-deleted', field: 'username' },
+      targetEnvironment: 'staging',
+      runtimeProfile: { browser: 'chromium', baseUrl: 'https://example.test', viewport: 'desktop', locale: 'zh-CN', headless: true },
+    });
+
+    expect(response.agentRun.status).toBe('neutral');
+    expect(response.detail.steps).toEqual([
+      expect.objectContaining({ stepId: 'step-fill-email', status: 'neutral' }),
+    ]);
+    expect(input).not.toHaveBeenCalled();
+  });
+
+  it('uses the same main-process binding resolution for deterministic select steps', async () => {
+    const project = { ...createEmptyProject(1), id: 'project-orders' };
+    const currentState: BrowserSessionState = {
+      id: 'session-real',
+      status: 'ready',
+      projectId: project.id,
+      currentUrl: 'https://example.test/orders',
+      pageTitle: 'Orders',
+      message: 'ready',
+      updatedAt: '2026-08-10T08:00:00.000Z',
+    };
+    const select = vi.fn().mockResolvedValue(currentState);
+    const resolve = vi.fn().mockResolvedValue('region-code-from-store');
+    const runtime = new StudioRuntime(
+      vi.fn(),
+      {
+        hasRealPage: () => true,
+        start: vi.fn(),
+        navigate: vi.fn(),
+        click: vi.fn(),
+        input: vi.fn(),
+        select,
+        capture: vi.fn().mockResolvedValue(currentState),
+        getState: () => currentState,
+      },
+      undefined,
+      { createPlan: vi.fn() },
+      undefined,
+      undefined,
+      undefined,
+      { resolve },
+    );
+
+    const response = await runtime.runDeterministicStep({
+      project,
+      testCaseId: 'case-orders',
+      sourceStep: {
+        id: 'step-select-region',
+        type: 'ai',
+        title: '选择区域',
+        body: '选择已确认的测试区域。',
+        execution: {
+          schemaVersion: 2,
+          intent: '选择已确认的测试区域。',
+          reviewStatus: 'confirmed',
+          actionRisk: 'medium',
+          action: {
+            kind: 'select',
+            locator: { selector: '#region', quality: 'acceptable' },
+            binding: { kind: 'credential', credentialId: 'cred-region', field: 'secret' },
+          },
+        },
+      },
+      plannedStep: { action: 'select', title: '选择区域', instruction: '选择已确认的测试区域。', selector: '#region' },
+      inputBinding: { kind: 'credential', credentialId: 'cred-region', field: 'secret' },
+      targetEnvironment: 'staging',
+      runtimeProfile: { browser: 'chromium', baseUrl: 'https://example.test', viewport: 'desktop', locale: 'zh-CN', headless: true },
+    });
+
+    expect(select).toHaveBeenCalledWith({ selector: '#region', value: 'region-code-from-store' });
+    expect(response.agentRun.status).toBe('passed');
+    expect(JSON.stringify({ agentRun: response.agentRun, detail: response.detail })).not.toContain('region-code-from-store');
+  });
+
   it('cancels a deterministic selector wait without invoking the Planner', async () => {
     const currentState: BrowserSessionState = {
       id: 'session-real',

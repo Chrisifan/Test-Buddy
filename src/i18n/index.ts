@@ -21,6 +21,8 @@ type MessageKey =
   | 'app.shell.projectSettings'
   | 'app.shell.openSettings'
   | 'app.shell.noProject'
+  | 'app.storageError.title'
+  | 'app.storageError.description'
   | 'app.confirm.deleteTitle'
   | 'app.confirm.cancel'
   | 'app.confirm.deleteAction'
@@ -139,7 +141,20 @@ type MessageKey =
   | 'startup.midscene.skip'
   | 'startup.midscene.note'
   | 'startup.footer.ready'
-  | 'startup.footer.guide';
+  | 'startup.footer.guide'
+  | 'cases.binding.title'
+  | 'cases.binding.credential'
+  | 'cases.binding.chooseCredential'
+  | 'cases.binding.field'
+  | 'cases.binding.chooseField'
+  | 'cases.binding.username'
+  | 'cases.binding.secret'
+  | 'cases.binding.clear'
+  | 'cases.binding.noCredentials'
+  | 'cases.intent.businessGoal'
+  | 'cases.intent.preconditions'
+  | 'cases.intent.successCriteria'
+  | 'cases.intent.defaultBusinessGoal';
 
 type Messages = Partial<Record<string, string>>;
 
@@ -161,6 +176,8 @@ export const zhCN: Record<string, string> = {
   'app.shell.projectSettings': '项目设置',
   'app.shell.openSettings': '打开设置',
   'app.shell.noProject': '无项目',
+  'app.storageError.title': '无法读取本地工作台数据',
+  'app.storageError.description': '为保护现有数据，TestBuddy 已停止自动保存。请先检查本机存储文件后重新启动应用。',
   'app.confirm.deleteTitle': '删除此项？',
   'app.confirm.cancel': '取消',
   'app.confirm.deleteAction': '删除',
@@ -510,6 +527,33 @@ export const zhCN: Record<string, string> = {
   'project.credential.secret': '密码或 Token',
   'project.credential.localEncryption': '本机加密保存',
   'project.credential.save': '保存凭据',
+  'project.assets.title': '项目资产快照',
+  'project.assets.prepare': '选择目录并生成计划',
+  'project.assets.reselect': '重新选择目录',
+  'project.assets.planning': '正在生成计划...',
+  'project.assets.ready': '可写入',
+  'project.assets.conflicts': '存在目录冲突',
+  'project.assets.path': '目标目录',
+  'project.assets.files': '将写入 {count} 个资产文件',
+  'project.assets.confirm': '确认写入资产快照',
+  'project.assets.writing': '正在写入...',
+  'project.assets.written': '资产快照已写入',
+  'project.assets.error': '无法生成项目资产快照。',
+  'project.assets.bound': '已追踪资产快照',
+  'project.assets.refresh': '刷新状态',
+  'project.assets.status.checking': '正在检查',
+  'project.assets.status.inSync': '已同步',
+  'project.assets.status.localChanges': '本地有未快照修改',
+  'project.assets.status.externalChanges': '检测到外部修改',
+  'project.assets.status.unavailable': '目录不可用',
+  'project.assets.reloadPlan': '生成重载计划',
+  'project.assets.reloadPlanning': '正在生成重载计划...',
+  'project.assets.reloadReady': '可确认重载',
+  'project.assets.reloadBlocked': '重载已阻止',
+  'project.assets.reloadUnavailable': '无法读取快照',
+  'project.assets.reloadConfirm': '确认重载资产快照',
+  'project.assets.reloading': '正在重载...',
+  'project.assets.reloaded': '资产快照已重载',
   'project.metric.groups': '分组',
   'project.metric.environments': '环境',
   'project.metric.cases': '用例',
@@ -837,6 +881,19 @@ export const zhCN: Record<string, string> = {
   'cases.execution.revoke': '撤销确认',
   'cases.execution.unsupportedStatus': '不支持',
   'cases.execution.unsupported': '该结构化动作暂不支持离线执行。',
+  'cases.binding.title': '凭据输入绑定',
+  'cases.binding.credential': '凭据',
+  'cases.binding.chooseCredential': '选择已保存的凭据',
+  'cases.binding.field': '凭据字段',
+  'cases.binding.chooseField': '选择字段',
+  'cases.binding.username': '用户名',
+  'cases.binding.secret': '密钥',
+  'cases.binding.clear': '移除凭据绑定',
+  'cases.binding.noCredentials': '当前项目没有已保存的可用凭据。',
+  'cases.intent.businessGoal': '业务目标',
+  'cases.intent.preconditions': '前置条件',
+  'cases.intent.successCriteria': '成功标准',
+  'cases.intent.defaultBusinessGoal': '测试业务目标',
   'cases.form.notes': '用例说明',
   'cases.status.title': '当前状态',
   'cases.status.run': '运行状态',
@@ -1046,6 +1103,8 @@ export const enUS: Messages = {
   'app.shell.projectSettings': 'Project Settings',
   'app.shell.openSettings': 'Open Settings',
   'app.shell.noProject': 'No Project',
+  'app.storageError.title': 'Unable to load local workspace data',
+  'app.storageError.description': 'To protect your existing data, TestBuddy has stopped automatic saving. Check the local storage file before restarting the application.',
   'app.confirm.deleteTitle': 'Delete this item?',
   'app.confirm.cancel': 'Cancel',
   'app.confirm.deleteAction': 'Delete',
@@ -1395,6 +1454,33 @@ export const enUS: Messages = {
   'project.credential.secret': 'Password or Token',
   'project.credential.localEncryption': 'Encrypted on this device',
   'project.credential.save': 'Save Credential',
+  'project.assets.title': 'Project Asset Snapshot',
+  'project.assets.prepare': 'Choose Directory and Plan',
+  'project.assets.reselect': 'Choose Another Directory',
+  'project.assets.planning': 'Preparing Plan...',
+  'project.assets.ready': 'Ready to Write',
+  'project.assets.conflicts': 'Directory Has Conflicts',
+  'project.assets.path': 'Target Directory',
+  'project.assets.files': '{count} asset files will be written',
+  'project.assets.confirm': 'Confirm Write Asset Snapshot',
+  'project.assets.writing': 'Writing...',
+  'project.assets.written': 'Asset snapshot written',
+  'project.assets.error': 'Unable to prepare the project asset snapshot.',
+  'project.assets.bound': 'Tracked Asset Snapshot',
+  'project.assets.refresh': 'Refresh Status',
+  'project.assets.status.checking': 'Checking',
+  'project.assets.status.inSync': 'In Sync',
+  'project.assets.status.localChanges': 'Local Changes Pending Snapshot',
+  'project.assets.status.externalChanges': 'External Changes Detected',
+  'project.assets.status.unavailable': 'Directory Unavailable',
+  'project.assets.reloadPlan': 'Prepare Reload Plan',
+  'project.assets.reloadPlanning': 'Preparing Reload Plan...',
+  'project.assets.reloadReady': 'Ready to Reload',
+  'project.assets.reloadBlocked': 'Reload Blocked',
+  'project.assets.reloadUnavailable': 'Snapshot Unavailable',
+  'project.assets.reloadConfirm': 'Confirm Reload Asset Snapshot',
+  'project.assets.reloading': 'Reloading...',
+  'project.assets.reloaded': 'Asset snapshot reloaded',
   'project.metric.groups': 'Groups',
   'project.metric.environments': 'Environments',
   'project.metric.cases': 'Cases',
@@ -1722,6 +1808,19 @@ export const enUS: Messages = {
   'cases.execution.revoke': 'Revoke Confirmation',
   'cases.execution.unsupportedStatus': 'Unsupported',
   'cases.execution.unsupported': 'This structured action is not supported for offline execution yet.',
+  'cases.binding.title': 'Credential Input Binding',
+  'cases.binding.credential': 'Credential',
+  'cases.binding.chooseCredential': 'Choose a saved credential',
+  'cases.binding.field': 'Credential Field',
+  'cases.binding.chooseField': 'Choose a field',
+  'cases.binding.username': 'Username',
+  'cases.binding.secret': 'Secret',
+  'cases.binding.clear': 'Remove credential binding',
+  'cases.binding.noCredentials': 'This project has no saved credentials available.',
+  'cases.intent.businessGoal': 'Business Goal',
+  'cases.intent.preconditions': 'Preconditions',
+  'cases.intent.successCriteria': 'Success Criteria',
+  'cases.intent.defaultBusinessGoal': 'Test Business Goal',
   'cases.form.notes': 'Case Notes',
   'cases.status.title': 'Current Status',
   'cases.status.run': 'Run Status',

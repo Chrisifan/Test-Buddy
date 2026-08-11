@@ -376,17 +376,65 @@ describe('TestCaseManagementPage', () => {
     });
   });
 
-  it('keeps unsupported structured input actions review-only', () => {
-    const testCase = createStructuredActionCase({
-      kind: 'input',
-      locator: { selector: '#email', quality: 'acceptable' },
-      value: 'not-persisted@example.test',
-    });
+  it('binds an Agent input target to a saved credential and requires explicit confirmation', async () => {
+    const testCase: TestCaseDraft = {
+      ...selectedTestCase,
+      steps: [{
+        id: 'credential-input-step',
+        type: 'ai',
+        title: '填写邮箱',
+        body: '填写已保存的测试账号。',
+        execution: {
+          schemaVersion: 2,
+          intent: '填写待绑定的测试账号。',
+          reviewStatus: 'needsReview',
+          actionRisk: 'medium',
+          inputBindingTarget: {
+            kind: 'input',
+            locator: { selector: '#email', quality: 'acceptable' },
+          },
+        },
+      }],
+    };
 
-    renderPage({ testCase });
+    render(<CasePageHarness initialTestCase={testCase} />);
 
     expect(screen.queryByRole('button', { name: '确认确定性动作' })).not.toBeInTheDocument();
-    expect(screen.getByText('该结构化动作暂不支持离线执行。')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('combobox', { name: '凭据' }));
+    fireEvent.click(await screen.findByRole('option', { name: 'Staging 管理员' }));
+
+    expect(await screen.findByRole('button', { name: '确认确定性动作' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '确认确定性动作' }));
+    expect(screen.getByText('已确认')).toBeInTheDocument();
+  });
+
+  it('edits structured business intent separately from case notes', () => {
+    const testCase: TestCaseDraft = {
+      ...selectedTestCase,
+      notes: '保留给编辑者的补充说明。',
+      intent: {
+        schemaVersion: 1,
+        businessGoal: '验证订单提交流程',
+        preconditions: ['使用已准备的测试账号'],
+        successCriteria: ['页面展示提交成功提示'],
+      },
+    };
+
+    render(<CasePageHarness initialTestCase={testCase} />);
+
+    fireEvent.click(screen.getByRole('button', { name: '用例设置' }));
+    fireEvent.change(screen.getByLabelText('业务目标'), { target: { value: '验证订单提交和结果展示' } });
+    fireEvent.change(screen.getByLabelText('前置条件'), {
+      target: { value: '使用已准备的测试账号\n使用已准备的测试账号\n订单数据存在' },
+    });
+    fireEvent.change(screen.getByLabelText('成功标准'), {
+      target: { value: '页面展示提交成功提示\n订单状态更新为已提交' },
+    });
+
+    expect(screen.getByLabelText('业务目标')).toHaveValue('验证订单提交和结果展示');
+    expect(screen.getByLabelText('前置条件')).toHaveValue('使用已准备的测试账号\n订单数据存在');
+    expect(screen.getByLabelText('成功标准')).toHaveValue('页面展示提交成功提示\n订单状态更新为已提交');
+    expect(screen.getByLabelText('用例说明')).toHaveValue('保留给编辑者的补充说明。');
   });
 
   it('uses English labels for the editor controls', async () => {

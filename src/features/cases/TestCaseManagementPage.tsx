@@ -3,6 +3,8 @@ import type {
   RunTone,
   TestCaseDraft,
   TestCaseRunBlocker,
+  TestInputBindingTarget,
+  TestInputValueBinding,
   TestStepDraft,
 } from '../../../shared/studio.js';
 
@@ -24,11 +26,13 @@ import {
   ScanSearch,
   Settings2,
   ShieldCheck,
+  Unlink,
   WandSparkles,
   Trash2,
 } from 'lucide-react';
 
 import {
+  createTestCaseIntent,
   createManualStepAutomationReplacement,
   getConfirmedDeterministicTestStep,
   getConfirmedExplicitTestAssertion,
@@ -284,7 +288,32 @@ function CaseSettingsDialog({
   const targetUrlId = useId();
   const groupLabelId = useId();
   const environmentLabelId = useId();
+  const businessGoalId = useId();
+  const preconditionsId = useId();
+  const successCriteriaId = useId();
   const notesId = useId();
+
+  function updateIntent(patch: { businessGoal?: string; preconditions?: string[]; successCriteria?: string[] }) {
+    onUpdateTestCase((item) => {
+      const current = item.intent ?? createTestCaseIntent(item.name.trim() || t('cases.intent.defaultBusinessGoal'));
+      const intent = createTestCaseIntent(
+        patch.businessGoal ?? current.businessGoal,
+        {
+          preconditions: patch.preconditions ?? current.preconditions,
+          successCriteria: patch.successCriteria ?? current.successCriteria,
+        },
+      );
+      if (!intent.businessGoal) {
+        const { intent: _intent, ...caseWithoutIntent } = item;
+        return caseWithoutIntent;
+      }
+      return { ...item, intent };
+    });
+  }
+
+  function parseIntentLines(value: string): string[] {
+    return Array.from(new Set(value.split(/\r?\n/u).map((line) => line.trim()).filter(Boolean)));
+  }
 
   return (
     <Dialog onOpenChange={onOpenChange} open={open}>
@@ -336,6 +365,35 @@ function CaseSettingsDialog({
             </div>
           </div>
           <div className="grid gap-2">
+            <Label htmlFor={businessGoalId}>{t('cases.intent.businessGoal')}</Label>
+            <Textarea
+              className="min-h-20"
+              id={businessGoalId}
+              onChange={(event) => updateIntent({ businessGoal: event.target.value })}
+              value={testCase.intent?.businessGoal ?? ''}
+            />
+          </div>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="grid gap-2">
+              <Label htmlFor={preconditionsId}>{t('cases.intent.preconditions')}</Label>
+              <Textarea
+                className="min-h-24"
+                id={preconditionsId}
+                onChange={(event) => updateIntent({ preconditions: parseIntentLines(event.target.value) })}
+                value={testCase.intent?.preconditions.join('\n') ?? ''}
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor={successCriteriaId}>{t('cases.intent.successCriteria')}</Label>
+              <Textarea
+                className="min-h-24"
+                id={successCriteriaId}
+                onChange={(event) => updateIntent({ successCriteria: parseIntentLines(event.target.value) })}
+                value={testCase.intent?.successCriteria.join('\n') ?? ''}
+              />
+            </div>
+          </div>
+          <div className="grid gap-2">
             <Label htmlFor={notesId}>{t('cases.form.notes')}</Label>
             <Textarea
               className="min-h-28"
@@ -368,6 +426,8 @@ function StepInspector({
   const titleId = useId();
   const stepTypeLabelId = useId();
   const recordingLabelId = useId();
+  const inputBindingCredentialLabelId = useId();
+  const inputBindingFieldLabelId = useId();
   const instructionId = useId();
   const blocker = getTestStepRunBlocker(step, project.recordings);
   const boundRecording = project.recordings.find((recording) => recording.id === step.recordingId);
@@ -435,9 +495,68 @@ function StepInspector({
 
   const hasStructuredAction = step.type === 'ai' && Boolean(step.execution?.action);
   const hasStructuredAssertion = step.type === 'aiAssert' && Boolean(step.execution?.assertion);
-  const hasStructuredExecution = hasStructuredAction || hasStructuredAssertion;
+  const action = step.execution?.action;
+  const inputBindingTarget: TestInputBindingTarget | undefined = step.execution?.inputBindingTarget ??
+    (action?.kind === 'input' || action?.kind === 'select'
+      ? { kind: action.kind, locator: action.locator }
+      : undefined);
+  const inputBinding = action?.kind === 'input' || action?.kind === 'select'
+    ? action.binding
+    : undefined;
+  const hasInputBindingTarget = Boolean(inputBindingTarget);
+  const hasStructuredExecution = hasStructuredAction || hasStructuredAssertion || hasInputBindingTarget;
   const supportsDeterministicExecution = canConfirmStructuredExecution(step);
   const isDeterministicActionConfirmed = supportsDeterministicExecution && step.execution?.reviewStatus === 'confirmed';
+
+  function updateInputBinding(binding: TestInputValueBinding) {
+    if (!inputBindingTarget) {
+      return;
+    }
+    onUpdateTestCase((testCase) => ({
+      ...testCase,
+      steps: testCase.steps.map((item) => {
+        if (item.id !== step.id || !item.execution) {
+          return item;
+        }
+        return {
+          ...item,
+          execution: {
+            ...item.execution,
+            reviewStatus: 'needsReview',
+            inputBindingTarget,
+            action: {
+              kind: inputBindingTarget.kind,
+              locator: inputBindingTarget.locator,
+              binding,
+            },
+          },
+        };
+      }),
+    }), 'immediate');
+  }
+
+  function clearInputBinding() {
+    if (!inputBindingTarget) {
+      return;
+    }
+    onUpdateTestCase((testCase) => ({
+      ...testCase,
+      steps: testCase.steps.map((item) => {
+        if (item.id !== step.id || !item.execution) {
+          return item;
+        }
+        const { action: _action, ...execution } = item.execution;
+        return {
+          ...item,
+          execution: {
+            ...execution,
+            reviewStatus: 'needsReview',
+            inputBindingTarget,
+          },
+        };
+      }),
+    }), 'immediate');
+  }
 
   return (
     <div className="case-step-inspector-fields grid gap-4">
@@ -521,9 +640,85 @@ function StepInspector({
             <Badge className="case-editor-tag" variant="outline">
               {supportsDeterministicExecution
                 ? t(`cases.execution.${isDeterministicActionConfirmed ? 'confirmed' : 'needsReview'}`)
-                : t('cases.execution.unsupportedStatus')}
+                : hasInputBindingTarget
+                  ? t('cases.execution.needsReview')
+                  : t('cases.execution.unsupportedStatus')}
             </Badge>
           </div>
+          {inputBindingTarget ? (
+            <div className="grid gap-3 rounded-[4px] border border-border bg-muted/20 p-3">
+              <div className="flex items-center justify-between gap-3">
+                <Label>{t('cases.binding.title')}</Label>
+                {inputBinding ? (
+                  <Button
+                    aria-label={t('cases.binding.clear')}
+                    onClick={clearInputBinding}
+                    size="icon"
+                    title={t('cases.binding.clear')}
+                    type="button"
+                    variant="ghost"
+                  >
+                    <Unlink className="size-4" />
+                  </Button>
+                ) : null}
+              </div>
+              {project.credentialRefs.length ? (
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="grid gap-2">
+                    <Label id={inputBindingCredentialLabelId}>{t('cases.binding.credential')}</Label>
+                    <Select
+                      onValueChange={(credentialId) => {
+                        const credential = project.credentialRefs.find((item) => item.id === credentialId);
+                        if (!credential) {
+                          return;
+                        }
+                        updateInputBinding({
+                          kind: 'credential',
+                          credentialId,
+                          field: credential.username?.trim() ? 'username' : 'secret',
+                        });
+                      }}
+                      value={inputBinding?.credentialId}
+                    >
+                      <SelectTrigger aria-labelledby={inputBindingCredentialLabelId}>
+                        <SelectValue placeholder={t('cases.binding.chooseCredential')} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {project.credentialRefs.map((credential) => (
+                          <SelectItem key={credential.id} value={credential.id}>{credential.label}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="grid gap-2">
+                    <Label id={inputBindingFieldLabelId}>{t('cases.binding.field')}</Label>
+                    <Select
+                      disabled={!inputBinding}
+                      onValueChange={(field) => {
+                        if (!inputBinding || (field !== 'username' && field !== 'secret')) {
+                          return;
+                        }
+                        updateInputBinding({ ...inputBinding, field });
+                      }}
+                      value={inputBinding?.field}
+                    >
+                      <SelectTrigger aria-labelledby={inputBindingFieldLabelId}>
+                        <SelectValue placeholder={t('cases.binding.chooseField')} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem disabled={!project.credentialRefs.find((item) => item.id === inputBinding?.credentialId)?.username?.trim()} value="username">
+                          {t('cases.binding.username')}
+                        </SelectItem>
+                        <SelectItem disabled={!project.credentialRefs.find((item) => item.id === inputBinding?.credentialId)?.hasSecret} value="secret">
+                          {t('cases.binding.secret')}
+                        </SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+              ) : <p className="text-sm text-muted-foreground">{t('cases.binding.noCredentials')}</p>}
+            </div>
+          ) : null}
           {supportsDeterministicExecution ? (
             <Button
               className="justify-start"
@@ -540,9 +735,9 @@ function StepInspector({
                     : 'cases.execution.confirm',
               )}
             </Button>
-          ) : (
+          ) : !hasInputBindingTarget ? (
             <p className="text-sm leading-5 text-muted-foreground">{t('cases.execution.unsupported')}</p>
-          )}
+          ) : null}
         </div>
       ) : null}
 

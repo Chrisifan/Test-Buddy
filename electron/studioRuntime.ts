@@ -25,6 +25,7 @@ import {
   type RuntimeProfile,
   type ExplicitTestAssertion,
   type SessionStartRequest,
+  type TestInputValueBinding,
   type TestStepDraft,
   defaultMidsceneConfig,
   isMidsceneConfigured,
@@ -240,6 +241,10 @@ interface ReporterReportWriter {
   }>;
 }
 
+export interface DeterministicInputBindingResolver {
+  resolve(request: { projectId: string; binding: TestInputValueBinding }): Promise<string>;
+}
+
 export interface RunDeterministicStepRequest {
   /** Used only by the desktop runner to compose child-run evidence. */
   runId?: string;
@@ -249,6 +254,8 @@ export interface RunDeterministicStepRequest {
   cancellationSignal?: AbortSignal;
   sourceStep: TestStepDraft;
   plannedStep: AgentPlanStepDraft;
+  /** A reference only. The resolved value must never enter the Agent plan or run evidence. */
+  inputBinding?: TestInputValueBinding;
   assertion?: ExplicitTestAssertion;
   testCaseId: string;
   targetEnvironment: string;
@@ -338,7 +345,11 @@ function createWorkflowRunDetail(
   };
 }
 
-function isSupportedDeterministicPlanStep(step: AgentPlanStepDraft, assertion?: ExplicitTestAssertion): boolean {
+function isSupportedDeterministicPlanStep(
+  step: AgentPlanStepDraft,
+  assertion?: ExplicitTestAssertion,
+  inputBinding?: TestInputValueBinding,
+): boolean {
   if (step.action === 'assert') {
     return Boolean(assertion);
   }
@@ -348,7 +359,23 @@ function isSupportedDeterministicPlanStep(step: AgentPlanStepDraft, assertion?: 
   if (step.action === 'click' || step.action === 'scroll') {
     return Boolean(step.selector?.trim());
   }
+  if (step.action === 'input' || step.action === 'select') {
+    return Boolean(step.selector?.trim() && inputBinding);
+  }
   return step.action === 'wait' && (Boolean(step.selector?.trim()) || Boolean(step.timeoutMs && step.timeoutMs > 0));
+}
+
+/**
+ * Deterministic input values are resolved only in the main process immediately
+ * before browser dispatch. Never let a caller-provided plan value reach run
+ * evidence, even when this API is used outside TestRunner.
+ */
+function sanitizeDeterministicPlanStep(step: AgentPlanStepDraft): AgentPlanStepDraft {
+  if (step.action !== 'input' && step.action !== 'select') {
+    return step;
+  }
+  const { value: _value, ...safeStep } = step;
+  return safeStep;
 }
 
 function createDeterministicRunDetail(
@@ -2694,6 +2721,7 @@ export class StudioRuntime {
     private readonly agentVerifier?: AgentVerifier,
     private readonly agentReporter?: AgentReporter,
     private readonly reporterReportWriter?: ReporterReportWriter,
+    private readonly deterministicInputBindingResolver?: DeterministicInputBindingResolver,
   ) {}
 
   private async trySelectorFallbackForStep(
@@ -3766,6 +3794,86 @@ export class StudioRuntime {
     };
   }
 
+  private async prepareDeterministicBoundInput(
+    request: RunDeterministicStepRequest & { inputBinding: TestInputValueBinding },
+  ): Promise<BrowserPreparationResult> {
+    const action = request.sourceStep.execution?.action;
+    if (
+      !this.browserObserver ||
+      (action?.kind !== 'input' && action?.kind !== 'select') ||
+      !request.project?.id ||
+      !this.deterministicInputBindingResolver
+    ) {
+      return {
+        message: '凭据输入绑定不可用，未读取凭据且未派发浏览器动作。',
+        assertionEvaluation: {
+          status: 'neutral',
+          summary: '凭据输入绑定不可用。',
+          evidence: '当前运行缺少项目上下文或受控凭据解析器。',
+        },
+      };
+    }
+
+    const session = await awaitWithRunCancellation(this.browserObserver.capture(), request.cancellationSignal);
+    let value: string;
+    try {
+      value = await awaitWithRunCancellation(
+        this.deterministicInputBindingResolver.resolve({
+          projectId: request.project.id,
+          binding: request.inputBinding,
+        }),
+        request.cancellationSignal,
+      );
+    } catch (error) {
+      if (isRunCancelled(error)) {
+        throw error;
+      }
+      return {
+        session,
+        message: '凭据输入绑定无法解析，未派发浏览器动作。',
+        assertionEvaluation: {
+          status: 'neutral',
+          summary: '凭据输入绑定无法解析。',
+          evidence: (error as Error).message || '凭据引用不可用。',
+        },
+      };
+    }
+
+    throwIfRunCancelled(request.cancellationSignal);
+    if (action.kind === 'input') {
+      const nextSession = await awaitWithRunCancellation(
+        this.browserObserver.input({ selector: action.locator.selector, value }),
+        request.cancellationSignal,
+      );
+      return {
+        session: nextSession,
+        inputSelector: action.locator.selector,
+        message: `已使用已确认的凭据引用填写 selector：${action.locator.selector}`,
+      };
+    }
+
+    if (!this.browserObserver.select) {
+      return {
+        session,
+        message: '当前浏览器 runtime 未接入 select 执行器，未派发浏览器动作。',
+        assertionEvaluation: {
+          status: 'neutral',
+          summary: '下拉选择执行器不可用。',
+          evidence: '凭据值未传递给未接入的浏览器执行器。',
+        },
+      };
+    }
+    const nextSession = await awaitWithRunCancellation(
+      this.browserObserver.select({ selector: action.locator.selector, value }),
+      request.cancellationSignal,
+    );
+    return {
+      session: nextSession,
+      selectedSelector: action.locator.selector,
+      message: `已使用已确认的凭据引用选择 selector：${action.locator.selector}`,
+    };
+  }
+
   async runDeterministicStep(request: RunDeterministicStepRequest): Promise<RunDeterministicStepResponse> {
     const traceScopeId = request.runId ?? `agent-run-deterministic-${Date.now()}`;
     let ownsTraceScope = false;
@@ -3779,10 +3887,10 @@ export class StudioRuntime {
           request.plannedStep.action === 'navigate' && request.plannedStep.url
             ? request.plannedStep.url
             : request.runtimeProfile.baseUrl,
-        plannedPlan: {
-          title: request.sourceStep.title,
-          summary: request.assertion ? '执行用户已确认的显式测试断言。' : '执行用户已确认的确定性测试步骤。',
-          steps: [request.plannedStep],
+      plannedPlan: {
+        title: request.sourceStep.title,
+        summary: request.assertion ? '执行用户已确认的显式测试断言。' : '执行用户已确认的确定性测试步骤。',
+        steps: [sanitizeDeterministicPlanStep(request.plannedStep)],
           risks: ['仅执行已确认的结构化动作或断言；不会调用模型、重试、selector fallback 或重规划。'],
         },
         planner: {
@@ -3825,7 +3933,7 @@ export class StudioRuntime {
       ownsTraceScope = await this.beginTraceScope(traceScopeId);
       throwIfRunCancelled(request.cancellationSignal);
 
-      if (!isSupportedDeterministicPlanStep(request.plannedStep, request.assertion)) {
+      if (!isSupportedDeterministicPlanStep(request.plannedStep, request.assertion, request.inputBinding)) {
         return complete(
           createRun([
             neutralExecution(
@@ -3849,6 +3957,10 @@ export class StudioRuntime {
 
       const preparation = request.assertion
         ? await this.prepareDeterministicAssertion(request as RunDeterministicStepRequest & { assertion: ExplicitTestAssertion })
+        : request.inputBinding
+          ? await this.prepareDeterministicBoundInput(
+              request as RunDeterministicStepRequest & { inputBinding: TestInputValueBinding },
+            )
         : await this.prepareBrowserForAgent(
             {
               mode: 'ai',

@@ -7,6 +7,9 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { createEmptyProject, createPrdDocumentAsset, type ProjectDraft } from '../shared/studio.js';
 import {
   createProjectAssetSnapshot,
+  calculateProjectAssetRevision,
+  inspectProjectAssetBinding,
+  planProjectAssetReload,
   ProjectAssetStore,
   ProjectAssetStoreError,
   validateProjectAssetSnapshot,
@@ -27,6 +30,8 @@ describe('ProjectAssetStore', () => {
 
     const plan = await store.planMigration(project);
     expect(plan).toMatchObject({ projectId: project.id, projectDirectory, status: 'ready', conflicts: [] });
+    expect(plan.snapshotRevision).toMatch(/^[a-f0-9]{64}$/);
+    expect(plan.snapshotRevision).toBe(calculateProjectAssetRevision(project));
     expect(plan.files).toEqual(expect.arrayContaining([
       'project.json',
       'cases/case%2Fcheckout.json',
@@ -214,6 +219,81 @@ describe('ProjectAssetStore', () => {
     });
   });
 
+  it('distinguishes an in-sync snapshot, local edits, and an externally published revision', async () => {
+    const rootDirectory = await createTemporaryDirectory();
+    const projectDirectory = path.join(rootDirectory, 'orders-project');
+    const store = new ProjectAssetStore(projectDirectory);
+    await store.saveInitial(createAssetProject());
+    const current = await store.loadWithRevision();
+    const binding = {
+      projectId: current.project.id,
+      projectDirectory,
+      revision: current.revision,
+      boundAt: '2026-08-11T00:00:00.000Z',
+    };
+
+    await expect(inspectProjectAssetBinding(current.project, binding)).resolves.toMatchObject({ state: 'inSync', issues: [] });
+    await expect(inspectProjectAssetBinding({ ...current.project, name: '本地未快照修改' }, binding)).resolves.toMatchObject({
+      state: 'localChanges',
+      issues: [expect.objectContaining({ path: 'studio-data' })],
+    });
+
+    await store.save({ ...current.project, name: '外部发布的资产修改' }, current.revision);
+
+    await expect(inspectProjectAssetBinding(current.project, binding)).resolves.toMatchObject({
+      state: 'externalChanges',
+      issues: [expect.objectContaining({ path: 'project.json.revision' })],
+    });
+  });
+
+  it('reports a tracked project directory that becomes unavailable without modifying state', async () => {
+    const rootDirectory = await createTemporaryDirectory();
+    const projectDirectory = path.join(rootDirectory, 'orders-project');
+    const store = new ProjectAssetStore(projectDirectory);
+    await store.saveInitial(createAssetProject());
+    const current = await store.loadWithRevision();
+    await fs.rm(projectDirectory, { recursive: true, force: true });
+
+    await expect(inspectProjectAssetBinding(current.project, {
+      projectId: current.project.id,
+      projectDirectory,
+      revision: current.revision,
+      boundAt: '2026-08-11T00:00:00.000Z',
+    })).resolves.toMatchObject({ state: 'unavailable' });
+  });
+
+  it('plans a reload only for a valid external revision with no local edits', async () => {
+    const rootDirectory = await createTemporaryDirectory();
+    const projectDirectory = path.join(rootDirectory, 'orders-project');
+    const store = new ProjectAssetStore(projectDirectory);
+    await store.saveInitial(createAssetProject());
+    const current = await store.loadWithRevision();
+    const binding = {
+      projectId: current.project.id,
+      projectDirectory,
+      revision: current.revision,
+      boundAt: '2026-08-11T00:00:00.000Z',
+    };
+    await store.save({ ...current.project, name: '外部资产版本' }, current.revision);
+
+    const readyPlan = await planProjectAssetReload(current.project, binding);
+    expect(readyPlan).toMatchObject({
+      projectId: current.project.id,
+      projectDirectory,
+      status: 'ready',
+      issues: [],
+      snapshotRevision: expect.stringMatching(/^[a-f0-9]{64}$/),
+    });
+
+    await expect(planProjectAssetReload({ ...current.project, name: '本地编辑' }, binding)).resolves.toMatchObject({
+      status: 'requiresReview',
+      issues: expect.arrayContaining([expect.objectContaining({ path: 'studio-data' })]),
+    });
+
+    await fs.rm(projectDirectory, { recursive: true, force: true });
+    await expect(planProjectAssetReload(current.project, binding)).resolves.toMatchObject({ status: 'unavailable' });
+  });
+
   it('restores the previous snapshot when the staged directory exchange fails', async () => {
     const rootDirectory = await createTemporaryDirectory();
     const projectDirectory = path.join(rootDirectory, 'orders-project');
@@ -319,6 +399,8 @@ function createAssetProject(): ProjectDraft {
     ...project,
     testCases: [{
       schemaVersion: 2,
+      version: 1,
+      assetReferences: { fixtures: [], reusableFlows: [] },
       id: 'case/checkout',
       kind: 'scenario',
       groupId: group.id,

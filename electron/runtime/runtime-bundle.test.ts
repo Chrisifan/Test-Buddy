@@ -106,8 +106,8 @@ describe('RuntimeBundle test case routing', () => {
   });
 
   it.each([
-    ['input', { kind: 'input' as const, locator: { selector: '#email', quality: 'acceptable' as const }, value: 'qa@example.test' }],
-    ['select', { kind: 'select' as const, locator: { selector: '#region', quality: 'acceptable' as const }, value: 'shanghai' }],
+    ['input', { kind: 'input' as const, locator: { selector: '#email', quality: 'acceptable' as const }, binding: { kind: 'credential' as const, credentialId: 'cred-qa', field: 'username' as const } }],
+    ['select', { kind: 'select' as const, locator: { selector: '#region', quality: 'acceptable' as const }, binding: { kind: 'credential' as const, credentialId: 'cred-region', field: 'secret' as const } }],
     ['unknown-kind', { kind: 'unknown' } as never],
     ['primitive', 'unknown' as never],
   ])('runs a confirmed V2 %s action through TestRunner', async (actionName, action) => {

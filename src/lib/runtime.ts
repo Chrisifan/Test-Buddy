@@ -9,6 +9,13 @@ import type {
   MidsceneConnectionTestResult,
   PrdSemanticAnalysisRequest,
   PrdSemanticAnalysisResponse,
+  ProjectAssetBinding,
+  ProjectAssetBindingStatus,
+  ProjectAssetMigrationPlan,
+  ProjectAssetMigrationRequest,
+  ProjectAssetReloadPlan,
+  ProjectAssetReloadRequest,
+  ProjectAssetReloadResult,
   ProjectReportExportRequest,
   RunDetail,
   RuntimeProfile,
@@ -27,6 +34,7 @@ import type {
 } from '../../shared/studio.js';
 import {
   getExclusiveRecordingReplayId,
+  getTestCasePrdPath,
   isAgentRunnableTestCase,
   testCaseToWorkflow,
   updatePrdDocumentAnalysis,
@@ -54,6 +62,70 @@ function getDesktopApi() {
   }
 
   return window.desktopApi ?? null;
+}
+
+export function canPublishProjectAssetSnapshot(): boolean {
+  return Boolean(getDesktopApi());
+}
+
+export async function selectProjectAssetDirectory(): Promise<string | undefined> {
+  const desktopApi = getDesktopApi();
+  if (!desktopApi) {
+    return undefined;
+  }
+
+  return (await desktopApi.selectProjectAssetDirectory()) ?? undefined;
+}
+
+export async function planProjectAssetMigration(
+  request: ProjectAssetMigrationRequest,
+): Promise<ProjectAssetMigrationPlan | undefined> {
+  const desktopApi = getDesktopApi();
+  if (!desktopApi) {
+    return undefined;
+  }
+
+  return desktopApi.planProjectAssetMigration(request);
+}
+
+export async function writeProjectAssetSnapshot(request: ProjectAssetMigrationRequest): Promise<ProjectAssetBinding | undefined> {
+  const desktopApi = getDesktopApi();
+  if (!desktopApi) {
+    return undefined;
+  }
+
+  return desktopApi.writeProjectAssetSnapshot(request);
+}
+
+export async function inspectProjectAssetBinding(projectId: string): Promise<ProjectAssetBindingStatus | undefined> {
+  const desktopApi = getDesktopApi();
+  if (!desktopApi || typeof desktopApi.inspectProjectAssetBinding !== 'function') {
+    return undefined;
+  }
+
+  return (await desktopApi.inspectProjectAssetBinding(projectId)) ?? undefined;
+}
+
+export async function planProjectAssetReload(
+  request: ProjectAssetReloadRequest,
+): Promise<ProjectAssetReloadPlan | undefined> {
+  const desktopApi = getDesktopApi();
+  if (!desktopApi || typeof desktopApi.planProjectAssetReload !== 'function') {
+    return undefined;
+  }
+
+  return desktopApi.planProjectAssetReload(request);
+}
+
+export async function reloadProjectAssetSnapshot(
+  request: ProjectAssetReloadRequest,
+): Promise<ProjectAssetReloadResult | undefined> {
+  const desktopApi = getDesktopApi();
+  if (!desktopApi || typeof desktopApi.reloadProjectAssetSnapshot !== 'function') {
+    return undefined;
+  }
+
+  return desktopApi.reloadProjectAssetSnapshot(request);
 }
 
 export async function openArtifact(artifactPath: string): Promise<void> {
@@ -470,6 +542,7 @@ export async function runTestCase(request: RunTestCaseRequest): Promise<RunTestC
     return desktopApi.runTestCase(request);
   }
 
+  const documentId = getTestCasePrdPath(request.testCase)?.documentId;
   const recordingId = getExclusiveRecordingReplayId(request.testCase);
   const recording = recordingId
     ? request.project.recordings.find((item) => item.id === recordingId)
@@ -480,7 +553,7 @@ export async function runTestCase(request: RunTestCaseRequest): Promise<RunTestC
       environment: request.environment,
       recording,
       testCaseId: request.testCase.id,
-      ...(request.testCase.prdPath?.documentId ? { documentId: request.testCase.prdPath.documentId } : {}),
+      ...(documentId ? { documentId } : {}),
     });
   }
 
@@ -500,7 +573,7 @@ export async function runTestCase(request: RunTestCaseRequest): Promise<RunTestC
       ...(request.browserSession ? { browserSession: request.browserSession } : {}),
       project: request.project,
       environment: request.environment,
-      ...(request.testCase.prdPath?.documentId ? { documentId: request.testCase.prdPath.documentId } : {}),
+      ...(documentId ? { documentId } : {}),
     });
   }
 
@@ -525,7 +598,7 @@ export async function runTestCase(request: RunTestCaseRequest): Promise<RunTestC
     id: runId,
     projectId: request.project.id,
     testCaseId: request.testCase.id,
-    ...(request.testCase.prdPath?.documentId ? { documentId: request.testCase.prdPath.documentId } : {}),
+    ...(documentId ? { documentId } : {}),
     environmentId: request.environment.id,
     title,
     status: 'neutral',

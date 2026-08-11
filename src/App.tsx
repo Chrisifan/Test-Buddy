@@ -33,6 +33,7 @@ import {
   createTestCaseFromGeneratedPath,
   detachRecordingFromTestCases,
   findDefaultRecordingForCaseStep,
+  getTestCasePrdPath,
   getTestCaseRunBlocker,
   isRecordingLinkedToGeneratedPath,
   isTestCaseLinkedToGeneratedPath,
@@ -40,6 +41,7 @@ import {
   insertTestStep,
   isMidsceneConfigured,
   moveTestStep,
+  nextTestCaseVersion,
   prunePrdCoverageTriage,
   removeTestStep,
   testCaseToWorkflow,
@@ -56,6 +58,8 @@ import {
   type PrdDocumentKind,
   type PrdCoverageTarget,
   type PrdCoverageTriageDecisionStatus,
+  type ProjectAssetBinding,
+  type ProjectAssetReloadResult,
   type RecordingCapturedEvent,
   type ProjectDraft,
   type RuntimeInfo,
@@ -165,6 +169,7 @@ export function App() {
     persistence: 'localStorage',
   });
   const [projects, setProjects] = useState<ProjectDraft[]>(initialState.projects);
+  const [projectAssetBindings, setProjectAssetBindings] = useState<ProjectAssetBinding[]>(initialState.projectAssetBindings);
   const [selectedProjectId, setSelectedProjectId] = useState(initialState.selectedProjectId);
   const [selectedGroupId, setSelectedGroupId] = useState(initialState.selectedGroupId);
   const [selectedTestCaseId, setSelectedTestCaseId] = useState(initialState.selectedTestCaseId);
@@ -208,6 +213,7 @@ export function App() {
   const [runId, setRunId] = useState('run-draft');
   const [runLogs, setRunLogs] = useState(initialRunLog);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
+  const [storageLoadError, setStorageLoadError] = useState(false);
   const pageTransitionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const selectedRecordingIdRef = useRef(selectedRecordingId);
   const pendingTestCaseRunContextRef = useRef<{
@@ -263,7 +269,7 @@ export function App() {
   const t = createTranslator(effectiveLocale);
 
   function persistLatestStudioState(mode: SaveMode) {
-    if (!latestStudioStateRef.current) {
+    if (storageLoadError || !latestStudioStateRef.current) {
       return;
     }
 
@@ -317,6 +323,7 @@ export function App() {
         const [state, runtime] = await Promise.all([loadStudioState(), getRuntimeInfo()]);
         setRuntimeInfo(runtime);
         setProjects(state.projects);
+        setProjectAssetBindings(state.projectAssetBindings);
         setSelectedProjectId(state.selectedProjectId);
         setSelectedGroupId(state.selectedGroupId);
         setSelectedTestCaseId(state.selectedTestCaseId);
@@ -335,10 +342,7 @@ export function App() {
         setBrowserSession(state.browserSession);
         setNavigateUrl(hydratedProject?.defaultUrl ?? state.runtimeProfile.baseUrl);
       } catch {
-        setRuntimeInfo({
-          platform: 'browser',
-          persistence: 'localStorage',
-        });
+        setStorageLoadError(true);
       }
       setIsHydrated(true);
     })();
@@ -372,7 +376,7 @@ export function App() {
   }, [effectiveLocale, effectiveTheme]);
 
   useEffect(() => {
-    if (!isHydrated) {
+    if (!isHydrated || storageLoadError) {
       return;
     }
 
@@ -383,6 +387,7 @@ export function App() {
       selectedTestCaseId,
       selectedRecordingId,
       projects,
+      projectAssetBindings,
       runDetails,
       recentRuns,
       chatEntries,
@@ -408,6 +413,7 @@ export function App() {
     isHydrated,
     midsceneConfig,
     projects,
+    projectAssetBindings,
     recentRuns,
     runDetails,
     runtimeProfile,
@@ -415,6 +421,7 @@ export function App() {
     selectedProjectId,
     selectedTestCaseId,
     selectedRecordingId,
+    storageLoadError,
     startupGuide,
   ]);
 
@@ -673,6 +680,7 @@ export function App() {
                 testCase.id === selectedTestCase.id
                   ? {
                       ...updater(testCase),
+                      version: nextTestCaseVersion(testCase.version ?? 1),
                       lastEdited: t('app.runtime.justNow'),
                     }
                   : testCase,
@@ -771,6 +779,24 @@ export function App() {
     switchPage('projects');
   }
 
+  function handleProjectAssetBound(binding: ProjectAssetBinding) {
+    setProjectAssetBindings((current) => [
+      binding,
+      ...current.filter((candidate) => candidate.projectId !== binding.projectId),
+    ]);
+  }
+
+  function handleProjectAssetReloaded(result: ProjectAssetReloadResult) {
+    setProjects((current) => current.map((project) => project.id === result.project.id ? result.project : project));
+    setProjectAssetBindings((current) => [
+      result.binding,
+      ...current.filter((binding) => binding.projectId !== result.binding.projectId),
+    ]);
+    if (selectedProjectId === result.project.id) {
+      syncSelectionToProject(result.project);
+    }
+  }
+
   function handleSelectProject(projectId: string) {
     const project = projects.find((item) => item.id === projectId);
     if (!project) {
@@ -807,6 +833,7 @@ export function App() {
     const nextSelectedRunId = recentRuns.find((run) => run.projectId !== projectId)?.id ?? '';
 
     setProjects(nextProjects);
+    setProjectAssetBindings((current) => current.filter((binding) => binding.projectId !== projectId));
     setRunDetails((current) => current.filter((run) => run.projectId !== projectId));
     setRecentRuns((current) => current.filter((run) => run.projectId !== projectId));
     setSelectedProjectId(nextProject?.id ?? '');
@@ -1245,7 +1272,9 @@ export function App() {
 
     updateSelectedProject((project) => {
       const nextTestCases = project.testCases.map((testCase) =>
-        testCase.groupId === groupId ? { ...testCase, groupId: fallbackGroup.id } : testCase,
+        testCase.groupId === groupId
+          ? { ...testCase, groupId: fallbackGroup.id, version: nextTestCaseVersion(testCase.version ?? 1) }
+          : testCase,
       );
       const nextRecordings = project.recordings.map((recording) =>
         recording.groupId === groupId ? { ...recording, groupId: fallbackGroup.id } : recording,
@@ -1812,7 +1841,11 @@ export function App() {
     updateSelectedProject((project) => ({
       ...project,
       recordings: nextRecordings,
-      testCases: detached.testCases,
+      testCases: detached.testCases.map((testCase, index) =>
+        testCase === project.testCases[index]
+          ? testCase
+          : { ...testCase, version: nextTestCaseVersion(project.testCases[index]?.version ?? testCase.version ?? 1) },
+      ),
     }));
     setSelectedRecordingId(nextRecordings[0]?.id ?? '');
   }
@@ -2228,11 +2261,12 @@ export function App() {
       return;
     }
 
+    const documentId = getTestCasePrdPath(testCaseToRun)?.documentId;
     setIsRunning(true);
     pendingTestCaseRunContextRef.current = {
       projectId: selectedProject.id,
       testCaseId: testCaseToRun.id,
-      ...(testCaseToRun.prdPath?.documentId ? { documentId: testCaseToRun.prdPath.documentId } : {}),
+      ...(documentId ? { documentId } : {}),
       environmentId: environmentToRun.id,
       environmentName: environmentToRun.name,
     };
@@ -2372,6 +2406,17 @@ export function App() {
     setIsSettingsOpen(false);
   }
 
+  if (storageLoadError) {
+    return (
+      <section aria-live="assertive" className="grid h-screen place-items-center bg-background px-6 text-foreground" role="alert">
+        <div className="max-w-md rounded-[8px] border border-destructive/30 bg-card p-5 shadow-sm">
+          <h1 className="text-lg font-semibold">{t('app.storageError.title')}</h1>
+          <p className="mt-2 text-sm leading-6 text-muted-foreground">{t('app.storageError.description')}</p>
+        </div>
+      </section>
+    );
+  }
+
   if (isHydrated && !startupGuide.completed) {
     return (
       <StartupPage
@@ -2499,10 +2544,13 @@ export function App() {
                 onCreateProject={handleCreateProject}
                 onDeleteGroup={handleDeleteGroup}
                 onDeleteProject={handleDeleteProject}
+                onProjectAssetBound={handleProjectAssetBound}
+                onProjectAssetReloaded={handleProjectAssetReloaded}
                 onSaveCredential={handleSaveCredential}
                 onSelectGroup={setSelectedGroupId}
                 onSelectProject={handleSelectProject}
                 onUpdateProject={updateSelectedProject}
+                projectAssetBindings={projectAssetBindings}
                 projects={projects}
               selectedGroupId={selectedGroupId}
               selectedProject={selectedProject}

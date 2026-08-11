@@ -13,7 +13,12 @@ import type {
   StepType,
   TestStepDraft,
 } from '../../shared/studio.js';
-import { getConfirmedDeterministicTestStep, getConfirmedExplicitTestAssertion } from '../../shared/studio.js';
+import {
+  getConfirmedDeterministicTestInputBinding,
+  getConfirmedDeterministicTestStep,
+  getConfirmedExplicitTestAssertion,
+  getTestCasePrdPath,
+} from '../../shared/studio.js';
 import type { AgentPlanStepDraft, AgentRunResult } from '../../shared/agent.js';
 import type { RunDeterministicStepRequest, RunDeterministicStepResponse } from '../studioRuntime.js';
 import {
@@ -52,6 +57,7 @@ export class TestRunner {
     const runId = request.runId ?? `run-${Date.now()}`;
     const startedAt = new Date();
     const title = request.testCase.name;
+    const documentId = getTestCasePrdPath(request.testCase)?.documentId;
     const logs = [
       `[${timeLabel(startedAt)}] Run queued: ${request.project.name} / ${request.testCase.name}`,
       `[${timeLabel(startedAt)}] Environment: ${request.environment.name} -> ${request.environment.url}`,
@@ -136,8 +142,8 @@ export class TestRunner {
             environment: request.environment,
             recording,
             testCaseId: request.testCase.id,
-            ...(request.testCase.prdPath?.documentId
-              ? { documentId: request.testCase.prdPath.documentId }
+            ...(documentId
+              ? { documentId }
               : recording.prdPath?.documentId
                 ? { documentId: recording.prdPath.documentId }
                 : {}),
@@ -250,6 +256,7 @@ export class TestRunner {
       }
 
       const deterministicAction = getConfirmedDeterministicTestStep(step);
+      const deterministicInputBinding = getConfirmedDeterministicTestInputBinding(step);
       const deterministicAssertion = getConfirmedExplicitTestAssertion(step);
       const deterministicStep = deterministicAction ?? (deterministicAssertion ? toDeterministicAssertionPlanStep(step) : undefined);
       if (deterministicStep) {
@@ -274,6 +281,7 @@ export class TestRunner {
         const deterministic = await this.deterministicRunner.runDeterministicStep({
           sourceStep: step,
           plannedStep: deterministicStep,
+          ...(deterministicInputBinding ? { inputBinding: deterministicInputBinding } : {}),
           ...(deterministicAssertion ? { assertion: deterministicAssertion } : {}),
           testCaseId: request.testCase.id,
           targetEnvironment: request.environment.name,
@@ -286,7 +294,7 @@ export class TestRunner {
           },
           project: request.project,
           environment: request.environment,
-          ...(request.testCase.prdPath?.documentId ? { documentId: request.testCase.prdPath.documentId } : {}),
+          ...(documentId ? { documentId } : {}),
           parentRunId: runId,
           ...(request.browserSession ? { browserSession: request.browserSession } : {}),
           ...(request.cancellationSignal ? { cancellationSignal: request.cancellationSignal } : {}),
@@ -372,7 +380,7 @@ export class TestRunner {
           ...(request.browserSession ? { browserSession: request.browserSession } : {}),
           project: request.project,
           environment: request.environment,
-          ...(request.testCase.prdPath?.documentId ? { documentId: request.testCase.prdPath.documentId } : {}),
+          ...(documentId ? { documentId } : {}),
           parentRunId: runId,
           preserveCurrentPage: index > 0,
           ...(request.cancellationSignal ? { cancellationSignal: request.cancellationSignal } : {}),
@@ -452,7 +460,7 @@ export class TestRunner {
       id: runId,
       projectId: request.project.id,
       testCaseId: request.testCase.id,
-      ...(request.testCase.prdPath?.documentId ? { documentId: request.testCase.prdPath.documentId } : {}),
+      ...(documentId ? { documentId } : {}),
       environmentId: request.environment.id,
       title,
       status: cancellation ? 'neutral' : hasFailure ? 'failed' : hasNeutral ? 'neutral' : 'passed',
@@ -497,11 +505,12 @@ export class TestRunner {
     artifacts: RunArtifact[],
   ): RunTestCaseResponse {
     const cancellation = createUserCancellation();
+    const documentId = getTestCasePrdPath(request.testCase)?.documentId;
     const detail: RunDetail = {
       id: runId,
       projectId: request.project.id,
       testCaseId: request.testCase.id,
-      ...(request.testCase.prdPath?.documentId ? { documentId: request.testCase.prdPath.documentId } : {}),
+      ...(documentId ? { documentId } : {}),
       environmentId: request.environment.id,
       title,
       status: 'neutral',

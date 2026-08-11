@@ -12,13 +12,16 @@ import {
   createTestCaseFromAgentRun,
   createTestCaseFromGeneratedPath,
   createTestCaseFromRecording,
+  createEmptyTestCase,
   createEmptyProject,
   createInitialStudioState,
   createManualStepAutomationReplacement,
   createReporterFixDraft,
+  getConfirmedDeterministicTestInputBinding,
   getConfirmedDeterministicTestStep,
   getConfirmedExplicitTestAssertion,
   getExclusiveRecordingReplayId,
+  getTestCasePrdPath,
   isRecordingLinkedToGeneratedPath,
   isConfirmedDeterministicTestStep,
   isTestCaseLinkedToGeneratedPath,
@@ -28,9 +31,12 @@ import {
   insertTestStep,
   isAgentRunnableTestCase,
   moveTestStep,
+  mergeProjectAssetBindings,
+  normalizeProjectAssetBindings,
   removeTestStep,
   prunePrdCoverageTriage,
   updatePrdDocumentAnalysis,
+  workflowToTestCase,
 } from './studio.js';
 import { createStubAgentRun } from './agentStub.js';
 
@@ -85,6 +91,19 @@ describe('studio state hydration', () => {
     );
     expect(testCase?.steps).toHaveLength(5);
     expect(testCase?.sourceIntent).toBe('使用测试账号提交订单并读取订单编号');
+    expect(testCase?.intent).toEqual({
+      schemaVersion: 1,
+      businessGoal: '使用测试账号提交订单并读取订单编号',
+      preconditions: [],
+      successCriteria: [],
+    });
+    expect(testCase?.provenance).toEqual([
+      {
+        kind: 'agentRun',
+        runId: agentRun.runId,
+        stepIds: agentRun.plan.steps.filter((step) => Boolean(step.sourceStepType)).map((step) => step.id),
+      },
+    ]);
     expect(testCase?.steps[0]?.execution).toMatchObject({
       schemaVersion: 2,
       intent: '进入订单页',
@@ -97,8 +116,13 @@ describe('studio state hydration', () => {
       intent: '输入待确认的值到 #email',
       reviewStatus: 'needsReview',
       actionRisk: 'medium',
+      inputBindingTarget: {
+        kind: 'input',
+        locator: { selector: '#email', quality: 'acceptable' },
+      },
     });
     expect(testCase?.steps[1]?.execution?.action).toBeUndefined();
+    expect(JSON.stringify(testCase)).not.toContain('qa@example.test');
     expect(testCase?.steps[2]?.execution).toMatchObject({
       actionRisk: 'high',
       action: {
@@ -1142,17 +1166,65 @@ describe('studio state hydration', () => {
 
     expect(prdCase).toMatchObject({
       schemaVersion: 2,
+      version: 1,
+      assetReferences: { fixtures: [], reusableFlows: [] },
       source: 'prd',
       sourceIntent: path.sourceExcerpt,
+      intent: {
+        schemaVersion: 1,
+        businessGoal: path.sourceExcerpt,
+        preconditions: [],
+        successCriteria: path.steps.filter((step) => step.type === 'aiAssert').map((step) => step.body),
+      },
+      provenance: [{ kind: 'prdPath', documentId: document.id, pathId: path.id }],
       prdPath: { documentId: document.id, pathId: path.id },
     });
     expect(recordingCase).toMatchObject({
       schemaVersion: 2,
+      version: 1,
+      assetReferences: { fixtures: [], reusableFlows: [] },
       source: 'recording',
       sourceIntent: recording.comparisonGoal,
+      intent: {
+        schemaVersion: 1,
+        businessGoal: recording.comparisonGoal,
+        preconditions: [],
+        successCriteria: [recording.comparisonGoal],
+      },
+      provenance: [
+        { kind: 'recording', recordingId: recording.id, stepIds: recording.steps.map((step) => step.id) },
+        { kind: 'prdPath', documentId: document.id, pathId: path.id },
+      ],
     });
     expect(recordingCase.steps[1]).toMatchObject({ type: 'aiAssert', body: recording.comparisonGoal });
     expect(recordingCase.steps[1]?.execution).toBeUndefined();
+
+    expect(createEmptyTestCase(3, project.groups[0]!.id, project.environments[0]!.id)).toMatchObject({
+      schemaVersion: 2,
+      version: 1,
+      assetReferences: { fixtures: [], reusableFlows: [] },
+      intent: {
+        schemaVersion: 1,
+        businessGoal: '新的测试用例 3',
+        preconditions: [],
+        successCriteria: [],
+      },
+    });
+    expect(workflowToTestCase({
+      id: 'workflow-manual',
+      kind: 'scenario',
+      name: '手工订单校验',
+      category: '订单',
+      lastEdited: '刚刚',
+      url: project.defaultUrl,
+      notes: '',
+      steps: [],
+    }).intent).toEqual({
+      schemaVersion: 1,
+      businessGoal: '手工订单校验',
+      preconditions: [],
+      successCriteria: [],
+    });
   });
 
   it('starts with an empty workspace and removes the legacy demo workspace during hydration', () => {
@@ -1166,6 +1238,38 @@ describe('studio state hydration', () => {
     expect(hydrated.recentRuns).toEqual([]);
     expect(hydrated.chatEntries).toEqual([]);
     expect(hydrated.selectedProjectId).toBe('');
+  });
+
+  it('keeps only valid asset bindings for surviving projects and preserves them across a stale renderer save', () => {
+    const project = { ...createEmptyProject(1), id: 'project-assets' };
+    const binding = {
+      projectId: project.id,
+      projectDirectory: '/tmp/project-assets',
+      revision: 'a'.repeat(64),
+      boundAt: '2026-08-11T00:00:00.000Z',
+    };
+    const hydrated = hydrateStudioState({
+      ...createInitialStudioState(),
+      projects: [project],
+      projectAssetBindings: [
+        binding,
+        { ...binding, projectId: 'project-removed' },
+        { ...binding, revision: 'not-a-revision' },
+      ],
+    });
+
+    expect(hydrated.projectAssetBindings).toEqual([binding]);
+    expect(normalizeProjectAssetBindings([binding, { ...binding }], [project])).toEqual([binding]);
+    expect(mergeProjectAssetBindings([binding], [], [project])).toEqual([binding]);
+    expect(mergeProjectAssetBindings([binding], [{ ...binding, revision: 'b'.repeat(64), boundAt: '2026-08-11T00:01:00.000Z' }], [project])).toEqual([
+      { ...binding, revision: 'b'.repeat(64), boundAt: '2026-08-11T00:01:00.000Z' },
+    ]);
+    expect(mergeProjectAssetBindings(
+      [{ ...binding, revision: 'b'.repeat(64), boundAt: '2026-08-11T00:01:00.000Z' }],
+      [binding],
+      [project],
+    )).toEqual([{ ...binding, revision: 'b'.repeat(64), boundAt: '2026-08-11T00:01:00.000Z' }]);
+    expect(mergeProjectAssetBindings([binding], [], [])).toEqual([]);
   });
 
   it('keeps persisted user projects while removing only the legacy demo workspace', () => {
@@ -1207,12 +1311,169 @@ describe('studio state hydration', () => {
 
     expect(hydrated.projects[0]?.testCases[0]).toMatchObject({
       schemaVersion: 2,
+      version: 1,
+      assetReferences: { fixtures: [], reusableFlows: [] },
       id: legacyCase.id,
       source: 'prd',
       prdPath: legacyCase.prdPath,
+      provenance: [{ kind: 'prdPath', documentId: 'doc-orders', pathId: 'path-checkout' }],
       sourceIntent: legacyCase.sourceIntent,
       steps: legacyCase.steps,
     });
+    expect(hydrated.projects[0]?.testCases[0]?.intent).toBeUndefined();
+  });
+
+  it('normalizes explicit Hybrid Case intent without inferring it from legacy text', () => {
+    const project = createEmptyProject(8);
+    const baseCase = project.testCases[0] ?? createEmptyTestCase(8, project.groups[0]!.id, project.environments[0]!.id);
+    const hydrated = hydrateStudioState({
+      ...createInitialStudioState(),
+      projects: [{
+        ...project,
+        testCases: [
+          {
+            ...baseCase,
+            id: 'case-valid-intent',
+            sourceIntent: '旧来源意图不应成为结构化合同',
+            notes: '旧说明也不应被反推为业务目标。',
+            intent: {
+              schemaVersion: 1,
+              businessGoal: '  提交订单  ',
+              preconditions: [' 已登录 ', '', '已登录', 42],
+              successCriteria: ['显示成功提示', ' 显示成功提示 ', null],
+            },
+          },
+          {
+            ...baseCase,
+            id: 'case-malformed-intent',
+            sourceIntent: '只保留为旧来源意图',
+            notes: '只保留为旧用例说明。',
+            intent: { schemaVersion: 2, businessGoal: '不应保留', preconditions: [], successCriteria: [] },
+          },
+        ] as never,
+      }],
+      selectedProjectId: project.id,
+    });
+
+    expect(hydrated.projects[0]?.testCases[0]?.intent).toEqual({
+      schemaVersion: 1,
+      businessGoal: '提交订单',
+      preconditions: ['已登录'],
+      successCriteria: ['显示成功提示'],
+    });
+    expect(hydrated.projects[0]?.testCases[1]?.intent).toBeUndefined();
+    expect(hydrated.projects[0]?.testCases[1]?.sourceIntent).toBe('只保留为旧来源意图');
+    expect(hydrated.projects[0]?.testCases[1]?.notes).toBe('只保留为旧用例说明。');
+  });
+
+  it('normalizes provenance and derives recording plus PRD links for legacy replay cases', () => {
+    const project = createEmptyProject(6);
+    const document = createPrdDocumentAsset({
+      name: 'checkout.md',
+      kind: 'markdown',
+      size: 100,
+      sourceText: '# Checkout\n- 用户提交订单后必须展示成功提示。',
+    });
+    const path = document.generatedPaths[0]!;
+    const recording = createRecordingFromGeneratedPath({
+      path,
+      documentId: document.id,
+      groupId: project.groups[0]!.id,
+      environmentId: project.environments[0]!.id,
+      startUrl: project.defaultUrl,
+      seed: 1,
+    });
+    const { provenance: _discardedProvenance, ...baseRecordingCase } = createEmptyTestCase(
+      2,
+      project.groups[0]!.id,
+      project.environments[0]!.id,
+    );
+    const legacyRecordingCase = {
+      ...baseRecordingCase,
+      id: 'case-legacy-recording',
+      kind: 'recording' as const,
+      source: 'recording' as const,
+      steps: [{
+        id: 'legacy-replay',
+        type: 'recordingReplay' as const,
+        title: '回放',
+        body: '执行已有录制。',
+        recordingId: recording.id,
+      }],
+    };
+    const canonicalCase = {
+      ...createEmptyTestCase(3, project.groups[0]!.id, project.environments[0]!.id),
+      id: 'case-canonical-provenance',
+      source: 'prd' as const,
+      prdPath: { documentId: 'obsolete-doc', pathId: 'obsolete-path' },
+      provenance: [
+        { kind: 'prdPath', documentId: document.id, pathId: path.id },
+        { kind: 'prdPath', documentId: document.id, pathId: path.id },
+        { kind: 'agentRun', runId: '', stepIds: ['not-kept'] },
+        { kind: 'recording', recordingId: recording.id, stepIds: [recording.steps[0]!.id, recording.steps[0]!.id] },
+      ] as never,
+    };
+
+    const hydrated = hydrateStudioState({
+      ...createInitialStudioState(),
+      projects: [{ ...project, documents: [document], recordings: [recording], testCases: [legacyRecordingCase, canonicalCase] }],
+      selectedProjectId: project.id,
+    });
+    const [migratedRecordingCase, normalizedCanonicalCase] = hydrated.projects[0]!.testCases;
+
+    expect(migratedRecordingCase?.provenance).toEqual([
+      { kind: 'recording', recordingId: recording.id, stepIds: recording.steps.map((step) => step.id) },
+      { kind: 'prdPath', documentId: document.id, pathId: path.id },
+    ]);
+    expect(getTestCasePrdPath(migratedRecordingCase!)).toEqual({ documentId: document.id, pathId: path.id });
+    expect(normalizedCanonicalCase?.provenance).toEqual([
+      { kind: 'prdPath', documentId: document.id, pathId: path.id },
+      { kind: 'recording', recordingId: recording.id, stepIds: [recording.steps[0]!.id] },
+    ]);
+    expect(getTestCasePrdPath(normalizedCanonicalCase!)).toEqual({ documentId: document.id, pathId: path.id });
+  });
+
+  it('normalizes case versions and versioned asset references during hydration', () => {
+    const project = createEmptyProject(7);
+    const baseCase = project.testCases[0]!;
+    const hydrated = hydrateStudioState({
+      ...createInitialStudioState(),
+      projects: [{
+        ...project,
+        testCases: [{
+          ...baseCase,
+          version: -2,
+          assetReferences: {
+            fixtures: [
+              { id: 'fixture-seed', version: 3 },
+              { id: 'fixture-seed', version: 4 },
+              { id: '', version: 1 },
+              { id: 'fixture-bad-version', version: 0 },
+            ],
+            reusableFlows: [
+              { id: 'flow-login', version: 2 },
+              { id: 'flow-cart', version: 1 },
+            ],
+            baseline: { id: 'baseline-checkout', version: 5 },
+          },
+        }],
+      }],
+      selectedProjectId: project.id,
+    });
+
+    expect(hydrated.projects[0]?.testCases[0]).toMatchObject({
+      version: 1,
+      assetReferences: {
+        fixtures: [{ id: 'fixture-seed', version: 3 }],
+        reusableFlows: [
+          { id: 'flow-login', version: 2 },
+          { id: 'flow-cart', version: 1 },
+        ],
+        baseline: { id: 'baseline-checkout', version: 5 },
+      },
+    });
+    expect(studio.nextTestCaseVersion(1)).toBe(2);
+    expect(studio.nextTestCaseVersion(Number.NaN)).toBe(2);
   });
 
   it('keeps legacy test steps unchanged and discards malformed V2 execution drafts during hydration', () => {
@@ -1557,6 +1818,51 @@ describe('studio state hydration', () => {
     ]);
   });
 
+  it('drops legacy raw input values while hydrating persisted cases', () => {
+    const project = createEmptyProject(1);
+    const rawState = {
+      ...createInitialStudioState(),
+      selectedProjectId: project.id,
+      projects: [{
+        ...project,
+        testCases: [{
+          id: 'case-legacy-input',
+          kind: 'scenario' as const,
+          groupId: project.groups[0]!.id,
+          environmentId: project.environments[0]!.id,
+          source: 'manual' as const,
+          name: '旧输入步骤',
+          category: '安全迁移',
+          lastEdited: '刚刚',
+          url: project.defaultUrl,
+          notes: '',
+          steps: [{
+            id: 'legacy-input-step',
+            type: 'ai' as const,
+            title: '填写邮箱',
+            body: '填写测试账号。',
+            execution: {
+              schemaVersion: 2 as const,
+              intent: '填写测试账号。',
+              reviewStatus: 'confirmed' as const,
+              actionRisk: 'medium' as const,
+              action: {
+                kind: 'input',
+                locator: { selector: '#email', quality: 'acceptable' },
+                value: 'legacy-value@example.test',
+              },
+            },
+          }],
+        }],
+      }],
+    } as unknown as studio.StudioState;
+
+    const hydrated = hydrateStudioState(rawState);
+
+    expect(hydrated.projects[0]!.testCases[0]!.steps[0]!.execution).toBeUndefined();
+    expect(JSON.stringify(hydrated)).not.toContain('legacy-value@example.test');
+  });
+
   it('identifies test cases that can run through the Agent workflow runtime', () => {
     const project = createEmptyProject(1);
     const baseCase = {
@@ -1645,7 +1951,7 @@ describe('studio state hydration', () => {
               action: {
                 kind: 'input',
                 locator: { selector: '#email', quality: 'acceptable' },
-                value: 'qa@example.test',
+                binding: { kind: 'credential', credentialId: 'cred-email', field: 'username' },
               },
             },
           },
@@ -1669,7 +1975,7 @@ describe('studio state hydration', () => {
               action: {
                 kind: 'select',
                 locator: { selector: '#region', quality: 'acceptable' },
-                value: 'shanghai',
+                binding: { kind: 'credential', credentialId: 'cred-region', field: 'secret' },
               },
             },
           },
@@ -1693,7 +1999,7 @@ describe('studio state hydration', () => {
               action: {
                 kind: 'input',
                 locator: { selector: '#email', quality: 'acceptable' },
-                value: 'qa@example.test',
+                binding: { kind: 'credential', credentialId: 'cred-email', field: 'username' },
               },
             },
           },
@@ -1795,6 +2101,36 @@ describe('studio state hydration', () => {
         confirmedAction({ kind: 'click', locator: { selector: '.submit', quality: 'unresolved' } }),
       ),
     ).toBeUndefined();
+    const confirmedInput = confirmedAction({
+      kind: 'input',
+      locator: { selector: '#email', quality: 'acceptable' },
+      binding: { kind: 'credential', credentialId: 'cred-qa', field: 'username' },
+    });
+    expect(getConfirmedDeterministicTestStep(confirmedInput)).toEqual({
+      action: 'input',
+      title: 'input 标题',
+      instruction: 'input 说明',
+      selector: '#email',
+    });
+    expect(getConfirmedDeterministicTestInputBinding(confirmedInput)).toEqual({
+      kind: 'credential',
+      credentialId: 'cred-qa',
+      field: 'username',
+    });
+    expect(
+      getConfirmedDeterministicTestStep(
+        confirmedAction({
+          kind: 'select',
+          locator: { selector: '#region', quality: 'acceptable' },
+          binding: { kind: 'credential', credentialId: 'cred-region', field: 'secret' },
+        }),
+      ),
+    ).toEqual({
+      action: 'select',
+      title: 'select 标题',
+      instruction: 'select 说明',
+      selector: '#region',
+    });
   });
 
   it('accepts only confirmed and complete V2 explicit assertions', () => {
@@ -1900,14 +2236,14 @@ describe('studio state hydration', () => {
         ...confirmedClick,
         execution: {
           ...confirmedClick.execution,
-          action: { kind: 'input' as const, locator: { selector: '#email', quality: 'acceptable' as const }, value: 'qa@example.test' },
+          action: { kind: 'input' as const, locator: { selector: '#email', quality: 'acceptable' as const }, value: 'qa@example.test' } as never,
         },
       },
       {
         ...confirmedClick,
         execution: {
           ...confirmedClick.execution,
-          action: { kind: 'select' as const, locator: { selector: '#region', quality: 'acceptable' as const }, value: 'shanghai' },
+          action: { kind: 'select' as const, locator: { selector: '#region', quality: 'acceptable' as const }, value: 'shanghai' } as never,
         },
       },
       {

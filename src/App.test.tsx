@@ -1,7 +1,7 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { createEmptyProject, createInitialStudioState } from '../shared/studio.js';
+import { createEmptyProject, createInitialStudioState, type DesktopApi } from '../shared/studio.js';
 import { App } from './App.js';
 
 describe('App shell', () => {
@@ -14,6 +14,34 @@ describe('App shell', () => {
 
     expect(await screen.findByLabelText('启动屏')).toBeInTheDocument();
     expect(screen.getByRole('heading', { level: 1, name: '先把 AI 测试引擎接入工作台' })).toBeInTheDocument();
+  });
+
+  it('keeps the workspace read-only when desktop state loading fails', async () => {
+    vi.useFakeTimers();
+    const originalDesktopApi = window.desktopApi;
+    const desktopApi = {
+      getRuntimeInfo: vi.fn().mockResolvedValue({ platform: 'desktop', persistence: 'file' }),
+      loadStudioState: vi.fn().mockRejectedValue(new Error('injected read failure')),
+      onRecordingEvent: vi.fn().mockReturnValue(() => undefined),
+      onRunEvent: vi.fn().mockReturnValue(() => undefined),
+      saveStudioState: vi.fn().mockResolvedValue(undefined),
+    } as unknown as DesktopApi;
+    window.desktopApi = desktopApi;
+
+    try {
+      render(<App />);
+      await act(async () => {
+        await Promise.resolve();
+        await vi.advanceTimersByTimeAsync(500);
+      });
+
+      expect(desktopApi.loadStudioState).toHaveBeenCalledOnce();
+      expect(screen.getByRole('alert')).toHaveTextContent('无法读取本地工作台数据');
+      expect(desktopApi.saveStudioState).not.toHaveBeenCalled();
+    } finally {
+      window.desktopApi = originalDesktopApi;
+      vi.useRealTimers();
+    }
   });
 
   it('uses the Automation Pro shell after startup is skipped', async () => {

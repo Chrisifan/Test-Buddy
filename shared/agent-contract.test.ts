@@ -456,6 +456,7 @@ describe('agent contract helpers', () => {
         groupId: 'group-core',
         environmentId: 'env-staging',
         source: 'recording',
+        provenance: [{ kind: 'prdPath', documentId: 'doc-login', pathId: 'path-login' }],
         name: '登录混合用例',
         category: '核心链路',
         lastEdited: '刚刚',
@@ -475,6 +476,7 @@ describe('agent contract helpers', () => {
 
     expect(run.runId).toBe('agent-run-case-login');
     expect(run.intent.testCaseId).toBe('case-login');
+    expect(run.intent.documentId).toBe('doc-login');
     expect(run.status).toBe('neutral');
     expect(run.plan.steps.map((step) => [step.id, step.sourceStepType, step.action])).toEqual([
       ['replay', 'recordingReplay', 'observe'],
