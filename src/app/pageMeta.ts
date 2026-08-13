@@ -3,13 +3,14 @@ export type AppPage =
   | 'projects'
   | 'documents'
   | 'cases'
+  | 'suites'
   | 'runs'
   | 'nl'
   | 'workflow'
   | 'recording';
 
 export const pageMeta: Record<
-  Exclude<AppPage, 'home' | 'projects' | 'documents' | 'cases' | 'runs'>,
+  Exclude<AppPage, 'home' | 'projects' | 'documents' | 'cases' | 'suites' | 'runs'>,
   {
     title: string;
     description: string;

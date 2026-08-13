@@ -32,6 +32,8 @@ import type {
   RunTestCaseResponse,
   RunRecordingRequest,
   RunRecordingResponse,
+  RunSuiteRequest,
+  RunSuiteResponse,
   RunWorkflowRequest,
   RunWorkflowResponse,
   SaveCredentialRequest,
@@ -41,9 +43,11 @@ import type {
   SessionStartRequest,
 } from '../../shared/studio.js';
 import {
+  findSuiteAsset,
   getExclusiveRecordingReplayId,
   getTestCasePrdPath,
   isAgentRunnableTestCase,
+  resolveSuiteTestCases,
   testCaseToWorkflow,
   updatePrdDocumentAnalysis,
 } from '../../shared/studio.js';
@@ -562,7 +566,7 @@ export async function runWorkflow(
     return desktopApi.runWorkflow(request);
   }
 
-  const runId = `run-${Date.now().toString().slice(-5)}`;
+  const runId = request.runId ?? `run-${Date.now().toString().slice(-5)}`;
   const title = request.workflow.name;
   const agentRun = createWorkflowAgentRun({
     workflow: request.workflow,
@@ -623,6 +627,7 @@ export async function runTestCase(request: RunTestCaseRequest): Promise<RunTestC
     : undefined;
   if (recording) {
     return runRecording({
+      ...(request.runId ? { runId: request.runId } : {}),
       project: request.project,
       environment: request.environment,
       recording,
@@ -633,6 +638,7 @@ export async function runTestCase(request: RunTestCaseRequest): Promise<RunTestC
 
   if (isAgentRunnableTestCase(request.testCase)) {
     return runWorkflow({
+      ...(request.runId ? { runId: request.runId } : {}),
       workflow: testCaseToWorkflow(request.testCase),
       targetEnvironment: request.environment.name,
       runtimeProfile: request.runtimeProfile ?? {
@@ -651,7 +657,7 @@ export async function runTestCase(request: RunTestCaseRequest): Promise<RunTestC
     });
   }
 
-  const runId = `run-${Date.now().toString().slice(-5)}`;
+  const runId = request.runId ?? `run-${Date.now().toString().slice(-5)}`;
   const title = request.testCase.name;
   emit({
     runId,
@@ -706,13 +712,110 @@ export async function runTestCase(request: RunTestCaseRequest): Promise<RunTestC
   return { runId, title, detail };
 }
 
+export async function runSuite(request: RunSuiteRequest): Promise<RunSuiteResponse> {
+  const desktopApi = getDesktopApi();
+  if (desktopApi) {
+    return desktopApi.runSuite(request);
+  }
+
+  const runId = request.runId ?? `suite-run-${Date.now().toString().slice(-5)}`;
+  const suite = findSuiteAsset(request.project, request.suite);
+  const now = new Date().toISOString();
+  if (!suite) {
+    return {
+      runId,
+      title: `Suite ${request.suite.id}@${request.suite.version}`,
+      detail: {
+        suite: {
+          suiteId: request.suite.id,
+          suiteVersion: request.suite.version,
+          environmentId: '',
+          status: 'neutral',
+          startedAt: now,
+          endedAt: now,
+          effectiveConcurrency: 1,
+          results: [],
+          issues: [`未找到 Suite：${request.suite.id}@${request.suite.version}。`],
+        },
+        caseDetails: [],
+      },
+    };
+  }
+
+  const resolution = resolveSuiteTestCases(request.project, suite);
+  if (!resolution.environment || resolution.issues.length) {
+    return {
+      runId,
+      title: suite.name,
+      detail: {
+        suite: {
+          suiteId: suite.id,
+          suiteVersion: suite.version,
+          environmentId: suite.environmentId,
+          status: 'neutral',
+          startedAt: now,
+          endedAt: new Date().toISOString(),
+          effectiveConcurrency: 1,
+          results: [],
+          issues: resolution.issues.map((issue) => issue.message),
+        },
+        caseDetails: [],
+      },
+    };
+  }
+
+  const caseDetails = [] as RunDetail[];
+  for (const { testCase } of resolution.orderedCases) {
+    const response = await runTestCase({
+      runId: `${runId}-${testCase.id}-attempt-1`,
+      project: request.project,
+      testCase,
+      environment: resolution.environment,
+      ...(request.runtimeProfile ? { runtimeProfile: request.runtimeProfile } : {}),
+      ...(request.midsceneConfig ? { midsceneConfig: request.midsceneConfig } : {}),
+      ...(request.agentModelConfig ? { agentModelConfig: request.agentModelConfig } : {}),
+      ...(request.browserSession ? { browserSession: request.browserSession } : {}),
+    });
+    caseDetails.push(response.detail);
+  }
+  const results = caseDetails.map((detail, index) => ({
+    testCaseId: detail.testCaseId,
+    testCaseVersion: resolution.orderedCases[index]!.testCase.version ?? 1,
+    status: detail.status === 'running' ? 'neutral' as const : detail.status,
+    summary: detail.summary,
+    attempts: 1,
+    flaky: false,
+    runId: detail.id,
+  }));
+  return {
+    runId,
+    title: suite.name,
+    detail: {
+      suite: {
+        suiteId: suite.id,
+        suiteVersion: suite.version,
+        environmentId: suite.environmentId,
+        status: results.some((result) => result.status === 'failed')
+          ? 'failed'
+          : results.some((result) => result.status === 'neutral') ? 'neutral' : 'passed',
+        startedAt: now,
+        endedAt: new Date().toISOString(),
+        effectiveConcurrency: 1,
+        results,
+        issues: [],
+      },
+      caseDetails,
+    },
+  };
+}
+
 export async function runRecording(request: RunRecordingRequest): Promise<RunRecordingResponse> {
   const desktopApi = getDesktopApi();
   if (desktopApi) {
     return desktopApi.runRecording(request);
   }
 
-  const runId = `agent-run-recording-${Date.now()}`;
+  const runId = request.runId ?? `agent-run-recording-${Date.now()}`;
   const title = `${request.recording.name} 回放`;
   const documentId = request.documentId ?? request.recording.prdPath?.documentId;
   const agentRun = createRecordingAgentRun({

@@ -26,7 +26,7 @@ TestBuddy 已经从 UI 原型进入“具备本地执行与结果治理基础，
 - 当前用例还不是完整 Hybrid Case V2。
 - 长期资产仍未按 project directory 拆分。
 - `neutral` 仍混合表达多种无法继续/未执行情形。
-- Suite V1 已有版本化资产、依赖解析、资源锁策略和 CLI 入口；桌面入口、隔离浏览器并发和 10–100 case 真实验收尚未完成。
+- Suite V1 已有版本化资产、依赖解析、资源锁策略、CLI 与桌面入口；桌面端受单 BrowserRuntime 会话限制为串行，隔离浏览器并发和 10–100 case 真实验收尚未完成。
 - Workflow/Recording 的统一运行链不等于固定版本公共流程已完成。
 - 恢复草稿基础不等于完整维护队列、安全和保留策略已完成。
 
@@ -247,7 +247,7 @@ Suite Runner 只有在 fixture 依赖、认证和资源声明可解析后才能�
 
 ## 6. Phase 4：Suite Runner
 
-**当前状态：Suite V1 已作为 `suites/<id>@<version>.json` 写入项目资产，固定引用 Case 版本、目标环境、标签、依赖图和调度策略。共享 `SuiteRunner` 已离线实现依赖拓扑、有限并发、Fixture/凭据/声明资源锁、fail-fast/continue、失败重试、取消后不再派发以及 flaky 标记；CLI 可通过 `--suite-id <id@version>` 使用该调度器，并因当前 BrowserRuntime 只有一个受控会话而安全限制为串行。桌面 Suite 编辑/运行入口、隔离浏览器池、六种终态迁移、JSON/JUnit/桌面同一完整 Suite RunResult 和 10–100 case 真实验收尚未完成。**
+**当前状态：Suite V1 已作为 `suites/<id>@<version>.json` 写入项目资产，固定引用 Case 版本、目标环境、标签、依赖图和调度策略。共享 `SuiteRunner` 已离线实现依赖拓扑、有限并发、Fixture/凭据/声明资源锁、fail-fast/continue、失败重试、取消后不再派发以及 flaky 标记；CLI 和桌面端均复用该调度器，并因当前 BrowserRuntime 只有一个受控会话而安全限制为串行。桌面工作台已提供 Suite 清单、不可变版本草稿编辑、共享预检、精确 `id@version` 提交、父级运行取消和 Case 级结果跳转；主进程只持久化真实 Case `RunDetail`，不伪造 Suite 运行记录。隔离浏览器池、六种终态迁移、完整 Suite 级 JSON/JUnit/持久化报告以及 10–100 case 真实验收尚未完成。**
 
 ### 6.1 目标
 
@@ -256,13 +256,13 @@ Suite Runner 只有在 fixture 依赖、认证和资源声明可解析后才能�
 ### 6.2 交付
 
 - Suite asset：用例选择、标签、顺序依赖和环境。已完成 V1 资产、精确 Case 引用与 project directory 快照。
-- Shared Runner：Desktop/CLI 单一入口。已完成共享调度器与 CLI 适配；桌面适配待完成。
-- 本地有限并发。已完成纯调度边界；当前 CLI 因单 BrowserRuntime 会话强制为 1。
+- Shared Runner：Desktop/CLI 单一入口。已完成共享调度器、CLI 与桌面适配；桌面成员复用既有 TestRunner 路径。
+- 本地有限并发。已完成纯调度边界；当前 CLI 与桌面均因单 BrowserRuntime 会话强制为 1。
 - account/tenant/environment/fixture 等资源锁。已完成 Fixture 的 exclusive、credential 和显式 resource lock 解析；真实账号/租户/环境样本待验收。
 - fail-fast、continue、retry 和 cancel 策略。已完成失败重试、fail-fast/continue 以及取消停止派发；六种终态待迁移。
 - 六种终态聚合和独立 flaky。
 - 无后台 daemon 的一次性 Runner 生命周期。
-- JSON/JUnit/桌面视图适配同一 RunResult。
+- JSON/JUnit/桌面视图适配同一 RunResult；当前桌面只回显并持久化成员 Case 结果，不生成伪造的 Suite RunDetail。
 
 ### 6.3 验收
 

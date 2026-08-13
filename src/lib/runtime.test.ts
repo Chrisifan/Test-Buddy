@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { createEmptyProject, type ChatCommandRequest, type DesktopApi } from '../../shared/studio.js';
+import {
+  createEmptyProject,
+  createEmptySuiteAsset,
+  createEmptyTestCase,
+  type ChatCommandRequest,
+  type DesktopApi,
+} from '../../shared/studio.js';
 import * as runtime from './runtime.js';
 
 const {
@@ -10,6 +16,7 @@ const {
   planProjectAssetUpdate,
   reloadProjectAssetSnapshot,
   runRecording,
+  runSuite,
   runTestCase,
   runWorkflow,
   selectProjectAssetDirectory,
@@ -35,6 +42,70 @@ const request: ChatCommandRequest = {
 };
 
 describe('browser fallback agent runtime', () => {
+  it('runs exact Suite members in stable order when the desktop bridge is unavailable', async () => {
+    const project = createEmptyProject(1);
+    const environment = project.environments[0]!;
+    const first = {
+      ...createEmptyTestCase(1, project.groups[0]!.id, environment.id),
+      id: 'case-fallback-first',
+      version: 1,
+      steps: [{ id: 'step-first', type: 'manual' as const, title: '确认首页', body: '确认首页状态。' }],
+    };
+    const second = {
+      ...createEmptyTestCase(2, project.groups[0]!.id, environment.id),
+      id: 'case-fallback-second',
+      version: 1,
+      steps: [{ id: 'step-second', type: 'manual' as const, title: '确认订单', body: '确认订单状态。' }],
+    };
+    project.testCases = [first, second];
+    const suite = {
+      ...createEmptySuiteAsset(project, 1),
+      id: 'suite-fallback',
+      name: 'Fallback Suite',
+      caseReferences: [
+        { id: second.id, version: second.version!, dependsOn: [{ id: first.id, version: first.version! }] },
+        { id: first.id, version: first.version!, dependsOn: [] },
+      ],
+    };
+    project.suites = [suite];
+
+    const response = await runSuite({
+      runId: 'suite-run-fallback',
+      project,
+      suite: { id: suite.id, version: suite.version },
+    });
+
+    expect(response.detail.suite).toMatchObject({
+      suiteId: suite.id,
+      suiteVersion: suite.version,
+      status: 'neutral',
+      effectiveConcurrency: 1,
+      results: [
+        { testCaseId: first.id, status: 'neutral' },
+        { testCaseId: second.id, status: 'neutral' },
+      ],
+    });
+    expect(response.detail.caseDetails.map((detail) => detail.testCaseId)).toEqual([first.id, second.id]);
+    expect(response.runId).toBe('suite-run-fallback');
+    expect(response.detail.caseDetails.map((detail) => detail.id)).toEqual([
+      'suite-run-fallback-case-fallback-first-attempt-1',
+      'suite-run-fallback-case-fallback-second-attempt-1',
+    ]);
+  });
+
+  it('delegates Suite execution unchanged to the desktop bridge', async () => {
+    const originalDesktopApi = window.desktopApi;
+    const project = createEmptyProject(1);
+    const request = { project, suite: { id: 'suite-release', version: 2 } };
+    const response = { runId: 'suite-run-1', title: '发布回归', detail: { suite: {}, caseDetails: [] } };
+    const desktopApi = { runSuite: vi.fn().mockResolvedValue(response) } as unknown as DesktopApi;
+    window.desktopApi = desktopApi;
+
+    await expect(runSuite(request)).resolves.toBe(response);
+    expect(desktopApi.runSuite).toHaveBeenCalledWith(request);
+    window.desktopApi = originalDesktopApi;
+  });
+
   it('keeps semantic actions neutral when no Midscene runtime is connected', async () => {
     const response = await sendChatCommand(request);
 
@@ -118,6 +189,66 @@ describe('browser fallback agent runtime', () => {
     expect(response.detail.agentRun?.intent.source).toBe('workflow');
     expect(response.detail.agentRun?.intent.documentId).toBe('doc-login');
     expect(response.detail.steps[0]?.message).toContain('等待桌面 Agent runtime 执行');
+  });
+
+  it('preserves a supplied Suite member run id through browser fallback Agent and recording routes', async () => {
+    const project = createEmptyProject(1);
+    const environment = project.environments[0]!;
+    const recording = {
+      id: 'recording-suite-route',
+      name: 'Suite 回放',
+      summary: '',
+      source: 'live' as const,
+      groupId: project.groups[0]!.id,
+      environmentId: environment.id,
+      startUrl: environment.url,
+      comparisonGoal: '',
+      tags: [],
+      createdAt: new Date(0).toISOString(),
+      updatedAt: new Date(0).toISOString(),
+      steps: [],
+    };
+    project.recordings = [recording];
+
+    const agentResponse = await runTestCase({
+      runId: 'suite-run-fallback-case-agent-attempt-1',
+      project,
+      environment,
+      testCase: {
+        id: 'case-agent',
+        kind: 'scenario',
+        groupId: project.groups[0]!.id,
+        environmentId: environment.id,
+        source: 'manual',
+        name: 'Agent Case',
+        category: '',
+        lastEdited: '',
+        url: environment.url,
+        notes: '',
+        steps: [{ id: 'step-agent', type: 'ai', title: '检查', body: '检查页面' }],
+      },
+    });
+    const recordingResponse = await runTestCase({
+      runId: 'suite-run-fallback-case-recording-attempt-1',
+      project,
+      environment,
+      testCase: {
+        id: 'case-recording',
+        kind: 'recording',
+        groupId: project.groups[0]!.id,
+        environmentId: environment.id,
+        source: 'recording',
+        name: 'Recording Case',
+        category: '',
+        lastEdited: '',
+        url: environment.url,
+        notes: '',
+        steps: [{ id: 'step-recording', type: 'recordingReplay', title: '回放', body: '回放', recordingId: recording.id }],
+      },
+    });
+
+    expect(agentResponse.runId).toBe('suite-run-fallback-case-agent-attempt-1');
+    expect(recordingResponse.runId).toBe('suite-run-fallback-case-recording-attempt-1');
   });
 
   it('keeps non-Agent test cases neutral when desktop execution is unavailable', async () => {

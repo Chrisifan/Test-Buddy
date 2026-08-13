@@ -14,6 +14,7 @@ import {
   createTestCaseFromRecording,
   createEmptyTestCase,
   createEmptyProject,
+  createEmptySuiteAsset,
   createInitialStudioState,
   createManualStepAutomationReplacement,
   createReporterFixDraft,
@@ -39,6 +40,7 @@ import {
   removeTestStep,
   resolveTestCaseFixtures,
   resolveSuiteTestCases,
+  findSuiteAsset,
   prunePrdCoverageTriage,
   updatePrdDocumentAnalysis,
   workflowToTestCase,
@@ -46,6 +48,40 @@ import {
 import { createStubAgentRun } from './agentStub.js';
 
 describe('suite asset contract', () => {
+  it('creates an empty Suite pinned to the selected project environment', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-13T08:00:00.000Z'));
+    const project = createEmptyProject(1);
+
+    const suite = createEmptySuiteAsset(project, 1);
+
+    expect(suite).toMatchObject({
+      schemaVersion: 1,
+      version: 1,
+      name: '新的 Suite 1',
+      environmentId: project.selectedEnvironmentId,
+      caseReferences: [],
+      execution: { concurrency: 1, failurePolicy: 'continue', retryLimit: 0 },
+      createdAt: '2026-08-13T08:00:00.000Z',
+      updatedAt: '2026-08-13T08:00:00.000Z',
+    });
+    expect(suite.id).toMatch(/^suite-\d+-1$/u);
+    vi.useRealTimers();
+  });
+
+  it('finds a Suite only by its exact immutable reference', () => {
+    const project = createEmptyProject(1);
+    const suite = {
+      ...createEmptySuiteAsset(project, 1),
+      id: 'suite-release',
+      version: 2,
+    };
+    project.suites = [suite];
+
+    expect(findSuiteAsset(project, { id: suite.id, version: 2 })).toBe(suite);
+    expect(findSuiteAsset(project, { id: suite.id, version: 1 })).toBeUndefined();
+  });
+
   it('resolves immutable Case versions in dependency order and rejects stale or cyclic references', () => {
     const project = createEmptyProject(1);
     const environment = project.environments[0]!;

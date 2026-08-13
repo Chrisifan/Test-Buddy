@@ -5,6 +5,8 @@ import type {
   SuiteAsset,
   SuiteCaseReference,
   TestCaseDraft,
+  SuiteCaseRunResult,
+  SuiteRunResult,
 } from '../../shared/studio.js';
 import { resolveSuiteTestCases, resolveTestCaseFixtures } from '../../shared/studio.js';
 
@@ -32,27 +34,7 @@ export interface SuiteRunnerOptions {
   now?: () => Date;
 }
 
-export interface SuiteCaseRunResult {
-  testCaseId: string;
-  testCaseVersion: number;
-  status: Exclude<RunTone, 'running'>;
-  summary: string;
-  attempts: number;
-  flaky: boolean;
-  runId?: string;
-}
-
-export interface SuiteRunResult {
-  suiteId: string;
-  suiteVersion: number;
-  environmentId: string;
-  status: Exclude<RunTone, 'running'>;
-  startedAt: string;
-  endedAt: string;
-  effectiveConcurrency: number;
-  results: SuiteCaseRunResult[];
-  issues: string[];
-}
+export type { SuiteCaseRunResult, SuiteRunResult } from '../../shared/studio.js';
 
 interface PendingSuiteCase {
   reference: SuiteCaseReference;
@@ -212,7 +194,10 @@ export class SuiteRunner {
         cancellationSignal,
       });
       if (cancellationSignal?.aborted) {
-        return skippedResult(candidate, 'Suite run was cancelled.');
+        return {
+          ...skippedResult(candidate, 'Suite run was cancelled.'),
+          ...(lastResult.runId ? { runId: lastResult.runId } : {}),
+        };
       }
       if (lastResult.status === 'passed') {
         return {

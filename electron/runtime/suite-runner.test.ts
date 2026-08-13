@@ -144,7 +144,7 @@ describe('SuiteRunner', () => {
         calls.push(testCase.id);
         started.resolve();
         await finish.promise;
-        return { status: 'passed', summary: 'late success' };
+        return { status: 'passed', summary: 'late success', runId: `run-${testCase.id}` };
       },
     });
     const running = runner.run(project, suite, controller.signal);
@@ -157,7 +157,7 @@ describe('SuiteRunner', () => {
     expect(result.status).toBe('neutral');
     expect(calls).toHaveLength(1);
     expect(result.results).toEqual(expect.arrayContaining([
-      expect.objectContaining({ testCaseId: project.testCases[0]!.id, status: 'neutral' }),
+      expect.objectContaining({ testCaseId: project.testCases[0]!.id, status: 'neutral', runId: `run-${project.testCases[0]!.id}` }),
       expect.objectContaining({ testCaseId: project.testCases[1]!.id, status: 'neutral', attempts: 0 }),
     ]));
   });

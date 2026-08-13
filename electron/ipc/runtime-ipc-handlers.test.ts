@@ -1,0 +1,416 @@
+import fs from 'node:fs';
+import path from 'node:path';
+
+import ts from 'typescript';
+import { describe, expect, it, vi } from 'vitest';
+
+import { createEmptyProject, createInitialStudioState, type RunTestCaseResponse } from '../../shared/studio.js';
+
+const { registerRuntimeIpcHandlers, runtimeIpcChannels } = loadRuntimeIpcHandlers();
+
+type RuntimeIpcDependencies = {
+  handle: (channel: string, listener: (event: unknown, ...args: never[]) => unknown) => void;
+  loadState: ReturnType<typeof vi.fn>;
+  saveState: ReturnType<typeof vi.fn>;
+  getRuntimeBundle: ReturnType<typeof vi.fn>;
+  getFixtureScriptTrustContext: ReturnType<typeof vi.fn>;
+  openPath: ReturnType<typeof vi.fn>;
+  showSaveDialog: ReturnType<typeof vi.fn>;
+  getDownloadsPath: ReturnType<typeof vi.fn>;
+  showOpenDialog: ReturnType<typeof vi.fn>;
+  getRuntimeInfo: ReturnType<typeof vi.fn>;
+};
+
+describe('registerRuntimeIpcHandlers', () => {
+  it('registers the complete runtime IPC boundary', () => {
+    const handlers = registerHandlers(createDependencies());
+
+    expect([...handlers.keys()]).toEqual([
+      runtimeIpcChannels.getInfo,
+      runtimeIpcChannels.runTestCase,
+      runtimeIpcChannels.runSuite,
+      runtimeIpcChannels.cancelRun,
+      runtimeIpcChannels.loadRunDetail,
+      runtimeIpcChannels.openArtifact,
+      runtimeIpcChannels.exportArtifact,
+      runtimeIpcChannels.attachManualEvidence,
+    ]);
+  });
+
+  it('rejects an unmanaged artifact before calling openPath', async () => {
+    const dependencies = createDependencies({
+      getRuntimeBundle: vi.fn().mockReturnValue({
+        artifactManager: { isManagedArtifactPath: () => false, exportArtifact: vi.fn(), importManualEvidence: vi.fn() },
+        browserRuntime: { getState: () => ({ status: 'idle' }) },
+        runTestCase: vi.fn(),
+        runSuite: vi.fn(),
+        cancelRun: vi.fn(),
+      }),
+    });
+    const handlers = registerHandlers(dependencies);
+
+    await expect(handlers.get(runtimeIpcChannels.openArtifact)!({}, '/tmp/unmanaged.html')).rejects.toThrow(
+      '只能打开应用生成的证据文件。',
+    );
+
+    expect(dependencies.openPath).not.toHaveBeenCalled();
+  });
+
+  it('rejects an unmanaged artifact before showing an export dialog', async () => {
+    const exportArtifact = vi.fn();
+    const dependencies = createDependencies({
+      getRuntimeBundle: vi.fn().mockReturnValue({
+        artifactManager: { isManagedArtifactPath: () => false, exportArtifact, importManualEvidence: vi.fn() },
+        browserRuntime: { getState: () => ({ status: 'idle' }) },
+        runTestCase: vi.fn(),
+        runSuite: vi.fn(),
+        cancelRun: vi.fn(),
+      }),
+    });
+    const handlers = registerHandlers(dependencies);
+
+    await expect(handlers.get(runtimeIpcChannels.exportArtifact)!({}, '/tmp/unmanaged.html')).rejects.toThrow(
+      '只能导出应用生成的证据文件。',
+    );
+
+    expect(dependencies.showSaveDialog).not.toHaveBeenCalled();
+    expect(exportArtifact).not.toHaveBeenCalled();
+  });
+
+  it('uses only the injected fixture trust and persists the returned Case detail', async () => {
+    const project = createEmptyProject(1);
+    const environment = project.environments[0]!;
+    const testCase = {
+      id: 'case-1',
+      version: 1,
+      kind: 'scenario' as const,
+      name: 'Case one',
+      category: 'Regression',
+      lastEdited: new Date(0).toISOString(),
+      url: environment.url,
+      notes: '',
+      groupId: project.groups[0]!.id,
+      environmentId: environment.id,
+      source: 'manual' as const,
+      steps: [],
+    };
+    const response = runTestCaseResponse(project.id, testCase.id, environment.id);
+    const dependencies = createDependencies({
+      getFixtureScriptTrustContext: vi.fn().mockResolvedValue({
+        projectDirectory: '/projects/one',
+        records: [{
+          schemaVersion: 1,
+          projectId: project.id,
+          projectDirectory: '/projects/one',
+          fixtureId: 'fixture-1',
+          fixtureVersion: 1,
+          lifecycle: 'setup',
+          relativePath: 'setup.mjs',
+          contentHash: 'a'.repeat(64),
+          approvedAt: new Date(0).toISOString(),
+        }],
+      }),
+      getRuntimeBundle: vi.fn().mockReturnValue({
+        artifactManager: { isManagedArtifactPath: () => true, exportArtifact: vi.fn(), importManualEvidence: vi.fn() },
+        browserRuntime: { getState: () => ({ status: 'idle' }) },
+        runTestCase: vi.fn().mockResolvedValue(response),
+        runSuite: vi.fn(),
+        cancelRun: vi.fn(),
+      }),
+    });
+    const handlers = registerHandlers(dependencies);
+
+    await expect(handlers.get(runtimeIpcChannels.runTestCase)!({}, {
+      project,
+      testCase,
+      environment,
+      fixtureScriptTrustDirectory: '/renderer-controlled',
+      fixtureScriptTrustRecords: [],
+    })).resolves.toEqual(response);
+
+    const runtime = dependencies.getRuntimeBundle();
+    expect(dependencies.getFixtureScriptTrustContext).toHaveBeenCalledWith(project.id);
+    expect(runtime.runTestCase).toHaveBeenCalledWith(expect.objectContaining({
+      fixtureScriptTrustDirectory: '/projects/one',
+      fixtureScriptTrustRecords: expect.arrayContaining([expect.objectContaining({ fixtureId: 'fixture-1' })]),
+    }));
+    expect(dependencies.saveState).toHaveBeenCalledWith(expect.objectContaining({
+      runDetails: [response.detail],
+      recentRuns: [expect.objectContaining({
+        id: response.runId,
+        environmentId: environment.id,
+      })],
+    }));
+  });
+
+  it('drops renderer cancellation and trust values before running a Suite, then persists every returned Case', async () => {
+    const project = createEmptyProject(1);
+    const environment = project.environments[0]!;
+    const response = runSuiteResponse(project.id, 'case-suite-1', environment.id);
+    const dependencies = createDependencies({
+      getFixtureScriptTrustContext: vi.fn().mockResolvedValue({
+        projectDirectory: '/projects/one',
+        records: [{
+          schemaVersion: 1,
+          projectId: project.id,
+          projectDirectory: '/projects/one',
+          fixtureId: 'fixture-suite-1',
+          fixtureVersion: 1,
+          lifecycle: 'setup',
+          relativePath: 'setup.mjs',
+          contentHash: 'b'.repeat(64),
+          approvedAt: new Date(0).toISOString(),
+        }],
+      }),
+      getRuntimeBundle: vi.fn().mockReturnValue({
+        artifactManager: { isManagedArtifactPath: () => true, exportArtifact: vi.fn(), importManualEvidence: vi.fn() },
+        browserRuntime: { getState: () => ({ status: 'idle' }) },
+        runTestCase: vi.fn(),
+        runSuite: vi.fn().mockResolvedValue(response),
+        cancelRun: vi.fn(),
+      }),
+    });
+    const handlers = registerHandlers(dependencies);
+
+    await expect(handlers.get(runtimeIpcChannels.runSuite)!({}, {
+      runId: 'suite-ipc-run',
+      cancellationSignal: { aborted: true },
+      fixtureScriptTrustDirectory: '/renderer-controlled',
+      fixtureScriptTrustRecords: [],
+      project,
+      suite: { id: 'suite-1', version: 1 },
+    })).resolves.toEqual(response);
+
+    const runtime = dependencies.getRuntimeBundle();
+    expect(dependencies.getFixtureScriptTrustContext).toHaveBeenCalledWith(project.id);
+    expect(runtime.runSuite).toHaveBeenCalledWith({
+      runId: 'suite-ipc-run',
+      fixtureScriptTrustDirectory: '/projects/one',
+      fixtureScriptTrustRecords: [expect.objectContaining({ fixtureId: 'fixture-suite-1' })],
+      project,
+      suite: { id: 'suite-1', version: 1 },
+    });
+    expect(dependencies.saveState).toHaveBeenCalledWith(expect.objectContaining({
+      runDetails: [response.detail.caseDetails[0]],
+    }));
+  });
+
+  it('persists every retry attempt from a Suite in latest-first history order', async () => {
+    const project = createEmptyProject(1);
+    const environment = project.environments[0]!;
+    const failedAttempt = {
+      ...runTestCaseResponse(project.id, 'case-retry-1', environment.id).detail,
+      id: 'attempt-1',
+      status: 'failed' as const,
+      summary: 'Failed',
+    };
+    const passedAttempt = {
+      ...runTestCaseResponse(project.id, 'case-retry-1', environment.id).detail,
+      id: 'attempt-2',
+      status: 'passed' as const,
+      summary: 'Passed',
+    };
+    const response = {
+      runId: 'suite-retry-run',
+      title: 'Suite retry',
+      detail: {
+        suite: {
+          suiteId: 'suite-retry-1',
+          suiteVersion: 1,
+          environmentId: environment.id,
+          status: 'passed' as const,
+          startedAt: new Date(0).toISOString(),
+          endedAt: new Date(0).toISOString(),
+          effectiveConcurrency: 1,
+          results: [{
+            testCaseId: 'case-retry-1',
+            testCaseVersion: 1,
+            status: 'passed' as const,
+            summary: 'Passed after retry',
+            attempts: 2,
+            flaky: true,
+            runId: 'attempt-2',
+          }],
+          issues: [],
+        },
+        caseDetails: [failedAttempt, passedAttempt],
+      },
+    };
+    const dependencies = createDependencies({
+      getRuntimeBundle: vi.fn().mockReturnValue({
+        artifactManager: { isManagedArtifactPath: () => true, exportArtifact: vi.fn(), importManualEvidence: vi.fn() },
+        browserRuntime: { getState: () => ({ status: 'idle' }) },
+        runTestCase: vi.fn(),
+        runSuite: vi.fn().mockResolvedValue(response),
+        cancelRun: vi.fn(),
+      }),
+    });
+    const handlers = registerHandlers(dependencies);
+
+    await expect(handlers.get(runtimeIpcChannels.runSuite)!({}, {
+      runId: 'suite-retry-run',
+      project,
+      suite: { id: 'suite-retry-1', version: 1 },
+    })).resolves.toEqual(response);
+
+    expect(dependencies.saveState).toHaveBeenCalledWith(expect.objectContaining({
+      runDetails: expect.arrayContaining([expect.objectContaining({ id: 'attempt-2' }), expect.objectContaining({ id: 'attempt-1' })]),
+      recentRuns: expect.arrayContaining([expect.objectContaining({ id: 'attempt-2' }), expect.objectContaining({ id: 'attempt-1' })]),
+    }));
+    const savedState = dependencies.saveState.mock.calls[0]![0];
+    expect(savedState.runDetails.map((detail: { id: string }) => detail.id)).toEqual(['attempt-2', 'attempt-1']);
+    expect(savedState.recentRuns.map((run: { id: string }) => run.id)).toEqual(['attempt-2', 'attempt-1']);
+  });
+
+  it('forwards a Suite run ID to the RuntimeBundle cancellation API', async () => {
+    const cancelRun = vi.fn().mockReturnValue(true);
+    const dependencies = createDependencies({
+      getRuntimeBundle: vi.fn().mockReturnValue({
+        artifactManager: { isManagedArtifactPath: () => true, exportArtifact: vi.fn(), importManualEvidence: vi.fn() },
+        browserRuntime: { getState: () => ({ status: 'idle' }) },
+        runTestCase: vi.fn(),
+        runSuite: vi.fn(),
+        cancelRun,
+      }),
+    });
+    const handlers = registerHandlers(dependencies);
+
+    await expect(handlers.get(runtimeIpcChannels.cancelRun)!({}, 'suite-1')).resolves.toBe(true);
+
+    expect(cancelRun).toHaveBeenCalledWith('suite-1');
+  });
+});
+
+function registerHandlers(dependencies: RuntimeIpcDependencies) {
+  const handlers = new Map<string, (event: unknown, ...args: unknown[]) => unknown>();
+  registerRuntimeIpcHandlers({
+    ...dependencies,
+    handle: (channel: string, listener: (event: unknown, ...args: unknown[]) => unknown) => handlers.set(channel, listener),
+  });
+  return handlers;
+}
+
+function createDependencies(overrides: Partial<RuntimeIpcDependencies> = {}): RuntimeIpcDependencies {
+  const state = createInitialStudioState();
+  return {
+    loadState: vi.fn().mockResolvedValue(state),
+    saveState: vi.fn().mockResolvedValue(undefined),
+    getRuntimeBundle: vi.fn().mockReturnValue({
+      artifactManager: { isManagedArtifactPath: () => true, exportArtifact: vi.fn(), importManualEvidence: vi.fn() },
+      browserRuntime: { getState: () => ({ status: 'idle' }) },
+      runTestCase: vi.fn(),
+      runSuite: vi.fn(),
+      cancelRun: vi.fn(),
+    }),
+    getFixtureScriptTrustContext: vi.fn().mockResolvedValue({ records: [] }),
+    openPath: vi.fn().mockResolvedValue(''),
+    showSaveDialog: vi.fn().mockResolvedValue({ canceled: true }),
+    getDownloadsPath: vi.fn().mockReturnValue('/downloads'),
+    showOpenDialog: vi.fn().mockResolvedValue({ canceled: true, filePaths: [] }),
+    getRuntimeInfo: vi.fn().mockReturnValue({ platform: 'desktop', persistence: 'file' }),
+    ...overrides,
+  };
+}
+
+function loadRuntimeIpcHandlers(): {
+  registerRuntimeIpcHandlers: (dependencies: RuntimeIpcDependencies) => void;
+  runtimeIpcChannels: {
+    getInfo: string;
+    runTestCase: string;
+    runSuite: string;
+    cancelRun: string;
+    loadRunDetail: string;
+    openArtifact: string;
+    exportArtifact: string;
+    attachManualEvidence: string;
+  };
+} {
+  const ipcDirectory = path.join(process.cwd(), 'electron', 'ipc');
+  const compile = (sourcePath: string) => ts.transpileModule(fs.readFileSync(sourcePath, 'utf8'), {
+    compilerOptions: {
+      module: ts.ModuleKind.CommonJS,
+      target: ts.ScriptTarget.ES2022,
+      esModuleInterop: true,
+    },
+  }).outputText;
+  const channelModule = { exports: {} as { runtimeIpcChannels?: unknown } };
+  new Function('module', 'exports', compile(path.join(ipcDirectory, 'runtime-ipc-channels.cts')))(channelModule, channelModule.exports);
+
+  const runHistoryModule = { exports: {} as { appendRunToStudioState?: unknown } };
+  new Function('module', 'exports', compile(path.join(process.cwd(), 'electron', 'runtime', 'run-history.ts')))(
+    runHistoryModule,
+    runHistoryModule.exports,
+  );
+
+  const handlerModule = { exports: {} as Record<string, unknown> };
+  const require = (moduleId: string) => {
+    if (moduleId === 'node:path') {
+      return path;
+    }
+    if (moduleId === './runtime-ipc-channels.cjs') {
+      return channelModule.exports;
+    }
+    if (moduleId === '../runtime/run-history.js') {
+      return runHistoryModule.exports;
+    }
+    throw new Error(`Unexpected runtime IPC dependency: ${moduleId}`);
+  };
+  new Function('require', 'module', 'exports', compile(path.join(ipcDirectory, 'runtime-ipc-handlers.ts')))(
+    require,
+    handlerModule,
+    handlerModule.exports,
+  );
+
+  return handlerModule.exports as unknown as ReturnType<typeof loadRuntimeIpcHandlers>;
+}
+
+function runTestCaseResponse(projectId: string, testCaseId: string, environmentId: string): RunTestCaseResponse {
+  return {
+    runId: 'run-1',
+    title: 'Case one',
+    detail: {
+      id: 'run-1',
+      projectId,
+      testCaseId,
+      environmentId,
+      title: 'Case one',
+      status: 'passed',
+      startedAt: new Date(0).toISOString(),
+      endedAt: new Date(0).toISOString(),
+      duration: '00:00:00',
+      summary: 'Passed',
+      logs: [],
+      steps: [],
+      artifacts: [],
+    },
+  };
+}
+
+function runSuiteResponse(projectId: string, testCaseId: string, environmentId: string) {
+  return {
+    runId: 'suite-run-1',
+    title: 'Suite one',
+    detail: {
+      suite: {
+        suiteId: 'suite-1',
+        suiteVersion: 1,
+        environmentId,
+        status: 'passed' as const,
+        startedAt: new Date(0).toISOString(),
+        endedAt: new Date(0).toISOString(),
+        effectiveConcurrency: 1,
+        results: [{
+          testCaseId,
+          testCaseVersion: 1,
+          status: 'passed' as const,
+          summary: 'Passed',
+          attempts: 1,
+          flaky: false,
+          runId: 'suite-case-run-1',
+        }],
+        issues: [],
+      },
+      caseDetails: [runTestCaseResponse(projectId, testCaseId, environmentId).detail],
+    },
+  };
+}

@@ -27,9 +27,7 @@ import {
   type ProjectDraft,
   type ProjectReportExportRequest,
   type PrdSemanticAnalysisRequest,
-  type RuntimeInfo,
   type RunRecordingRequest,
-  type RunTestCaseRequest,
   type RunWorkflowRequest,
   type RevokeStorageStateRequest,
   type SaveCredentialRequest,
@@ -45,6 +43,7 @@ import { electronNativeImageAdapter } from './runtime/electron-native-image-adap
 import { PrdSemanticAnalysisRuntime } from './runtime/prd-semantic-analyzer.js';
 import { appendRunToStudioState } from './runtime/run-history.js';
 import { createRuntimeBundle, type RuntimeBundle } from './runtime/runtime-bundle.js';
+import { registerRuntimeIpcHandlers } from './ipc/runtime-ipc-handlers.js';
 import { StudioStore } from './studioStore.js';
 import {
   calculateProjectAssetRevision,
@@ -566,11 +565,25 @@ function registerIpcHandlers(): void {
     });
     return binding;
   });
-  ipcMain.handle('runtime:get-info', async (): Promise<RuntimeInfo> => ({
-    platform: 'desktop',
-    persistence: 'file',
-    storagePath: getStoreOrThrow().storagePath,
-  }));
+  registerRuntimeIpcHandlers({
+    handle: (channel, listener) => ipcMain.handle(channel, listener),
+    loadState: () => getStoreOrThrow().load(),
+    saveState: (state) => getStoreOrThrow().save(state),
+    getRuntimeBundle: getRuntimeBundleOrThrow,
+    getFixtureScriptTrustContext,
+    openPath: (artifactPath) => shell.openPath(artifactPath),
+    showSaveDialog: (options) => dialog.showSaveDialog(options),
+    getDownloadsPath: () => app.getPath('downloads'),
+    showOpenDialog: (event, options) => {
+      const owner = BrowserWindow.fromWebContents((event as Electron.IpcMainInvokeEvent).sender) ?? mainWindow;
+      return owner ? dialog.showOpenDialog(owner, options) : dialog.showOpenDialog(options);
+    },
+    getRuntimeInfo: () => ({
+      platform: 'desktop',
+      persistence: 'file',
+      storagePath: getStoreOrThrow().storagePath,
+    }),
+  });
   ipcMain.handle('runtime:test-midscene-connection', async (_event, config: MidsceneConfig) =>
     testMidsceneConnection(config),
   );
@@ -583,24 +596,6 @@ function registerIpcHandlers(): void {
   ipcMain.handle('runtime:capture-browser-snapshot', async () =>
     getRuntimeBundleOrThrow().browserRuntime.capture(),
   );
-  ipcMain.handle('runtime:run-test-case', async (_event, request: RunTestCaseRequest) => {
-    const scriptTrust = await getFixtureScriptTrustContext(request.project.id);
-    const result = await getRuntimeBundleOrThrow().runTestCase({
-      ...request,
-      fixtureScriptTrustRecords: scriptTrust.records,
-      fixtureScriptTrustDirectory: scriptTrust.projectDirectory,
-    });
-    const state = await getStoreOrThrow().load();
-    await getStoreOrThrow().save(
-      appendRunToStudioState(
-        state,
-        result,
-        request.environment,
-        getRuntimeBundleOrThrow().browserRuntime.getState(),
-      ),
-    );
-    return result;
-  });
   ipcMain.handle('runtime:run-recording', async (_event, request: RunRecordingRequest) => {
     const result = await getRuntimeBundleOrThrow().runRecording(request);
     const state = await getStoreOrThrow().load();
@@ -613,12 +608,6 @@ function registerIpcHandlers(): void {
       ),
     );
     return result;
-  });
-  ipcMain.handle('runtime:cancel-run', async (_event, runId: string): Promise<boolean> => {
-    if (typeof runId !== 'string' || !runId.trim()) {
-      throw new Error('运行 ID 无效。');
-    }
-    return getRuntimeBundleOrThrow().cancelRun(runId);
   });
   ipcMain.handle('runtime:export-project-report', async (_event, request: ProjectReportExportRequest): Promise<boolean> => {
     if (
@@ -654,57 +643,6 @@ function registerIpcHandlers(): void {
     } finally {
       await artifactManager.removeArtifact(reportPath);
     }
-  });
-  ipcMain.handle('runtime:load-run-detail', async (_event, runId: string) => {
-    const state = await getStoreOrThrow().load();
-    return state.runDetails.find((run) => run.id === runId) ?? null;
-  });
-  ipcMain.handle('runtime:open-artifact', async (_event, artifactPath: string) => {
-    if (
-      typeof artifactPath !== 'string' ||
-      !getRuntimeBundleOrThrow().artifactManager.isManagedArtifactPath(artifactPath)
-    ) {
-      throw new Error('只能打开应用生成的证据文件。');
-    }
-
-    const error = await shell.openPath(artifactPath);
-    if (error) {
-      throw new Error(`打开证据文件失败：${error}`);
-    }
-  });
-  ipcMain.handle('runtime:export-artifact', async (_event, artifactPath: string): Promise<boolean> => {
-    if (
-      typeof artifactPath !== 'string' ||
-      !getRuntimeBundleOrThrow().artifactManager.isManagedArtifactPath(artifactPath)
-    ) {
-      throw new Error('只能导出应用生成的证据文件。');
-    }
-
-    const result = await dialog.showSaveDialog({
-      defaultPath: path.join(app.getPath('downloads'), path.basename(artifactPath)),
-      title: '导出测试报告',
-    });
-    if (result.canceled || !result.filePath) {
-      return false;
-    }
-
-    await getRuntimeBundleOrThrow().artifactManager.exportArtifact(artifactPath, result.filePath);
-    return true;
-  });
-  ipcMain.handle('runtime:attach-manual-evidence', async (event) => {
-    const options: Electron.OpenDialogOptions = {
-      title: '附加人工检查证据',
-      properties: ['openFile'],
-    };
-    const owner = BrowserWindow.fromWebContents(event.sender) ?? mainWindow;
-    const result = owner
-      ? await dialog.showOpenDialog(owner, options)
-      : await dialog.showOpenDialog(options);
-    if (result.canceled || !result.filePaths[0]) {
-      return null;
-    }
-
-    return getRuntimeBundleOrThrow().artifactManager.importManualEvidence(result.filePaths[0]);
   });
   ipcMain.handle('runtime:start-session', async (_event, request: SessionStartRequest) =>
     getRuntimeOrThrow().startSession(request),

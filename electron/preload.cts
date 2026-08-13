@@ -1,4 +1,5 @@
 const { contextBridge, ipcRenderer } = require('electron');
+const { runtimeIpcChannels } = require('./ipc/runtime-ipc-channels.cjs');
 
 contextBridge.exposeInMainWorld('desktopApi', {
   loadStudioState: () => ipcRenderer.invoke('studio:load-state'),
@@ -20,20 +21,21 @@ contextBridge.exposeInMainWorld('desktopApi', {
   updateProjectAssetSnapshot: (request: unknown) => ipcRenderer.invoke('studio:update-project-asset-snapshot', request),
   listFixtureScriptTrusts: (projectId: string) => ipcRenderer.invoke('studio:list-fixture-script-trusts', projectId),
   approveFixtureScriptTrust: (request: unknown) => ipcRenderer.invoke('studio:approve-fixture-script-trust', request),
-  getRuntimeInfo: () => ipcRenderer.invoke('runtime:get-info'),
+  getRuntimeInfo: () => ipcRenderer.invoke(runtimeIpcChannels.getInfo),
   testMidsceneConnection: (config: unknown) => ipcRenderer.invoke('runtime:test-midscene-connection', config),
   startBrowserSession: (request: unknown) => ipcRenderer.invoke('runtime:start-browser-session', request),
   navigateBrowserSession: (request: unknown) =>
     ipcRenderer.invoke('runtime:navigate-browser-session', request),
   captureBrowserSnapshot: () => ipcRenderer.invoke('runtime:capture-browser-snapshot'),
-  runTestCase: (request: unknown) => ipcRenderer.invoke('runtime:run-test-case', request),
+  runTestCase: (request: unknown) => ipcRenderer.invoke(runtimeIpcChannels.runTestCase, request),
+  runSuite: (request: unknown) => ipcRenderer.invoke(runtimeIpcChannels.runSuite, request),
   runRecording: (request: unknown) => ipcRenderer.invoke('runtime:run-recording', request),
-  cancelRun: (runId: string) => ipcRenderer.invoke('runtime:cancel-run', runId),
+  cancelRun: (runId: string) => ipcRenderer.invoke(runtimeIpcChannels.cancelRun, runId),
   exportProjectReport: (request: unknown) => ipcRenderer.invoke('runtime:export-project-report', request),
-  loadRunDetail: (runId: string) => ipcRenderer.invoke('runtime:load-run-detail', runId),
-  openArtifact: (artifactPath: string) => ipcRenderer.invoke('runtime:open-artifact', artifactPath),
-  exportArtifact: (artifactPath: string) => ipcRenderer.invoke('runtime:export-artifact', artifactPath),
-  attachManualEvidence: () => ipcRenderer.invoke('runtime:attach-manual-evidence'),
+  loadRunDetail: (runId: string) => ipcRenderer.invoke(runtimeIpcChannels.loadRunDetail, runId),
+  openArtifact: (artifactPath: string) => ipcRenderer.invoke(runtimeIpcChannels.openArtifact, artifactPath),
+  exportArtifact: (artifactPath: string) => ipcRenderer.invoke(runtimeIpcChannels.exportArtifact, artifactPath),
+  attachManualEvidence: () => ipcRenderer.invoke(runtimeIpcChannels.attachManualEvidence),
   startSession: (request: unknown) => ipcRenderer.invoke('runtime:start-session', request),
   endSession: () => ipcRenderer.invoke('runtime:end-session'),
   sendChatCommand: (request: unknown) => ipcRenderer.invoke('runtime:send-chat-command', request),

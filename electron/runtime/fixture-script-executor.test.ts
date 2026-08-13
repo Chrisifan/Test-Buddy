@@ -1,4 +1,6 @@
 import { createHash } from 'node:crypto';
+import { ChildProcess, type ChildProcess as ChildProcessType } from 'node:child_process';
+import { PassThrough, Writable } from 'node:stream';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -122,7 +124,46 @@ describe('FixtureScriptExecutor', () => {
       evidence: expect.objectContaining({ mode: 'script', outcome: 'neutral' }),
     }));
   });
+
+  it('contains a broken stdin pipe when the fixture child exits before receiving its request', async () => {
+    const projectDirectory = await createTemporaryProjectDirectory();
+    const fixture = await createScriptFixture(
+      projectDirectory,
+      'process.stdout.write(JSON.stringify({ status: "passed", outputs: { orderId: "unused" } }));',
+    );
+    const child = createBrokenStdinChild();
+    const executor = new FixtureScriptExecutor({ spawn: () => child as never });
+
+    await expect(executor.execute(createRequest(fixture, projectDirectory))).resolves.toEqual(expect.objectContaining({
+      evidence: expect.objectContaining({ mode: 'script', outcome: 'failed' }),
+    }));
+  });
 });
+
+function createBrokenStdinChild(): ChildProcessType {
+  const child = new ChildProcess();
+  const stdout = new PassThrough();
+  const stderr = new PassThrough();
+  const stdin = new Writable({
+    write(_chunk, _encoding, callback) {
+      callback(Object.assign(new Error('write EPIPE'), { code: 'EPIPE' }));
+    },
+  });
+  Object.assign(child, {
+    exitCode: null,
+    signalCode: null,
+    stdin,
+    stdout,
+    stderr,
+    kill: () => {
+      stdout.end();
+      stderr.end();
+      child.emit('close', 1);
+      return true;
+    },
+  });
+  return child;
+}
 
 async function createTemporaryProjectDirectory(): Promise<string> {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'testbuddy-fixture-script-'));

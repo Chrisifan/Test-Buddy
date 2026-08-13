@@ -167,6 +167,7 @@ export class FixtureScriptExecutor implements FixtureLifecycleExecutor {
     let timedOut = false;
     let cancelled = false;
     let outputExceeded = false;
+    let stdinError: Error | undefined;
     const terminate = () => terminateChild(child);
     const onAbort = () => {
       cancelled = true;
@@ -180,6 +181,11 @@ export class FixtureScriptExecutor implements FixtureLifecycleExecutor {
       timedOut = true;
       terminate();
     }, this.timeoutMs);
+    const onStdinError = (error: Error) => {
+      stdinError = error;
+      terminate();
+    };
+    child.stdin.once('error', onStdinError);
     try {
       const stdout = captureBoundedStream(child.stdout, FIXTURE_SCRIPT_STDIO_LIMIT, () => {
         outputExceeded = true;
@@ -200,6 +206,9 @@ export class FixtureScriptExecutor implements FixtureLifecycleExecutor {
       const [exitCode, stdoutBytes] = await Promise.all([waitForChildClose(child), stdout, stderr.then(() => undefined)]).then(
         ([code, output]) => [code, output] as const,
       );
+      if (stdinError) {
+        throw stdinError;
+      }
       if (cancelled || request.cancellationSignal?.aborted) {
         throw new FixtureScriptCancelledError();
       }
@@ -212,6 +221,7 @@ export class FixtureScriptExecutor implements FixtureLifecycleExecutor {
       return JSON.parse(stdoutBytes.toString('utf8'));
     } finally {
       clearTimeout(timeout);
+      child.stdin.removeListener('error', onStdinError);
       request.cancellationSignal?.removeEventListener('abort', onAbort);
     }
   }

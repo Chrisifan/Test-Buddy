@@ -6,6 +6,8 @@ import type {
   RunEventPayload,
   RunRecordingRequest,
   RunRecordingResponse,
+  RunSuiteRequest,
+  RunSuiteResponse,
   RunTestCaseRequest,
   RunTestCaseResponse,
   RunWorkflowRequest,
@@ -13,6 +15,7 @@ import type {
   RuntimeProfile,
 } from '../../shared/studio.js';
 import {
+  findSuiteAsset,
   getExclusiveRecordingReplayId,
   getTestCasePrdPath,
   isAgentRunnableTestCase,
@@ -29,6 +32,7 @@ import { TestRunner } from './test-runner.js';
 import { FixtureHttpExecutor } from './fixture-http-executor.js';
 import { FixtureScriptExecutor } from './fixture-script-executor.js';
 import { DefaultFixtureLifecycleExecutor } from './default-fixture-lifecycle-executor.js';
+import { SuiteRunner } from './suite-runner.js';
 import { PixelVisualDiffService, type VisualDiffImageAdapter } from './visual-diff.js';
 import { StudioRuntime, type DeterministicInputBindingResolver } from '../studioRuntime.js';
 
@@ -40,6 +44,7 @@ export interface RuntimeBundle {
   testRunner: TestRunner;
   ensureReady: () => Promise<void>;
   runTestCase: (request: RunTestCaseRequest) => Promise<RunTestCaseResponse>;
+  runSuite: (request: RunSuiteRequest) => Promise<RunSuiteResponse>;
   runRecording: (request: RunRecordingRequest) => Promise<RunRecordingResponse>;
   runWorkflow: (request: RunWorkflowRequest) => Promise<RunWorkflowResponse>;
   cancelRun: (runId: string) => boolean;
@@ -111,17 +116,72 @@ export function createRuntimeBundle(options: RuntimeBundleOptions): RuntimeBundl
   const withActiveRun = async <T>(
     runId: string,
     execute: (cancellationSignal: AbortSignal) => Promise<T>,
+    externalCancellationSignal?: AbortSignal,
   ): Promise<T> => {
     if (activeRuns.has(runId)) {
       throw new Error(`运行 ${runId} 已在执行中。`);
     }
     const controller = new AbortController();
+    const abort = () => controller.abort();
+    if (externalCancellationSignal?.aborted) {
+      controller.abort();
+    } else {
+      externalCancellationSignal?.addEventListener('abort', abort, { once: true });
+    }
     activeRuns.set(runId, controller);
     try {
       return await execute(controller.signal);
     } finally {
+      externalCancellationSignal?.removeEventListener('abort', abort);
       activeRuns.delete(runId);
     }
+  };
+
+  const executeTestCase = async (
+    request: RunTestCaseRequest,
+    runId: string,
+    cancellationSignal: AbortSignal,
+  ): Promise<RunTestCaseResponse> => {
+    const recordingId = getExclusiveRecordingReplayId(request.testCase);
+    const documentId = getTestCasePrdPath(request.testCase)?.documentId;
+    const recording = recordingId
+      ? request.project.recordings.find((item) => item.id === recordingId)
+      : undefined;
+
+    if (request.testCase.assetReferences?.fixtures.length) {
+      return testRunner.run({ ...request, runId, cancellationSignal });
+    }
+
+    if (recording) {
+      return recordingRunner.run({
+        ...request,
+        runId,
+        cancellationSignal,
+        project: request.project,
+        environment: request.environment,
+        recording,
+        testCaseId: request.testCase.id,
+        ...(documentId ? { documentId } : {}),
+      });
+    }
+
+    if (isAgentRunnableTestCase(request.testCase)) {
+      return studioRuntime.runWorkflow({
+        runId,
+        cancellationSignal,
+        workflow: testCaseToWorkflow(request.testCase),
+        targetEnvironment: request.environment.name,
+        runtimeProfile: resolveRuntimeProfile(request.runtimeProfile, request.environment),
+        ...(request.midsceneConfig ? { midsceneConfig: request.midsceneConfig } : {}),
+        ...(request.agentModelConfig ? { agentModelConfig: request.agentModelConfig } : {}),
+        ...(request.browserSession ? { browserSession: request.browserSession } : {}),
+        project: request.project,
+        environment: request.environment,
+        ...(documentId ? { documentId } : {}),
+      });
+    }
+
+    return testRunner.run({ ...request, runId, cancellationSignal });
   };
 
   return {
@@ -133,48 +193,66 @@ export function createRuntimeBundle(options: RuntimeBundleOptions): RuntimeBundl
     ensureReady: () => artifactManager.ensureReady(),
     runTestCase: async (request) => {
       const runId = request.runId ?? `run-${Date.now()}`;
+      return withActiveRun(runId, (cancellationSignal) => executeTestCase(request, runId, cancellationSignal));
+    },
+    runSuite: async (request) => {
+      const runId = request.runId ?? `suite-run-${Date.now()}`;
       return withActiveRun(runId, async (cancellationSignal) => {
-      const recordingId = getExclusiveRecordingReplayId(request.testCase);
-      const documentId = getTestCasePrdPath(request.testCase)?.documentId;
-      const recording = recordingId
-        ? request.project.recordings.find((item) => item.id === recordingId)
-        : undefined;
-
-      if (request.testCase.assetReferences?.fixtures.length) {
-        return testRunner.run({ ...request, runId, cancellationSignal });
-      }
-
-      if (recording) {
-        return recordingRunner.run({
-          ...request,
+        const suite = findSuiteAsset(request.project, request.suite);
+        if (!suite) {
+          const now = new Date().toISOString();
+          return {
+            runId,
+            title: `Suite ${request.suite.id}@${request.suite.version}`,
+            detail: {
+              suite: {
+                suiteId: request.suite.id,
+                suiteVersion: request.suite.version,
+                environmentId: '',
+                status: 'neutral',
+                startedAt: now,
+                endedAt: now,
+                effectiveConcurrency: 1,
+                results: [],
+                issues: [`未找到 Suite：${request.suite.id}@${request.suite.version}。`],
+              },
+              caseDetails: [],
+            },
+          };
+        }
+        const caseDetails: RunTestCaseResponse['detail'][] = [];
+        const suiteResult = await new SuiteRunner({
+          execute: async ({ testCase, environment, attempt }) => {
+            const response = await executeTestCase({
+              runId: `${runId}-${testCase.id}-attempt-${attempt}`,
+              project: request.project,
+              testCase,
+              environment,
+              ...(request.runtimeProfile ? { runtimeProfile: request.runtimeProfile } : {}),
+              ...(request.midsceneConfig ? { midsceneConfig: request.midsceneConfig } : {}),
+              ...(request.agentModelConfig ? { agentModelConfig: request.agentModelConfig } : {}),
+              ...(request.browserSession ? { browserSession: request.browserSession } : {}),
+              ...(request.fixtureScriptTrustRecords ? { fixtureScriptTrustRecords: request.fixtureScriptTrustRecords } : {}),
+              ...(request.fixtureScriptTrustDirectory ? { fixtureScriptTrustDirectory: request.fixtureScriptTrustDirectory } : {}),
+              cancellationSignal,
+            }, `${runId}-${testCase.id}-attempt-${attempt}`, cancellationSignal);
+            caseDetails.push(response.detail);
+            return {
+              status: response.detail.status === 'running' ? 'neutral' : response.detail.status,
+              summary: response.detail.summary,
+              runId: response.runId,
+            };
+          },
+        }, { maxConcurrency: 1 }).run(request.project, suite, cancellationSignal);
+        return {
           runId,
-          cancellationSignal,
-          project: request.project,
-          environment: request.environment,
-          recording,
-          testCaseId: request.testCase.id,
-          ...(documentId ? { documentId } : {}),
-        });
-      }
-
-      if (isAgentRunnableTestCase(request.testCase)) {
-        return studioRuntime.runWorkflow({
-          runId,
-          cancellationSignal,
-          workflow: testCaseToWorkflow(request.testCase),
-          targetEnvironment: request.environment.name,
-          runtimeProfile: resolveRuntimeProfile(request.runtimeProfile, request.environment),
-          ...(request.midsceneConfig ? { midsceneConfig: request.midsceneConfig } : {}),
-          ...(request.agentModelConfig ? { agentModelConfig: request.agentModelConfig } : {}),
-          ...(request.browserSession ? { browserSession: request.browserSession } : {}),
-          project: request.project,
-          environment: request.environment,
-          ...(documentId ? { documentId } : {}),
-        });
-      }
-
-      return testRunner.run({ ...request, runId, cancellationSignal });
-      });
+          title: suite.name,
+          detail: {
+            suite: suiteResult,
+            caseDetails,
+          },
+        };
+      }, request.cancellationSignal);
     },
     runRecording: async (request) => {
       const runId = request.runId ?? `agent-run-recording-${Date.now()}`;

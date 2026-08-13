@@ -1,7 +1,13 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { createEmptyProject, createInitialStudioState, type DesktopApi } from '../shared/studio.js';
+import {
+  createEmptyProject,
+  createEmptySuiteAsset,
+  createEmptyTestCase,
+  createInitialStudioState,
+  type DesktopApi,
+} from '../shared/studio.js';
 import { App } from './App.js';
 
 describe('App shell', () => {
@@ -128,6 +134,47 @@ describe('App shell', () => {
         groupId: project.groups[0]!.id,
         environmentId: environment.id,
       });
+    });
+  });
+
+  it('runs a saved Suite through Case records without creating a synthetic Suite run', async () => {
+    const project = createEmptyProject(1);
+    const environment = project.environments[0]!;
+    const testCase = {
+      ...createEmptyTestCase(1, project.groups[0]!.id, environment.id),
+      id: 'case-suite-catalog',
+      name: 'Suite 商品目录检查',
+    };
+    const suite = {
+      ...createEmptySuiteAsset(project, 1),
+      id: 'suite-release',
+      name: '发布回归',
+      caseReferences: [{ id: testCase.id, version: testCase.version ?? 1, dependsOn: [] }],
+    };
+    project.testCases = [testCase];
+    project.suites = [suite];
+    const state = createInitialStudioState();
+    state.projects = [project];
+    state.selectedProjectId = project.id;
+    state.selectedGroupId = project.groups[0]!.id;
+    state.selectedTestCaseId = testCase.id;
+    state.selectedRecordingId = '';
+    state.startupGuide.completed = true;
+    window.localStorage.setItem('midscene-studio-state-v2', JSON.stringify(state));
+
+    render(<App />);
+
+    const navigation = await screen.findByRole('navigation', { name: '主导航' });
+    fireEvent.click(within(navigation).getByRole('button', { name: '套件' }));
+    fireEvent.click(await screen.findByRole('button', { name: '运行 Suite' }));
+
+    await screen.findByRole('heading', { level: 1, name: '运行记录' });
+    await waitFor(() => {
+      const persisted = JSON.parse(window.localStorage.getItem('midscene-studio-state-v2') ?? '{}');
+      expect(persisted.runDetails).toEqual(expect.arrayContaining([
+        expect.objectContaining({ testCaseId: testCase.id }),
+      ]));
+      expect(persisted.runDetails.some((detail: { id: string }) => /^suite-run-\d+$/u.test(detail.id))).toBe(false);
     });
   });
 });

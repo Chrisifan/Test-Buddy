@@ -4,6 +4,7 @@ import {
   FileText,
   FolderKanban,
   House,
+  Layers3,
   MessageSquareText,
   MousePointerClick,
   PlaySquare,
@@ -68,6 +69,9 @@ import {
   type RunDetail,
   type RunSummary,
   type RunTone,
+  type SuiteAsset,
+  type SuiteRunDetail,
+  type VersionedTestAssetReference,
   type StartupGuideState,
   type StudioState,
   type TestCaseDraft,
@@ -99,6 +103,7 @@ import {
   onRunEvent,
   onRecordingEvent,
   runRecording,
+  runSuite,
   runTestCase,
   runWorkflow,
   saveCredential,
@@ -120,6 +125,9 @@ const DocumentAnalysisPage = lazy(() =>
 );
 const TestCaseManagementPage = lazy(() =>
   import('./features/cases/TestCaseManagementPage.js').then(({ TestCaseManagementPage: Page }) => ({ default: Page })),
+);
+const SuiteManagementPage = lazy(() =>
+  import('./features/suites/SuiteManagementPage.js').then(({ SuiteManagementPage: Page }) => ({ default: Page })),
 );
 const RunRecordsPage = lazy(() =>
   import('./features/runs/RunRecordsPage.js').then(({ RunRecordsPage: Page }) => ({ default: Page })),
@@ -143,6 +151,12 @@ type PendingDeletion =
   | { kind: 'project'; id: string; description: string }
   | { kind: 'group'; id: string; description: string }
   | { kind: 'recording'; id: string; description: string };
+
+function latestSuiteReference(project: ProjectDraft | undefined): VersionedTestAssetReference | undefined {
+  const latestSuite = [...(project?.suites ?? [])]
+    .sort((left, right) => right.version - left.version || left.id.localeCompare(right.id))[0];
+  return latestSuite ? { id: latestSuite.id, version: latestSuite.version } : undefined;
+}
 
 function RouteLoadingPlaceholder() {
   return <div aria-busy="true" className="h-full min-h-0 animate-pulse rounded-[var(--panel-radius)] bg-muted/30" />;
@@ -174,6 +188,9 @@ export function App() {
   const [selectedGroupId, setSelectedGroupId] = useState(initialState.selectedGroupId);
   const [selectedTestCaseId, setSelectedTestCaseId] = useState(initialState.selectedTestCaseId);
   const [selectedRecordingId, setSelectedRecordingId] = useState(initialState.selectedRecordingId);
+  const [selectedSuiteReference, setSelectedSuiteReference] = useState<VersionedTestAssetReference | undefined>(
+    () => latestSuiteReference(initialState.projects[0]),
+  );
   const [selectedDocumentId, setSelectedDocumentId] = useState(
     initialState.projects[0]?.documents[0]?.id ?? '',
   );
@@ -196,6 +213,8 @@ export function App() {
   const [deepLocate, setDeepLocate] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [isRunning, setIsRunning] = useState(false);
+  const [activeSuiteRunId, setActiveSuiteRunId] = useState<string>();
+  const [lastSuiteRun, setLastSuiteRun] = useState<SuiteRunDetail>();
   const [isBrowserBusy, setIsBrowserBusy] = useState(false);
   const [semanticAnalyzingDocumentId, setSemanticAnalyzingDocumentId] = useState<string | null>(null);
   const [semanticAnalysisError, setSemanticAnalysisError] = useState<{
@@ -223,6 +242,7 @@ export function App() {
     environmentId: string;
     environmentName: string;
   } | null>(null);
+  const activeSuiteRunIdRef = useRef<string | undefined>(undefined);
   const previousLocaleRef = useRef(resolveLocale(initialState.appearance.localeMode));
   const latestStudioStateRef = useRef<StudioState | undefined>(undefined);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -329,6 +349,7 @@ export function App() {
         setSelectedTestCaseId(state.selectedTestCaseId);
         setSelectedRecordingId(state.selectedRecordingId);
         const hydratedProject = state.projects.find((project) => project.id === state.selectedProjectId);
+        setSelectedSuiteReference(latestSuiteReference(hydratedProject));
         setSelectedDocumentId(hydratedProject?.documents[0]?.id ?? '');
         setRunDetails(state.runDetails);
         setRecentRuns(state.recentRuns);
@@ -443,6 +464,13 @@ export function App() {
 
   useEffect(() => {
     const unsubscribe = onRunEvent((event) => {
+      if (activeSuiteRunIdRef.current && event.runId.startsWith(`${activeSuiteRunIdRef.current}-`)) {
+        const line = event.line;
+        if (event.type === 'log' && line) {
+          setRunLogs((current) => [...current, line]);
+        }
+        return;
+      }
       if (event.type === 'status') {
         const runContext = pendingTestCaseRunContextRef.current;
         const summary = event.summary;
@@ -715,6 +743,7 @@ export function App() {
     setSelectedGroupId(project?.groups[0]?.id ?? '');
     setSelectedTestCaseId(project?.testCases[0]?.id ?? '');
     setSelectedRecordingId(project?.recordings[0]?.id ?? '');
+    setSelectedSuiteReference(latestSuiteReference(project));
     setSelectedDocumentId(project?.documents[0]?.id ?? '');
     setNavigateUrl(project?.defaultUrl ?? '');
     setBrowserSession((current) => ({
@@ -829,6 +858,7 @@ export function App() {
     const nextSelectedGroupId = nextProject?.groups[0]?.id ?? '';
     const nextSelectedTestCaseId = nextProject?.testCases[0]?.id ?? '';
     const nextSelectedRecordingId = nextProject?.recordings[0]?.id ?? '';
+    const nextSelectedSuiteReference = latestSuiteReference(nextProject);
     const nextSelectedDocumentId = nextProject?.documents[0]?.id ?? '';
     const nextSelectedRunId = recentRuns.find((run) => run.projectId !== projectId)?.id ?? '';
 
@@ -840,6 +870,7 @@ export function App() {
     setSelectedGroupId(nextSelectedGroupId);
     setSelectedTestCaseId(nextSelectedTestCaseId);
     setSelectedRecordingId(nextSelectedRecordingId);
+    setSelectedSuiteReference(nextSelectedSuiteReference);
     setSelectedDocumentId(nextSelectedDocumentId);
     setSelectedRunId(nextSelectedRunId);
     setNavigateUrl(nextProject?.defaultUrl ?? '');
@@ -1930,6 +1961,93 @@ export function App() {
     setSelectedTestCaseId(testCase.id);
   }
 
+  function handlePublishSuite(suite: SuiteAsset) {
+    if (!selectedProject) {
+      return;
+    }
+    updateSelectedProject((project) => ({
+      ...project,
+      suites: [...project.suites, suite],
+    }), 'immediate');
+    setSelectedSuiteReference({ id: suite.id, version: suite.version });
+  }
+
+  async function handleRunSuite(reference: VersionedTestAssetReference) {
+    if (!selectedProject || isRunning) {
+      return;
+    }
+    const suite = selectedProject.suites.find((candidate) => candidate.id === reference.id && candidate.version === reference.version);
+    if (!suite) {
+      return;
+    }
+
+    const suiteRunId = `suite-run-${Date.now()}`;
+    activeSuiteRunIdRef.current = suiteRunId;
+    setActiveSuiteRunId(suiteRunId);
+    setIsRunning(true);
+    setRunId(suiteRunId);
+    setRunTitle(suite.name);
+    setRunStatus('running');
+    setRunLogs([
+      `[${createTimestampLabel()}] Dispatching Suite: ${suite.name}@${suite.version}`,
+      `[${createTimestampLabel()}] Project: ${selectedProject.name}`,
+      `[${createTimestampLabel()}] Effective desktop concurrency: 1`,
+    ]);
+
+    try {
+      const result = await runSuite({
+        runId: suiteRunId,
+        project: selectedProject,
+        suite: reference,
+        runtimeProfile,
+        midsceneConfig,
+        agentModelConfig,
+        browserSession,
+      });
+      const caseDetails = result.detail.caseDetails;
+      setLastSuiteRun(result.detail);
+      setRunId(result.runId);
+      setRunTitle(result.title);
+      setRunStatus(result.detail.suite.status);
+      setRunDetails((current) => [
+        ...caseDetails,
+        ...current.filter((run) => !caseDetails.some((detail) => detail.id === run.id)),
+      ]);
+      setRecentRuns((current) => [
+        ...caseDetails.map((detail) => ({
+          id: detail.id,
+          name: detail.title,
+          status: detail.status,
+          duration: detail.duration,
+          summary: detail.summary,
+          projectId: selectedProject.id,
+          testCaseId: detail.testCaseId,
+          ...(detail.documentId ? { documentId: detail.documentId } : {}),
+          environmentId: detail.environmentId,
+          environmentName: selectedProject.environments.find((environment) => environment.id === detail.environmentId)?.name,
+          startedAt: detail.startedAt,
+        })),
+        ...current.filter((run) => !caseDetails.some((detail) => detail.id === run.id)),
+      ]);
+      const firstDetail = caseDetails[0];
+      if (firstDetail) {
+        setSelectedRunId(firstDetail.id);
+        switchPage('runs');
+      }
+    } catch {
+      setRunStatus('failed');
+      appendSystemMessage(t('app.runtime.suiteFailed'));
+    } finally {
+      activeSuiteRunIdRef.current = undefined;
+      setActiveSuiteRunId(undefined);
+      setIsRunning(false);
+    }
+  }
+
+  async function handleCancelSuite(runId: string) {
+    await handleCancelRun(runId);
+  }
+
   async function handleSaveCredential(payload: {
     label: string;
     username: string;
@@ -2455,6 +2573,7 @@ export function App() {
           <NavButton active={activePage === 'projects'} icon={<FolderKanban className="h-4 w-4" />} label={t('app.nav.projects')} onClick={() => goToPage('projects')} />
           <NavButton active={activePage === 'documents'} icon={<FileText className="h-4 w-4" />} label={t('app.nav.documents')} onClick={() => goToPage('documents')} />
           <NavButton active={activePage === 'cases'} icon={<ClipboardList className="h-4 w-4" />} label={t('app.nav.cases')} onClick={() => goToPage('cases')} />
+          <NavButton active={activePage === 'suites'} icon={<Layers3 className="h-4 w-4" />} label={t('app.nav.suites')} onClick={() => goToPage('suites')} />
           <NavButton active={activePage === 'runs'} icon={<PlaySquare className="h-4 w-4" />} label={t('app.nav.runs')} onClick={() => goToPage('runs')} />
           <NavButton active={activePage === 'nl'} icon={<MessageSquareText className="h-4 w-4" />} label={t('app.nav.naturalLanguage')} onClick={() => goToPage('nl')} />
           <NavButton active={activePage === 'workflow'} icon={<Workflow className="h-4 w-4" />} label={t('app.nav.workflow')} onClick={() => goToPage('workflow')} />
@@ -2490,6 +2609,7 @@ export function App() {
           <NavButton active={activePage === 'projects'} icon={<FolderKanban className="h-4 w-4" />} label={t('app.nav.projects')} onClick={() => goToPage('projects')} showLabel={false} />
           <NavButton active={activePage === 'documents'} icon={<FileText className="h-4 w-4" />} label={t('app.nav.documents')} onClick={() => goToPage('documents')} showLabel={false} />
           <NavButton active={activePage === 'cases'} icon={<ClipboardList className="h-4 w-4" />} label={t('app.nav.cases')} onClick={() => goToPage('cases')} showLabel={false} />
+          <NavButton active={activePage === 'suites'} icon={<Layers3 className="h-4 w-4" />} label={t('app.nav.suites')} onClick={() => goToPage('suites')} showLabel={false} />
           <NavButton active={activePage === 'runs'} icon={<PlaySquare className="h-4 w-4" />} label={t('app.nav.runs')} onClick={() => goToPage('runs')} showLabel={false} />
           <NavButton active={activePage === 'nl'} icon={<MessageSquareText className="h-4 w-4" />} label={t('app.nav.naturalLanguage')} onClick={() => goToPage('nl')} showLabel={false} />
           <NavButton active={activePage === 'workflow'} icon={<Workflow className="h-4 w-4" />} label={t('app.nav.workflow')} onClick={() => goToPage('workflow')} showLabel={false} />
@@ -2600,6 +2720,25 @@ export function App() {
               saveStatus={saveStatus}
               selectedTestCase={selectedTestCase}
               selectedTestCaseId={selectedTestCaseId}
+            />
+          ) : null}
+
+          {activePage === 'suites' ? (
+            <SuiteManagementPage
+              activeRunId={activeSuiteRunId}
+              isRunning={isRunning}
+              lastRun={lastSuiteRun}
+              onCancelSuite={handleCancelSuite}
+              onOpenProjects={() => goToPage('projects')}
+              onOpenRun={(runId) => {
+                setSelectedRunId(runId);
+                switchPage('runs');
+              }}
+              onPublishSuite={handlePublishSuite}
+              onRunSuite={handleRunSuite}
+              onSelectSuite={setSelectedSuiteReference}
+              project={selectedProject}
+              selectedSuiteReference={selectedSuiteReference}
             />
           ) : null}
 
