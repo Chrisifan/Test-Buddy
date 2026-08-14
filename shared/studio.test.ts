@@ -48,10 +48,59 @@ import {
   prunePrdCoverageTriage,
   updatePrdDocumentAnalysis,
   workflowToTestCase,
+  type ProjectDraft,
+  type TestCaseDraft,
 } from './studio.js';
 import { createStubAgentRun } from './agentStub.js';
 
 describe('suite asset contract', () => {
+  it('keeps v1 and v2 history while group reassignment appends one v3 from the latest Case revision', () => {
+    const project = createEmptyProject(1);
+    const originalGroupId = project.groups[0]!.id;
+    const fallbackGroupId = 'group-fallback';
+    const caseV1 = { ...createEmptyTestCase(1, originalGroupId, project.environments[0]!.id), id: 'case-checkout', version: 1 };
+    const caseV2 = { ...caseV1, version: 2, name: 'Checkout v2' };
+    project.testCases = [caseV1, caseV2];
+    const appendLatestTransforms = (studio as typeof studio & {
+      appendLatestTestCaseTransforms: (project: Pick<ProjectDraft, 'testCases'>, transform: (testCase: TestCaseDraft) => TestCaseDraft | undefined) => TestCaseDraft[];
+    }).appendLatestTestCaseTransforms;
+
+    const transformed = appendLatestTransforms(project, (testCase) => (
+      testCase.groupId === originalGroupId ? { ...testCase, groupId: fallbackGroupId } : undefined
+    ));
+
+    expect(transformed.filter((testCase) => testCase.id === caseV1.id).map((testCase) => testCase.version)).toEqual([1, 2, 3]);
+    expect(findTestCaseVersion({ testCases: transformed }, { id: caseV1.id, version: 1 })).toMatchObject({ groupId: originalGroupId });
+    expect(findTestCaseVersion({ testCases: transformed }, { id: caseV1.id, version: 2 })).toMatchObject({ groupId: originalGroupId });
+    expect(findTestCaseVersion({ testCases: transformed }, { id: caseV1.id, version: 3 })).toMatchObject({ groupId: fallbackGroupId });
+  });
+
+  it('keeps v1 and v2 history while recording detachment appends one v3 from the latest Case revision', () => {
+    const project = createEmptyProject(1);
+    const baseCase = createEmptyTestCase(1, project.groups[0]!.id, project.environments[0]!.id);
+    const replayStep = {
+      ...baseCase.steps[0]!,
+      type: 'recordingReplay' as const,
+      recordingId: 'recording-checkout',
+    };
+    const caseV1 = { ...baseCase, id: 'case-checkout', version: 1, steps: [replayStep] };
+    const caseV2 = { ...caseV1, version: 2, name: 'Checkout v2' };
+    project.testCases = [caseV1, caseV2];
+    const appendLatestTransforms = (studio as typeof studio & {
+      appendLatestTestCaseTransforms: (project: Pick<ProjectDraft, 'testCases'>, transform: (testCase: TestCaseDraft) => TestCaseDraft | undefined) => TestCaseDraft[];
+    }).appendLatestTestCaseTransforms;
+
+    const transformed = appendLatestTransforms(project, (testCase) => {
+      const detached = studio.detachRecordingFromTestCases([testCase], 'recording-checkout').testCases[0]!;
+      return detached.steps[0]?.recordingId === testCase.steps[0]?.recordingId ? undefined : detached;
+    });
+
+    expect(transformed.filter((testCase) => testCase.id === caseV1.id).map((testCase) => testCase.version)).toEqual([1, 2, 3]);
+    expect(findTestCaseVersion({ testCases: transformed }, { id: caseV1.id, version: 1 })?.steps[0]).toMatchObject({ recordingId: 'recording-checkout' });
+    expect(findTestCaseVersion({ testCases: transformed }, { id: caseV1.id, version: 2 })?.steps[0]).toMatchObject({ recordingId: 'recording-checkout' });
+    expect(findTestCaseVersion({ testCases: transformed }, { id: caseV1.id, version: 3 })?.steps[0]).toMatchObject({ recordingId: undefined });
+  });
+
   it('creates an empty Suite pinned to the selected project environment', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-08-13T08:00:00.000Z'));

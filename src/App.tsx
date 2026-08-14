@@ -29,6 +29,7 @@ import {
   createRecordingStep,
   createRecordingFromGeneratedPath,
   copyTestStep,
+  appendLatestTestCaseTransforms,
   createNextTestCaseVersion,
   createTestStep,
   createTestCaseFromRecording,
@@ -1331,21 +1332,25 @@ export function App() {
       };
     const nextGroups = remainingGroups.length ? remainingGroups : [fallbackGroup];
     const nextGroupId = selectedGroupId === groupId ? fallbackGroup.id : selectedGroupId;
-    const movedSelectedCase = selectedTestCase?.groupId === groupId
+    const latestSelectedReference = selectedTestCase
+      ? latestTestCaseReference(selectedProject, selectedTestCase.id)
+      : undefined;
+    const movedSelectedCase = selectedTestCase?.groupId === groupId && selectedTestCaseReference?.version === latestSelectedReference?.version
       ? createNextTestCaseVersion(selectedProject, selectedTestCase, { groupId: fallbackGroup.id })
       : undefined;
 
     updateSelectedProject((project) => {
-      const nextTestCases = project.testCases.flatMap((testCase) =>
-        testCase.groupId === groupId
-          ? [testCase, createNextTestCaseVersion(project, testCase, { groupId: fallbackGroup.id })]
-          : [testCase],
-      );
+      const nextTestCases = appendLatestTestCaseTransforms(project, (testCase) => (
+        testCase.groupId === groupId ? { ...testCase, groupId: fallbackGroup.id } : undefined
+      ));
       const nextRecordings = project.recordings.map((recording) =>
         recording.groupId === groupId ? { ...recording, groupId: fallbackGroup.id } : recording,
       );
+      const selectedHistoricalCase = selectedTestCase && selectedTestCaseReference
+        ? findTestCaseVersion({ testCases: nextTestCases }, selectedTestCaseReference)
+        : undefined;
       const nextSelectedTestCase =
-        nextTestCases.find((testCase) => testCase.id === selectedTestCaseId) ??
+        selectedHistoricalCase ??
         nextTestCases.find((testCase) => testCase.groupId === nextGroupId) ??
         nextTestCases[0];
       const nextSelectedRecording =
@@ -1906,16 +1911,29 @@ export function App() {
     }
 
     const nextRecordings = selectedProject.recordings.filter((item) => item.id !== recordingId);
-    const detached = detachRecordingFromTestCases(selectedProject.testCases, recordingId);
+    const latestSelectedReference = selectedTestCase
+      ? latestTestCaseReference(selectedProject, selectedTestCase.id)
+      : undefined;
+    const detachedSelected = selectedTestCase
+      ? detachRecordingFromTestCases([selectedTestCase], recordingId).testCases[0]
+      : undefined;
+    const selectedNextCase = selectedTestCase && selectedTestCaseReference && latestSelectedReference?.version === selectedTestCaseReference.version && detachedSelected &&
+      !detachedSelected.steps.every((step, index) => step === selectedTestCase.steps[index])
+      ? createNextTestCaseVersion(selectedProject, selectedTestCase, detachedSelected)
+      : undefined;
     updateSelectedProject((project) => ({
       ...project,
       recordings: nextRecordings,
-      testCases: project.testCases.flatMap((testCase, index) => (
-        detached.testCases[index]?.steps.every((step, stepIndex) => step === testCase.steps[stepIndex])
-          ? [testCase]
-          : [testCase, createNextTestCaseVersion(project, testCase, detached.testCases[index]!)]
-      )),
+      testCases: appendLatestTestCaseTransforms(project, (testCase) => {
+        const [detachedLatest] = detachRecordingFromTestCases([testCase], recordingId).testCases;
+        return detachedLatest?.steps.every((step, index) => step === testCase.steps[index])
+          ? undefined
+          : detachedLatest;
+      }),
     }));
+    if (selectedNextCase) {
+      setSelectedTestCaseReference({ id: selectedNextCase.id, version: selectedNextCase.version ?? 1 });
+    }
     setSelectedRecordingId(nextRecordings[0]?.id ?? '');
   }
 

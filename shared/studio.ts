@@ -728,6 +728,26 @@ export function createNextTestCaseVersion(
   };
 }
 
+/**
+ * Preserves every historical Case revision and appends at most one transformed
+ * revision for each logical Case ID, always derived from that ID's latest
+ * canonical published version.
+ */
+export function appendLatestTestCaseTransforms(
+  project: Pick<ProjectDraft, 'testCases'>,
+  transform: (testCase: TestCaseDraft) => TestCaseDraft | undefined,
+): TestCaseDraft[] {
+  const appended = listLatestTestCaseVersions(project).flatMap((testCase) => {
+    const transformed = transform(testCase);
+    if (!transformed) {
+      return [];
+    }
+    const { id: _id, version: _version, ...patch } = transformed;
+    return [createNextTestCaseVersion(project, testCase, patch)];
+  });
+  return [...project.testCases, ...appended];
+}
+
 export interface RecordingStepDraft {
   id: string;
   kind: RecordingStepKind;

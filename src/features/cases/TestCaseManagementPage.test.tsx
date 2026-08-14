@@ -232,6 +232,26 @@ describe('TestCaseManagementPage', () => {
     expect(screen.queryByDisplayValue('Checkout v2 draft')).not.toBeInTheDocument();
   });
 
+  it('makes published Case controls read-only while leaving the draft editor enabled', () => {
+    render(<ImmutableCaseHarness />);
+
+    expect(screen.getByLabelText('Step Title')).toBeDisabled();
+    expect(screen.getByRole('combobox', { name: 'Step Type' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Insert before step 1' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Drag step: 搜索商品' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '搜索商品 Duplicate' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Add Step' })).toBeDisabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit as New Version' }));
+
+    expect(screen.getByLabelText('Step Title')).toBeEnabled();
+    expect(screen.getByRole('combobox', { name: 'Step Type' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Insert before step 1' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Drag step: 搜索商品' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: '搜索商品 Duplicate' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Add Step' })).toBeEnabled();
+  });
+
   it('publishes a changed draft as v2 while retaining the unchanged v1 version', async () => {
     const onPublished = vi.fn();
     render(<ImmutableCaseHarness onPublished={onPublished} />);
@@ -261,9 +281,12 @@ describe('TestCaseManagementPage', () => {
     fireEvent.pointerDown(screen.getByRole('button', { name: 'Select a Case' }), { button: 0 });
     const latestItems = (await screen.findAllByRole('menuitem', { name: /Checkout v2/u })).filter((item) => item.textContent?.includes('v2'));
     expect(latestItems).toHaveLength(1);
+    expect(screen.queryByRole('menuitem', { name: /Checkout v1/u })).not.toBeInTheDocument();
     fireEvent.click(latestItems[0]!);
     fireEvent.pointerDown(screen.getByRole('button', { name: 'Select Case version' }), { button: 0 });
-    fireEvent.click(await screen.findByRole('menuitem', { name: 'Checkout v1 · v1' }));
+    const v1 = await screen.findByRole('menuitem', { name: 'Checkout v1 · v1' });
+    expect(screen.getByRole('menuitem', { name: 'Checkout v2 · v2' })).toBeInTheDocument();
+    fireEvent.click(v1);
     fireEvent.click(screen.getByRole('button', { name: 'Run Test' }));
 
     expect(onRun).toHaveBeenCalledWith({ id: 'immutable-case', version: 1 });

@@ -184,6 +184,7 @@ function FlowTerminal({ terminal }: { terminal: 'start' | 'end' }) {
 }
 
 function FlowInsertionPoint({
+  disabled,
   dropActive,
   index,
   isEmptyFlow = false,
@@ -192,6 +193,7 @@ function FlowInsertionPoint({
   onDragOver,
   onDrop,
 }: {
+  disabled?: boolean;
   dropActive: boolean;
   index: number;
   isEmptyFlow?: boolean;
@@ -213,6 +215,7 @@ function FlowInsertionPoint({
             className="case-insertion-zone"
             data-drop-target={dropActive}
             data-empty-flow={isEmptyFlow}
+            disabled={disabled}
             onDragEnter={onDragOver}
             onDragLeave={onDragEnd}
             onDragOver={(event) => event.preventDefault()}
@@ -526,6 +529,7 @@ function CaseSettingsDialog({
 
 function StepInspector({
   focusTitle,
+  readOnly = false,
   onFocused,
   onUpdateTestCase,
   project,
@@ -533,6 +537,7 @@ function StepInspector({
   testCase,
 }: {
   focusTitle: boolean;
+  readOnly?: boolean;
   onFocused: () => void;
   onUpdateTestCase: (updater: (testCase: TestCaseDraft) => TestCaseDraft, mode?: SaveMode) => void;
   project: ProjectDraft;
@@ -688,6 +693,7 @@ function StepInspector({
           aria-invalid={blocker === 'emptyTitle'}
           className={blocker === 'emptyTitle' ? 'border-destructive/70' : undefined}
           id={titleId}
+          disabled={readOnly}
           onChange={(event) => updateStep({ title: event.target.value })}
           ref={titleInputRef}
           value={step.title}
@@ -696,6 +702,7 @@ function StepInspector({
       <div className="grid gap-2">
         <Label id={stepTypeLabelId}>{t('cases.inspector.stepType')}</Label>
         <Select
+          disabled={readOnly}
           onValueChange={(value) => updateStep({
             type: value as TestStepDraft['type'],
             recordingId: value === 'recordingReplay' ? step.recordingId : undefined,
@@ -718,7 +725,7 @@ function StepInspector({
           <div className="grid gap-2">
             <Label id={recordingLabelId}>{t('cases.replay.bind')}</Label>
             {project.recordings.length ? (
-              <Select onValueChange={bindRecording} value={step.recordingId ?? ''}>
+              <Select disabled={readOnly} onValueChange={bindRecording} value={step.recordingId ?? ''}>
                 <SelectTrigger aria-invalid={blocker === 'missingRecording'} aria-labelledby={recordingLabelId} className={blocker === 'missingRecording' ? 'border-destructive/70' : undefined}>
                   <SelectValue placeholder={t('cases.replay.choose')} />
                 </SelectTrigger>
@@ -746,6 +753,7 @@ function StepInspector({
       {step.type === 'manual' ? (
         <Button
           className="justify-start"
+          disabled={readOnly}
           onClick={() => updateStep(createManualStepAutomationReplacement(step), 'immediate')}
           type="button"
           variant="outline"
@@ -774,6 +782,7 @@ function StepInspector({
                 {inputBinding ? (
                   <Button
                     aria-label={t('cases.binding.clear')}
+                    disabled={readOnly}
                     onClick={clearInputBinding}
                     size="icon"
                     title={t('cases.binding.clear')}
@@ -789,6 +798,7 @@ function StepInspector({
                   <div className="grid gap-2">
                     <Label id={inputBindingCredentialLabelId}>{t('cases.binding.credential')}</Label>
                     <Select
+                      disabled={readOnly}
                       onValueChange={(credentialId) => {
                         const credential = project.credentialRefs.find((item) => item.id === credentialId);
                         if (!credential) {
@@ -815,7 +825,7 @@ function StepInspector({
                   <div className="grid gap-2">
                     <Label id={inputBindingFieldLabelId}>{t('cases.binding.field')}</Label>
                     <Select
-                      disabled={!credentialBinding}
+                      disabled={readOnly || !credentialBinding}
                       onValueChange={(field) => {
                         if (!credentialBinding || (field !== 'username' && field !== 'secret')) {
                           return;
@@ -843,6 +853,7 @@ function StepInspector({
                 <div className="grid gap-2">
                   <Label id={inputBindingFixtureOutputLabelId}>{t('cases.binding.fixtureOutput')}</Label>
                   <Select
+                    disabled={readOnly}
                     onValueChange={(value) => {
                       const option = fixtureOutputOptions.find((candidate) => (
                         `${candidate.fixtureId}@${candidate.fixtureVersion}:${candidate.output.name}` === value
@@ -880,6 +891,7 @@ function StepInspector({
           {supportsDeterministicExecution ? (
             <Button
               className="justify-start"
+              disabled={readOnly}
               onClick={() => updateStructuredExecutionReviewStatus(isDeterministicActionConfirmed ? 'needsReview' : 'confirmed')}
               type="button"
               variant={isDeterministicActionConfirmed ? 'outline' : 'default'}
@@ -905,6 +917,7 @@ function StepInspector({
           aria-invalid={blocker === 'emptyInstruction'}
           className={blocker === 'emptyInstruction' ? 'min-h-36 border-destructive/70' : 'min-h-36'}
           id={instructionId}
+          disabled={readOnly}
           onChange={(event) => updateStep({ body: event.target.value })}
           value={step.body}
         />
@@ -922,6 +935,7 @@ function StepInspector({
 function SerialStepRow({
   dragActive,
   index,
+  readOnly = false,
   onCopy,
   onDelete,
   onDragEnd,
@@ -936,6 +950,7 @@ function SerialStepRow({
 }: {
   dragActive: boolean;
   index: number;
+  readOnly?: boolean;
   onCopy: () => void;
   onDelete: () => void;
   onDragEnd: () => void;
@@ -967,7 +982,8 @@ function SerialStepRow({
       <button
         aria-label={t('cases.aria.dragStep', { title: step.title })}
         className="case-step-drag"
-        draggable
+        disabled={readOnly}
+        draggable={!readOnly}
         onDragEnd={onDragEnd}
         onDragStart={onDragStart}
         title={t('cases.canvas.dragStep')}
@@ -993,25 +1009,25 @@ function SerialStepRow({
       </button>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button aria-label={`${step.title} ${t('cases.menu.copy')}`} size="icon" title={t('cases.menu.copy')} type="button" variant="ghost">
+          <Button aria-label={`${step.title} ${t('cases.menu.copy')}`} disabled={readOnly} size="icon" title={t('cases.menu.copy')} type="button" variant="ghost">
             <MoreHorizontal className="size-4" />
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">
-          <DropdownMenuItem disabled={index === 0} onSelect={() => onMove(index - 1)}>
+          <DropdownMenuItem disabled={readOnly || index === 0} onSelect={() => onMove(index - 1)}>
             <ArrowUp className="size-4" />
             {t('cases.menu.moveUp')}
           </DropdownMenuItem>
-          <DropdownMenuItem disabled={index === totalSteps - 1} onSelect={() => onMove(index + 2)}>
+          <DropdownMenuItem disabled={readOnly || index === totalSteps - 1} onSelect={() => onMove(index + 2)}>
             <ArrowDown className="size-4" />
             {t('cases.menu.moveDown')}
           </DropdownMenuItem>
           <DropdownMenuSeparator />
-          <DropdownMenuItem onSelect={onCopy}>
+          <DropdownMenuItem disabled={readOnly} onSelect={onCopy}>
             <Copy className="size-4" />
             {t('cases.menu.copy')}
           </DropdownMenuItem>
-          <DropdownMenuItem className="text-destructive focus:text-destructive" onSelect={onDelete}>
+          <DropdownMenuItem className="text-destructive focus:text-destructive" disabled={readOnly} onSelect={onDelete}>
             <Trash2 className="size-4" />
             {t('cases.step.delete')}
           </DropdownMenuItem>
@@ -1252,6 +1268,7 @@ export function TestCaseManagementPage({
                     {selectedCase.steps.map((step, index) => (
                       <div className="contents" key={step.id}>
                         <FlowInsertionPoint
+                          disabled={!isEditable}
                           dropActive={dropIndex === index}
                           index={index}
                           onCreate={createStep}
@@ -1262,6 +1279,7 @@ export function TestCaseManagementPage({
                         <SerialStepRow
                           dragActive={draggedStepId === step.id}
                           index={index}
+                          readOnly={!isEditable}
                           onCopy={() => {
                             const stepId = isEditable ? onCopyStep(step.id) : undefined;
                             if (stepId) {
@@ -1292,6 +1310,7 @@ export function TestCaseManagementPage({
                       </div>
                     ))}
                     <FlowInsertionPoint
+                      disabled={!isEditable}
                       dropActive={dropIndex === selectedCase.steps.length}
                       index={selectedCase.steps.length}
                       onCreate={createStep}
@@ -1304,6 +1323,7 @@ export function TestCaseManagementPage({
                 ) : (
                   <>
                     <FlowInsertionPoint
+                      disabled={!isEditable}
                       dropActive={dropIndex === 0}
                       index={0}
                       isEmptyFlow
@@ -1327,6 +1347,7 @@ export function TestCaseManagementPage({
                 {selectedStep ? (
                   <StepInspector
                     focusTitle={focusStepId === selectedStep.id}
+                    readOnly={!isEditable}
                     onFocused={() => setFocusStepId(undefined)}
                     onUpdateTestCase={(updater, mode) => isEditable && onUpdateTestCase(updater, mode)}
                     project={project}
