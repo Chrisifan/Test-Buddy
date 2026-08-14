@@ -212,15 +212,15 @@ async function loadProjectSnapshot(
   try {
     return await projectRepository.loadBound(projectId, expectedProjectRevision);
   } catch (error) {
-    if (isBindingUnavailableError(error)) {
+    if (isProjectUnboundError(error)) {
       return projectRepository.load(projectId);
     }
     throw error;
   }
 }
 
-function isBindingUnavailableError(error: unknown): error is { code: 'bindingUnavailable' } {
-  return typeof error === 'object' && error !== null && 'code' in error && error.code === 'bindingUnavailable';
+function isProjectUnboundError(error: unknown): error is { code: 'projectUnbound' } {
+  return typeof error === 'object' && error !== null && 'code' in error && error.code === 'projectUnbound';
 }
 
 function findEnvironment(

@@ -89,7 +89,7 @@ describe('ProjectRepository', () => {
       project: expect.objectContaining({ id: project.id, name: 'Legacy project' }),
       revision: expect.stringMatching(/^[a-f0-9]{64}$/),
     });
-    await expect(repository.loadBound(project.id)).rejects.toMatchObject({ code: 'bindingUnavailable' });
+    await expect(repository.loadBound(project.id)).rejects.toMatchObject({ code: 'projectUnbound' });
   });
 
   it('does not fall back to StudioStore when a bound directory is unavailable', async () => {

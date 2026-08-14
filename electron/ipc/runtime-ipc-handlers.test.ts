@@ -196,6 +196,35 @@ describe('registerRuntimeIpcHandlers', () => {
     expect(dependencies.getFixtureScriptTrustContext).not.toHaveBeenCalled();
   });
 
+  it('does not fall back to legacy loading when a bound asset source is unavailable', async () => {
+    const project = createEmptyProject(1);
+    const runTestCase = vi.fn();
+    const load = vi.fn().mockResolvedValue(projectSnapshot(project, '5'.repeat(64), 'legacyStudioStore'));
+    const dependencies = createDependencies({
+      getRuntimeBundle: vi.fn().mockReturnValue({
+        artifactManager: { isManagedArtifactPath: () => true, exportArtifact: vi.fn(), importManualEvidence: vi.fn() },
+        browserRuntime: { getState: () => ({ status: 'idle' }) },
+        runTestCase,
+        runSuite: vi.fn(),
+        cancelRun: vi.fn(),
+      }),
+      projectRepository: {
+        load,
+        loadBound: vi.fn().mockRejectedValue(Object.assign(new Error('bound source unavailable'), { code: 'bindingUnavailable' })),
+      },
+    });
+    const handlers = registerHandlers(dependencies);
+
+    await expect(handlers.get(runtimeIpcChannels.runTestCase)!({}, {
+      projectId: project.id,
+      testCase: { id: 'case/checkout', version: 1 },
+      expectedProjectRevision: '5'.repeat(64),
+    })).rejects.toMatchObject({ code: 'bindingUnavailable' });
+
+    expect(load).not.toHaveBeenCalled();
+    expect(runTestCase).not.toHaveBeenCalled();
+  });
+
   it('rejects a missing exact Case before RuntimeBundle execution', async () => {
     const project = createEmptyProject(1);
     const runTestCase = vi.fn();
@@ -440,7 +469,7 @@ function createDependencies(overrides: Partial<RuntimeIpcDependencies> = {}): Ru
     }),
     projectRepository: {
       load: vi.fn().mockResolvedValue(projectSnapshot(project, 'f'.repeat(64), 'legacyStudioStore')),
-      loadBound: vi.fn().mockRejectedValue(Object.assign(new Error('unbound'), { code: 'bindingUnavailable' })),
+      loadBound: vi.fn().mockRejectedValue(Object.assign(new Error('unbound'), { code: 'projectUnbound' })),
     },
     getFixtureScriptTrustContext: vi.fn().mockResolvedValue({ records: [] }),
     openPath: vi.fn().mockResolvedValue(''),

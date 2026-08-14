@@ -11,6 +11,7 @@ export interface ProjectSnapshot {
 
 export type ProjectRepositoryErrorCode =
   | 'projectNotFound'
+  | 'projectUnbound'
   | 'bindingUnavailable'
   | 'staleProjectRevision'
   | 'projectRevisionChanged';
@@ -49,7 +50,7 @@ export class ProjectRepository {
     const { binding } = await this.readProject(projectId);
     if (!binding) {
       throw new ProjectRepositoryError(
-        'bindingUnavailable',
+        'projectUnbound',
         `项目 ${projectId} 没有可用的项目资产绑定。`,
       );
     }
