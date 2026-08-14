@@ -18,10 +18,25 @@ import type {
 } from '../shared/studio.js';
 import { hasValidFixtureHttpOutputConfiguration, normalizeFixtureHttpDeclaration, resolveSuiteTestCases } from '../shared/studio.js';
 
-const projectAssetSchemaVersion = 1 as const;
+const projectAssetSchemaVersion = 2 as const;
+const legacyProjectAssetSchemaVersion = 1 as const;
 
-export interface ProjectAssetManifest extends Omit<ProjectDraft, 'testCases' | 'recordings' | 'documents' | 'fixtures' | 'suites'> {
+type ProjectAssetManifestMetadata = Omit<ProjectDraft, 'testCases' | 'recordings' | 'documents' | 'fixtures' | 'suites'>;
+
+export interface ProjectAssetManifest extends ProjectAssetManifestMetadata {
   schemaVersion: typeof projectAssetSchemaVersion;
+  revision?: string;
+  assetIds: {
+    cases: VersionedTestAssetReference[];
+    recordings: string[];
+    documents: string[];
+    fixtures?: VersionedTestAssetReference[];
+    suites?: VersionedTestAssetReference[];
+  };
+}
+
+interface LegacyProjectAssetManifest extends ProjectAssetManifestMetadata {
+  schemaVersion: typeof legacyProjectAssetSchemaVersion;
   revision?: string;
   assetIds: {
     cases: string[];
@@ -34,8 +49,10 @@ export interface ProjectAssetManifest extends Omit<ProjectDraft, 'testCases' | '
   };
 }
 
+type ProjectAssetReadManifest = ProjectAssetManifest | LegacyProjectAssetManifest;
+
 export interface ProjectAssetSnapshot {
-  manifest: ProjectAssetManifest;
+  manifest: ProjectAssetReadManifest;
   testCases: TestCaseDraft[];
   recordings: RecordingAsset[];
   documents: PrdDocumentAsset[];
@@ -224,7 +241,7 @@ export function createProjectAssetSnapshot(project: ProjectDraft): ProjectAssetS
       schemaVersion: projectAssetSchemaVersion,
       revision: calculateProjectAssetRevision(sanitizedProject),
       assetIds: {
-        cases: testCases.map((testCase) => testCase.id),
+        cases: testCases.map((testCase) => ({ id: testCase.id, version: testCase.version ?? 0 })),
         recordings: recordings.map((recording) => recording.id),
         documents: documents.map((document) => document.id),
         fixtures: fixtures.map((fixture) => ({ id: fixture.id, version: fixture.version })),
@@ -242,14 +259,17 @@ export function createProjectAssetSnapshot(project: ProjectDraft): ProjectAssetS
 export function validateProjectAssetSnapshot(snapshot: ProjectAssetSnapshot): ProjectAssetValidationIssue[] {
   const issues: ProjectAssetValidationIssue[] = [];
   const manifest = snapshot.manifest;
-  if (manifest.schemaVersion !== projectAssetSchemaVersion) {
-    issues.push({ path: 'project.json.schemaVersion', message: '仅支持 project asset schema version 1。' });
-  }
   if (!isNonEmptyString(manifest.id)) {
     issues.push({ path: 'project.json.id', message: '项目 ID 不能为空。' });
   }
 
-  validateAssetCollection('cases', snapshot.testCases, manifest.assetIds.cases, issues);
+  if (manifest.schemaVersion === legacyProjectAssetSchemaVersion) {
+    validateAssetCollection('cases', snapshot.testCases, manifest.assetIds.cases, issues);
+  } else if (manifest.schemaVersion === projectAssetSchemaVersion) {
+    validateCaseCollection(snapshot.testCases, manifest.assetIds.cases, issues);
+  } else {
+    issues.push({ path: 'project.json.schemaVersion', message: '仅支持 project asset schema version 1 或 2。' });
+  }
   validateAssetCollection('recordings', snapshot.recordings, manifest.assetIds.recordings, issues);
   validateAssetCollection('documents', snapshot.documents, manifest.assetIds.documents, issues);
   validateFixtureCollection(snapshot.fixtures, manifest.assetIds.fixtures, manifest, snapshot.testCases, issues);
@@ -351,11 +371,13 @@ export class ProjectAssetStore {
   }
 
   async loadWithRevision(): Promise<ProjectAssetReadResult> {
-    const manifest = await readJson(this.manifestPath, 'project.json') as ProjectAssetManifest;
+    const manifest = await readJson(this.manifestPath, 'project.json');
     validateManifest(manifest);
 
     const [testCases, storedRecordings, documents, fixtures, suites] = await Promise.all([
-      readAssetCollection<TestCaseDraft>(this.projectDirectory, 'cases', manifest.assetIds.cases),
+      manifest.schemaVersion === legacyProjectAssetSchemaVersion
+        ? readAssetCollection<TestCaseDraft>(this.projectDirectory, 'cases', manifest.assetIds.cases)
+        : readCaseCollection(this.projectDirectory, manifest.assetIds.cases),
       readAssetCollection<RecordingAsset>(this.projectDirectory, 'recordings', manifest.assetIds.recordings),
       readAssetCollection<PrdDocumentAsset>(this.projectDirectory, 'documents', manifest.assetIds.documents),
       readFixtureCollection(this.projectDirectory, manifest.assetIds.fixtures ?? []),
@@ -366,6 +388,9 @@ export class ProjectAssetStore {
       : storedRecordings;
     const snapshot: ProjectAssetSnapshot = { manifest, testCases, recordings, documents, fixtures, suites };
     const issues = validateProjectAssetSnapshot(snapshot);
+    if (manifest.schemaVersion === projectAssetSchemaVersion) {
+      issues.push(...await validateV2CaseDirectoryLayout(this.projectDirectory, manifest.assetIds.cases));
+    }
     if (issues.length) {
       throw new ProjectAssetStoreError('项目资产文件已损坏或引用不一致。', issues);
     }
@@ -429,7 +454,7 @@ export class ProjectAssetStore {
     try {
       await fs.mkdir(temporaryDirectory, { recursive: true });
       await writeJson(path.join(temporaryDirectory, 'project.json'), snapshot.manifest);
-      await writeAssetCollection(temporaryDirectory, 'cases', snapshot.testCases);
+      await writeCaseCollection(temporaryDirectory, snapshot.testCases);
       await writeAssetCollection(temporaryDirectory, 'recordings', snapshot.recordings);
       await writeAssetCollection(temporaryDirectory, 'documents', snapshot.documents);
       await writeFixtureCollection(temporaryDirectory, snapshot.fixtures);
@@ -555,10 +580,38 @@ function validateAssetCollection(
   }
 }
 
+function validateCaseCollection(
+  testCases: TestCaseDraft[],
+  expectedReferences: unknown,
+  issues: ProjectAssetValidationIssue[],
+): void {
+  const caseKeys = testCases.map((testCase) => caseReferenceKey(testCase));
+  if (
+    testCases.some((testCase) => !isNonEmptyString(testCase?.id) || !isPositiveInteger(testCase?.version)) ||
+    new Set(caseKeys).size !== caseKeys.length
+  ) {
+    issues.push({ path: 'cases', message: 'Case ID 或版本缺失或重复。' });
+  }
+  if (!Array.isArray(expectedReferences)) {
+    issues.push({ path: 'project.json.assetIds.cases', message: 'Case 版本引用必须是数组。' });
+    return;
+  }
+  const expectedKeys = expectedReferences.map(caseReferenceKey);
+  if (
+    expectedReferences.some((reference) => !isVersionedAssetReference(reference)) ||
+    new Set(expectedKeys).size !== expectedKeys.length
+  ) {
+    issues.push({ path: 'project.json.assetIds.cases', message: 'Case 版本引用必须唯一且有效。' });
+  }
+  if (!sameKeys(expectedKeys, caseKeys)) {
+    issues.push({ path: 'project.json.assetIds.cases', message: 'manifest 与 Case 文件的版本引用不一致。' });
+  }
+}
+
 function validateFixtureCollection(
   fixtures: FixtureAsset[],
   expectedReferences: VersionedTestAssetReference[] | undefined,
-  manifest: ProjectAssetManifest,
+  manifest: ProjectAssetManifestMetadata,
   testCases: TestCaseDraft[],
   issues: ProjectAssetValidationIssue[],
 ): void {
@@ -608,7 +661,7 @@ function validateFixtureCollection(
 function validateSuiteCollection(
   suites: SuiteAsset[],
   expectedReferences: VersionedTestAssetReference[] | undefined,
-  manifest: ProjectAssetManifest,
+  manifest: ProjectAssetManifestMetadata,
   testCases: TestCaseDraft[],
   issues: ProjectAssetValidationIssue[],
 ): void {
@@ -641,7 +694,7 @@ function validateSuiteCollection(
 
 function validateSuiteAsset(
   suite: SuiteAsset,
-  environments: ProjectAssetManifest['environments'],
+  environments: ProjectAssetManifestMetadata['environments'],
   testCases: TestCaseDraft[],
   issues: ProjectAssetValidationIssue[],
 ): void {
@@ -803,30 +856,58 @@ function validateFixtureLifecycle(
   }
 }
 
-function validateManifest(manifest: ProjectAssetManifest): void {
+function validateManifest(manifest: unknown): asserts manifest is ProjectAssetReadManifest {
   const issues: ProjectAssetValidationIssue[] = [];
   if (!manifest || typeof manifest !== 'object') {
     issues.push({ path: 'project.json', message: 'project manifest 必须是对象。' });
   } else {
-    if (manifest.schemaVersion !== projectAssetSchemaVersion) {
+    const candidate = manifest as {
+      schemaVersion?: unknown;
+      id?: unknown;
+      revision?: unknown;
+      assetIds?: unknown;
+    };
+    if (
+      candidate.schemaVersion !== legacyProjectAssetSchemaVersion &&
+      candidate.schemaVersion !== projectAssetSchemaVersion
+    ) {
       issues.push({ path: 'project.json.schemaVersion', message: '不支持的 project asset schema version。' });
     }
-    if (!isNonEmptyString(manifest.id)) {
+    if (!isNonEmptyString(candidate.id)) {
       issues.push({ path: 'project.json.id', message: '项目 ID 不能为空。' });
     }
-    if (manifest.revision !== undefined && !isRevision(manifest.revision)) {
+    if (candidate.revision !== undefined && !isRevision(candidate.revision)) {
       issues.push({ path: 'project.json.revision', message: '项目 revision 必须是 SHA-256 摘要。' });
     }
-    const assetIds = manifest.assetIds;
-    if (!assetIds || !Array.isArray(assetIds.cases) || !Array.isArray(assetIds.recordings) || !Array.isArray(assetIds.documents)) {
+    const assetIds = candidate.assetIds;
+    if (!assetIds || typeof assetIds !== 'object') {
       issues.push({ path: 'project.json.assetIds', message: 'manifest 缺少完整资产 ID 列表。' });
     } else {
-      (['cases', 'recordings', 'documents'] as const).forEach((kind) => {
-        const ids = assetIds[kind];
-        if (ids.some((id) => !isNonEmptyString(id)) || new Set(ids).size !== ids.length) {
+      const collections = assetIds as Record<string, unknown>;
+      if (!Array.isArray(collections.cases) || !Array.isArray(collections.recordings) || !Array.isArray(collections.documents)) {
+        issues.push({ path: 'project.json.assetIds', message: 'manifest 缺少完整资产 ID 列表。' });
+      }
+      (['recordings', 'documents'] as const).forEach((kind) => {
+        const ids = collections[kind];
+        if (!Array.isArray(ids) || ids.some((id) => !isNonEmptyString(id)) || new Set(ids).size !== ids.length) {
           issues.push({ path: `project.json.assetIds.${kind}`, message: '资产 ID 必须为不重复的非空字符串。' });
         }
       });
+      if (candidate.schemaVersion === legacyProjectAssetSchemaVersion) {
+        const ids = collections.cases;
+        if (!Array.isArray(ids) || ids.some((id) => !isNonEmptyString(id)) || new Set(ids).size !== ids.length) {
+          issues.push({ path: 'project.json.assetIds.cases', message: '资产 ID 必须为不重复的非空字符串。' });
+        }
+      } else if (candidate.schemaVersion === projectAssetSchemaVersion) {
+        const references = collections.cases;
+        if (
+          !Array.isArray(references) ||
+          references.some((reference) => !isVersionedAssetReference(reference)) ||
+          new Set(references.map(caseReferenceKey)).size !== references.length
+        ) {
+          issues.push({ path: 'project.json.assetIds.cases', message: 'Case 版本引用必须唯一且有效。' });
+        }
+      }
     }
   }
   if (issues.length) {
@@ -837,7 +918,7 @@ function validateManifest(manifest: ProjectAssetManifest): void {
 function listAssetFiles(snapshot: ProjectAssetSnapshot): string[] {
   return [
     'project.json',
-    ...snapshot.testCases.map((asset) => assetRelativePath('cases', asset.id)),
+    ...snapshot.testCases.map(caseRelativePath),
     ...snapshot.recordings.map((asset) => assetRelativePath('recordings', asset.id)),
     ...snapshot.documents.map((asset) => assetRelativePath('documents', asset.id)),
     ...snapshot.fixtures.map(fixtureRelativePath),
@@ -872,6 +953,31 @@ async function validateProjectDirectoryLayout(
   return issues;
 }
 
+async function validateV2CaseDirectoryLayout(
+  directory: string,
+  references: VersionedTestAssetReference[],
+): Promise<ProjectAssetValidationIssue[]> {
+  const expectedEntries = new Set([
+    'cases/',
+    ...references.map(caseRelativePath),
+  ]);
+  const actualEntries = (await listDirectoryTreeEntries(directory))
+    .filter((entry) => entry === 'cases/' || entry.startsWith('cases/'));
+  const actualEntrySet = new Set(actualEntries);
+  const issues: ProjectAssetValidationIssue[] = [];
+  actualEntrySet.forEach((entry) => {
+    if (!expectedEntries.has(entry)) {
+      issues.push({ path: entry, message: 'v2 Case 目录包含未被 manifest 管理的资产。' });
+    }
+  });
+  expectedEntries.forEach((entry) => {
+    if (!actualEntrySet.has(entry)) {
+      issues.push({ path: entry, message: 'v2 Case 目录缺少 manifest 所需的资产。' });
+    }
+  });
+  return issues;
+}
+
 async function listDirectoryTreeEntries(
   rootDirectory: string,
   relativeDirectory = '',
@@ -896,6 +1002,10 @@ function assetRelativePath(kind: 'cases' | 'recordings' | 'documents', id: strin
   return path.posix.join(kind, `${encodeURIComponent(id)}.json`);
 }
 
+function caseRelativePath(testCase: Pick<TestCaseDraft, 'id' | 'version'>): string {
+  return path.posix.join('cases', `${encodeURIComponent(testCase.id)}@${testCase.version}.json`);
+}
+
 function fixtureRelativePath(fixture: Pick<FixtureAsset, 'id' | 'version'>): string {
   return path.posix.join('fixtures', `${encodeURIComponent(fixture.id)}@${fixture.version}.json`);
 }
@@ -917,7 +1027,7 @@ async function listDirectoryEntries(directory: string): Promise<string[]> {
 
 async function writeAssetCollection(
   rootDirectory: string,
-  kind: 'cases' | 'recordings' | 'documents',
+  kind: 'recordings' | 'documents',
   assets: Array<{ id: string }>,
 ): Promise<void> {
   const directory = path.join(rootDirectory, kind);
@@ -938,6 +1048,28 @@ async function readAssetCollection<T extends { id: string }>(
       ]);
     }
     return asset;
+  }));
+}
+
+async function writeCaseCollection(rootDirectory: string, testCases: TestCaseDraft[]): Promise<void> {
+  const directory = path.join(rootDirectory, 'cases');
+  await fs.mkdir(directory, { recursive: true });
+  await Promise.all(testCases.map((testCase) => writeJson(path.join(rootDirectory, caseRelativePath(testCase)), testCase)));
+}
+
+async function readCaseCollection(
+  rootDirectory: string,
+  references: VersionedTestAssetReference[],
+): Promise<TestCaseDraft[]> {
+  return Promise.all(references.map(async (reference) => {
+    const casePath = caseRelativePath(reference);
+    const testCase = await readJson(path.join(rootDirectory, casePath), casePath) as TestCaseDraft;
+    if (!testCase || testCase.id !== reference.id || testCase.version !== reference.version) {
+      throw new ProjectAssetStoreError('Case 文件与 manifest 引用不一致。', [
+        { path: casePath, message: 'Case ID 或版本不匹配。' },
+      ]);
+    }
+    return testCase;
   }));
 }
 
@@ -1061,6 +1193,14 @@ function sameIds(expected: string[], actual: string[]): boolean {
 
 function fixtureReferenceKey(reference: Pick<VersionedTestAssetReference, 'id' | 'version'>): string {
   return `${reference.id}@${reference.version}`;
+}
+
+function caseReferenceKey(reference: unknown): string {
+  if (!reference || typeof reference !== 'object') {
+    return `${String(reference)}@`;
+  }
+  const candidate = reference as { id?: unknown; version?: unknown };
+  return `${String(candidate.id)}@${String(candidate.version)}`;
 }
 
 function suiteReferenceKey(reference: Pick<VersionedTestAssetReference, 'id' | 'version'>): string {

@@ -35,7 +35,7 @@ describe('ProjectAssetStore', () => {
     expect(plan.snapshotRevision).toBe(calculateProjectAssetRevision(project));
     expect(plan.files).toEqual(expect.arrayContaining([
       'project.json',
-      'cases/case%2Fcheckout.json',
+      'cases/case%2Fcheckout@1.json',
       'recordings/recording%2Fcheckout.json',
       expect.stringMatching(/^documents\/doc-.+\.json$/),
     ]));
@@ -43,7 +43,13 @@ describe('ProjectAssetStore', () => {
     await store.saveInitial(project);
 
     await expect(fs.readdir(projectDirectory)).resolves.toEqual(['cases', 'documents', 'fixtures', 'project.json', 'recordings', 'suites']);
-    const manifest = JSON.parse(await fs.readFile(path.join(projectDirectory, 'project.json'), 'utf8')) as { revision?: string };
+    const manifest = JSON.parse(await fs.readFile(path.join(projectDirectory, 'project.json'), 'utf8')) as {
+      schemaVersion?: number;
+      revision?: string;
+      assetIds?: { cases?: unknown };
+    };
+    expect(manifest.schemaVersion).toBe(2);
+    expect(manifest.assetIds?.cases).toEqual([{ id: 'case/checkout', version: 1 }]);
     expect(manifest.revision).toMatch(/^[a-f0-9]{64}$/);
     const recordingFile = await fs.readFile(path.join(projectDirectory, 'recordings', 'recording%2Fcheckout.json'), 'utf8');
     expect(recordingFile).not.toContain('/private/runtime-artifacts/checkout.png');
@@ -91,11 +97,104 @@ describe('ProjectAssetStore', () => {
   it('rejects duplicate asset identifiers and manifest references before filesystem writes', () => {
     const snapshot = createProjectAssetSnapshot(createAssetProject());
     snapshot.testCases.push({ ...snapshot.testCases[0]! });
+    (snapshot.manifest.assetIds.cases as unknown as Array<{ id: string; version: number }>).push({
+      id: 'case/checkout',
+      version: 1,
+    });
 
     expect(validateProjectAssetSnapshot(snapshot)).toEqual(expect.arrayContaining([
       expect.objectContaining({ path: 'cases', message: expect.stringContaining('重复') }),
-      expect.objectContaining({ path: 'project.json.assetIds.cases', message: expect.stringContaining('不一致') }),
+      expect.objectContaining({ path: 'project.json.assetIds.cases', message: expect.stringContaining('版本引用') }),
     ]));
+  });
+
+  it('persists every immutable Case version in a v2 manifest and loads both versions intact', async () => {
+    const rootDirectory = await createTemporaryDirectory();
+    const projectDirectory = path.join(rootDirectory, 'versioned-cases-project');
+    const project = createAssetProject();
+    const firstVersion = project.testCases[0]!;
+    const secondVersion = {
+      ...firstVersion,
+      version: 2,
+      name: '提交订单（修订版）',
+      notes: '保留第一个版本，并验证修订后的结果。',
+    };
+    project.testCases = [firstVersion, secondVersion];
+    const store = new ProjectAssetStore(projectDirectory);
+
+    const plan = await store.planMigration(project);
+    expect(plan.files).toEqual(expect.arrayContaining([
+      'cases/case%2Fcheckout@1.json',
+      'cases/case%2Fcheckout@2.json',
+    ]));
+    await store.saveInitial(project);
+
+    const manifest = JSON.parse(await fs.readFile(path.join(projectDirectory, 'project.json'), 'utf8')) as {
+      schemaVersion?: number;
+      assetIds?: { cases?: unknown };
+    };
+    expect(manifest).toMatchObject({
+      schemaVersion: 2,
+      assetIds: {
+        cases: [
+          { id: 'case/checkout', version: 1 },
+          { id: 'case/checkout', version: 2 },
+        ],
+      },
+    });
+    await expect(fs.readFile(path.join(projectDirectory, 'cases', 'case%2Fcheckout@1.json'), 'utf8')).resolves.toContain('"version": 1');
+    await expect(fs.readFile(path.join(projectDirectory, 'cases', 'case%2Fcheckout@2.json'), 'utf8')).resolves.toContain('"version": 2');
+    await expect(store.load()).resolves.toMatchObject({
+      testCases: [
+        expect.objectContaining({ id: 'case/checkout', version: 1, name: firstVersion.name }),
+        expect.objectContaining({ id: 'case/checkout', version: 2, name: secondVersion.name }),
+      ],
+    });
+  });
+
+  it('rejects missing and mismatched v2 Case files', async () => {
+    const rootDirectory = await createTemporaryDirectory();
+    const missingDirectory = path.join(rootDirectory, 'missing-case-project');
+    const missingStore = new ProjectAssetStore(missingDirectory);
+    await missingStore.saveInitial(createAssetProject());
+    await fs.rm(path.join(missingDirectory, 'cases', 'case%2Fcheckout@1.json'));
+
+    await expect(missingStore.load()).rejects.toMatchObject({
+      name: 'ProjectAssetStoreError',
+      issues: expect.arrayContaining([
+        expect.objectContaining({ path: 'cases/case%2Fcheckout@1.json' }),
+      ]),
+    });
+
+    const mismatchedDirectory = path.join(rootDirectory, 'mismatched-case-project');
+    const mismatchedStore = new ProjectAssetStore(mismatchedDirectory);
+    await mismatchedStore.saveInitial(createAssetProject());
+    const casePath = path.join(mismatchedDirectory, 'cases', 'case%2Fcheckout@1.json');
+    const testCase = JSON.parse(await fs.readFile(casePath, 'utf8')) as Record<string, unknown>;
+    testCase.version = 2;
+    await fs.writeFile(casePath, `${JSON.stringify(testCase, null, 2)}\n`, 'utf8');
+
+    await expect(mismatchedStore.load()).rejects.toMatchObject({
+      name: 'ProjectAssetStoreError',
+      issues: expect.arrayContaining([
+        expect.objectContaining({ path: 'cases/case%2Fcheckout@1.json', message: expect.stringContaining('版本') }),
+      ]),
+    });
+  });
+
+  it('rejects an unmanaged v2 Case file in the project directory', async () => {
+    const rootDirectory = await createTemporaryDirectory();
+    const projectDirectory = path.join(rootDirectory, 'unmanaged-case-project');
+    const store = new ProjectAssetStore(projectDirectory);
+    await store.saveInitial(createAssetProject());
+    await fs.writeFile(path.join(projectDirectory, 'cases', 'case%2Fcheckout@2.json'), '{}\n', 'utf8');
+
+    await expect(store.load()).rejects.toMatchObject({
+      name: 'ProjectAssetStoreError',
+      issues: expect.arrayContaining([
+        expect.objectContaining({ path: 'cases/case%2Fcheckout@2.json' }),
+      ]),
+    });
   });
 
   it('loads a legacy schema v1 snapshot without a revision and computes one for the caller', async () => {
@@ -105,9 +204,19 @@ describe('ProjectAssetStore', () => {
     const store = new ProjectAssetStore(projectDirectory);
     await store.saveInitial(project);
     const manifestPath = path.join(projectDirectory, 'project.json');
-    const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8')) as Record<string, unknown>;
+    const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8')) as {
+      schemaVersion: number;
+      revision?: string;
+      assetIds: { cases: unknown };
+    };
+    manifest.schemaVersion = 1;
+    manifest.assetIds.cases = ['case/checkout'];
     delete manifest.revision;
     await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+    await fs.rename(
+      path.join(projectDirectory, 'cases', 'case%2Fcheckout@1.json'),
+      path.join(projectDirectory, 'cases', 'case%2Fcheckout.json'),
+    );
     const recordingPath = path.join(projectDirectory, 'recordings', 'recording%2Fcheckout.json');
     const recording = JSON.parse(await fs.readFile(recordingPath, 'utf8')) as { steps: Array<Record<string, unknown>> };
     recording.steps[0]!.value = 'legacy-private-value';
@@ -128,10 +237,19 @@ describe('ProjectAssetStore', () => {
     const store = new ProjectAssetStore(projectDirectory);
     await store.saveInitial(project);
     const manifestPath = path.join(projectDirectory, 'project.json');
-    const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8')) as { assetIds: Record<string, unknown> };
+    const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8')) as {
+      schemaVersion: number;
+      assetIds: Record<string, unknown>;
+    };
+    manifest.schemaVersion = 1;
+    manifest.assetIds.cases = ['case/checkout'];
     delete manifest.assetIds.fixtures;
     delete manifest.assetIds.suites;
     await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+    await fs.rename(
+      path.join(projectDirectory, 'cases', 'case%2Fcheckout@1.json'),
+      path.join(projectDirectory, 'cases', 'case%2Fcheckout.json'),
+    );
     await fs.rm(path.join(projectDirectory, 'fixtures'), { recursive: true, force: true });
     await fs.rm(path.join(projectDirectory, 'suites'), { recursive: true, force: true });
 
@@ -245,7 +363,7 @@ describe('ProjectAssetStore', () => {
       }],
     });
     expect(validateProjectAssetSnapshot(staleReferenceSnapshot)).toEqual(expect.arrayContaining([
-      expect.objectContaining({ path: 'suites/suite%2Frelease@1.json.caseReferences', message: expect.stringContaining('当前版本') }),
+      expect.objectContaining({ path: 'suites/suite%2Frelease@1.json.caseReferences', message: expect.stringContaining('未找到用例') }),
     ]));
   });
 
@@ -298,7 +416,7 @@ describe('ProjectAssetStore', () => {
       status: 'ready',
       issues: [],
     });
-    expect(plan.files).toEqual(expect.arrayContaining(['project.json', 'cases/case%2Fcheckout.json']));
+    expect(plan.files).toEqual(expect.arrayContaining(['project.json', 'cases/case%2Fcheckout@1.json']));
     await expect(store.load()).resolves.toMatchObject({ name: current.project.name });
   });
 
@@ -429,7 +547,7 @@ describe('ProjectAssetStore', () => {
     const projectDirectory = path.join(rootDirectory, 'orders-project');
     const store = new ProjectAssetStore(projectDirectory);
     await store.saveInitial(createAssetProject());
-    const casePath = path.join(projectDirectory, 'cases', 'case%2Fcheckout.json');
+    const casePath = path.join(projectDirectory, 'cases', 'case%2Fcheckout@1.json');
     const testCase = JSON.parse(await fs.readFile(casePath, 'utf8')) as Record<string, unknown>;
     testCase.name = '被外部篡改';
     await fs.writeFile(casePath, `${JSON.stringify(testCase, null, 2)}\n`, 'utf8');
