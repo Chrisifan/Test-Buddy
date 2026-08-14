@@ -7,9 +7,33 @@ import { StartupPage } from './StartupPage.js';
 const state = createInitialStudioState();
 
 describe('StartupPage', () => {
+  it('renders the supplied TestBuddy brand asset above the startup steps', () => {
+    const brandLogo = '/assets/testbuddy-hammer-bot.png';
+
+    render(
+      <StartupPage
+        brandLogo={brandLogo}
+        midsceneConfig={state.midsceneConfig}
+        midsceneReady={false}
+        onComplete={vi.fn()}
+        onSkip={vi.fn()}
+        onUpdateMidsceneConfig={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole('banner', { name: 'TestBuddy' })).toContainElement(
+      screen.getByRole('img', { name: 'TestBuddy' }),
+    );
+    expect(screen.getByRole('img', { name: 'TestBuddy' })).toHaveAttribute('src', brandLogo);
+    expect(screen.getAllByText('配置 MidScene').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText('进入工作台')).toBeInTheDocument();
+    expect(screen.getByText('开始测试')).toBeInTheDocument();
+  });
+
   it('shows first-run Midscene setup with a skippable stepper', () => {
     render(
       <StartupPage
+        brandLogo="/assets/testbuddy-hammer-bot.png"
         midsceneConfig={state.midsceneConfig}
         midsceneReady={false}
         onComplete={vi.fn()}
@@ -39,6 +63,7 @@ describe('StartupPage', () => {
 
     render(
       <StartupPage
+        brandLogo="/assets/testbuddy-hammer-bot.png"
         midsceneConfig={state.midsceneConfig}
         midsceneReady={false}
         onComplete={vi.fn()}
