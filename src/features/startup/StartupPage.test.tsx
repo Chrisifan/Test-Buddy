@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -75,5 +78,18 @@ describe('StartupPage', () => {
     fireEvent.click(screen.getByRole('button', { name: '跳过，进入工作台' }));
 
     expect(onSkip).toHaveBeenCalledTimes(1);
+  });
+
+  it('defines a full-width top row for the startup header', () => {
+    const styles = readFileSync(resolve(process.cwd(), 'src/styles/luminous-precision.css'), 'utf8');
+    const startupStyles = styles.slice(
+      styles.indexOf('/* First-run configuration follows the same shell as the Figma onboarding view. */'),
+      styles.indexOf('/* Page-specific structure sourced from the Figma workbench screens. */'),
+    );
+
+    expect(startupStyles).toContain('grid-template-columns: minmax(0, 1fr);');
+    expect(startupStyles).toContain('grid-template-rows: 72px minmax(0, 1fr) 32px;');
+    expect(startupStyles).toContain('.startup-header {');
+    expect(startupStyles).not.toContain('grid-template-columns: 224px minmax(0, 1fr);');
   });
 });
