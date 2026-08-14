@@ -23,9 +23,25 @@ const legacyProjectAssetSchemaVersion = 1 as const;
 
 type ProjectAssetManifestMetadata = Omit<ProjectDraft, 'testCases' | 'recordings' | 'documents' | 'fixtures' | 'suites'>;
 
+/** One immutable legacy Case file retained below a migration backup directory. */
+export interface LegacyCaseBackupFileRecord {
+  path: string;
+  contentHash: string;
+}
+
+/** Immutable inventory retained from one legacy v1 Case directory. */
+export interface LegacyCaseBackupDeclaration {
+  directory: string;
+  files: LegacyCaseBackupFileRecord[];
+}
+
 export interface ProjectAssetManifest extends ProjectAssetManifestMetadata {
   schemaVersion: typeof projectAssetSchemaVersion;
   revision?: string;
+  /** Migration bookkeeping; never becomes part of the hydrated ProjectDraft. */
+  legacyCaseBackupDirectory?: string;
+  /** Immutable inventory for the Case files retained below the declared directory. */
+  legacyCaseBackupFiles?: LegacyCaseBackupFileRecord[];
   assetIds: {
     cases: VersionedTestAssetReference[];
     recordings: string[];
@@ -33,6 +49,11 @@ export interface ProjectAssetManifest extends ProjectAssetManifestMetadata {
     fixtures?: VersionedTestAssetReference[];
     suites?: VersionedTestAssetReference[];
   };
+}
+
+/** The inventory format written before backup content hashes were introduced. */
+interface PreviousLegacyCaseBackupManifest extends Omit<ProjectAssetManifest, 'legacyCaseBackupFiles'> {
+  legacyCaseBackupFiles: string[];
 }
 
 interface LegacyProjectAssetManifest extends ProjectAssetManifestMetadata {
@@ -49,7 +70,8 @@ interface LegacyProjectAssetManifest extends ProjectAssetManifestMetadata {
   };
 }
 
-type ProjectAssetReadManifest = ProjectAssetManifest | LegacyProjectAssetManifest;
+type ProjectAssetV2ReadManifest = ProjectAssetManifest | PreviousLegacyCaseBackupManifest;
+type ProjectAssetReadManifest = ProjectAssetV2ReadManifest | LegacyProjectAssetManifest;
 
 export interface ProjectAssetSnapshot {
   manifest: ProjectAssetReadManifest;
@@ -174,9 +196,15 @@ export async function planProjectAssetUpdate(
   try {
     const published = await new ProjectAssetStore(binding.projectDirectory).loadWithRevision();
     const issues = [] as ProjectAssetUpdatePlan['issues'];
+    const publishedManifest = await readJson(path.join(binding.projectDirectory, 'project.json'), 'project.json');
+    validateManifest(publishedManifest);
+    const legacyCaseBackup = await readLegacyCaseBackupDeclaration(binding.projectDirectory, publishedManifest);
     const layoutIssues = await validateProjectDirectoryLayout(
       binding.projectDirectory,
-      createProjectAssetSnapshot(published.project),
+      createProjectAssetSnapshot(
+        published.project,
+        legacyCaseBackup,
+      ),
     );
     issues.push(...layoutIssues);
     if (published.project.id !== project.id) {
@@ -215,6 +243,20 @@ export async function planProjectAssetUpdate(
 export interface ProjectAssetStoreFileSystem {
   rename(source: string, destination: string): Promise<void>;
   remove?(directory: string): Promise<void>;
+  /** Runs after the first displaced-target validation and immediately before the second. */
+  afterDisplacedTargetValidation?(directory: string): Promise<void>;
+}
+
+interface LegacyCaseBackupFile {
+  relativePath: string;
+  content: string;
+  contentHash: string;
+}
+
+interface PreparedLegacyCaseMigration {
+  plan: ProjectAssetMigrationPlan;
+  snapshot?: ProjectAssetSnapshot;
+  backupFiles?: LegacyCaseBackupFile[];
 }
 
 export interface ProjectAssetValidationIssue {
@@ -232,7 +274,10 @@ export class ProjectAssetStoreError extends Error {
   }
 }
 
-export function createProjectAssetSnapshot(project: ProjectDraft): ProjectAssetSnapshot {
+export function createProjectAssetSnapshot(
+  project: ProjectDraft,
+  legacyCaseBackup?: LegacyCaseBackupDeclaration,
+): ProjectAssetSnapshot {
   const sanitizedProject = sanitizeProjectAsset(project);
   const { testCases, recordings, documents, fixtures, suites, ...projectMetadata } = sanitizedProject;
   return {
@@ -240,6 +285,10 @@ export function createProjectAssetSnapshot(project: ProjectDraft): ProjectAssetS
       ...projectMetadata,
       schemaVersion: projectAssetSchemaVersion,
       revision: calculateProjectAssetRevision(sanitizedProject),
+      ...(legacyCaseBackup === undefined ? {} : {
+        legacyCaseBackupDirectory: legacyCaseBackup.directory,
+        legacyCaseBackupFiles: structuredClone(legacyCaseBackup.files),
+      }),
       assetIds: {
         cases: testCases.map((testCase) => ({ id: testCase.id, version: testCase.version ?? 0 })),
         recordings: recordings.map((recording) => recording.id),
@@ -267,6 +316,14 @@ export function validateProjectAssetSnapshot(snapshot: ProjectAssetSnapshot): Pr
     validateAssetCollection('cases', snapshot.testCases, manifest.assetIds.cases, issues);
   } else if (manifest.schemaVersion === projectAssetSchemaVersion) {
     validateCaseCollection(snapshot.testCases, manifest.assetIds.cases, issues);
+    if (
+      !isValidLegacyCaseBackupManifestDeclaration(
+        manifest.legacyCaseBackupDirectory,
+        manifest.legacyCaseBackupFiles,
+      )
+    ) {
+      issues.push({ path: 'project.json.legacyCaseBackupDirectory', message: 'legacy Case 备份声明必须包含安全的相对路径和固定文件清单。' });
+    }
   } else {
     issues.push({ path: 'project.json.schemaVersion', message: '仅支持 project asset schema version 1 或 2。' });
   }
@@ -343,6 +400,75 @@ export class ProjectAssetStore {
     };
   }
 
+  /**
+   * Builds a read-only conversion plan for a schema-v1 Case layout. The plan
+   * carries a content revision rather than trusting a caller to describe the
+   * source directory again at confirmation time.
+  */
+  async planLegacyCaseMigration(): Promise<ProjectAssetMigrationPlan> {
+    try {
+      return (await this.prepareLegacyCaseMigration(this.projectDirectory)).plan;
+    } catch (error) {
+      const blockedPlan = await this.createBlockedLegacyCaseMigrationPlan(error);
+      if (blockedPlan) {
+        return blockedPlan;
+      }
+      throw error;
+    }
+  }
+
+  /** Applies only the exact ready plan that was reviewed against this directory. */
+  async confirmLegacyCaseMigration(plan: ProjectAssetMigrationPlan): Promise<void> {
+    if (plan.projectDirectory !== this.projectDirectory) {
+      throw new ProjectAssetStoreError('legacy Case 迁移计划不属于当前项目目录。', [
+        { path: this.projectDirectory, message: '迁移计划的项目目录不匹配。' },
+      ]);
+    }
+    if (plan.status === 'alreadyMigrated') {
+      return;
+    }
+    if (
+      plan.status !== 'ready' ||
+      plan.targetSchemaVersion !== projectAssetSchemaVersion ||
+      !isRevision(plan.sourceRevision) ||
+      !isNonEmptyString(plan.migrationId) ||
+      !isSafeLegacyCaseBackupDirectory(plan.backupDirectory)
+    ) {
+      throw new ProjectAssetStoreError('legacy Case 迁移计划不可确认。', [
+        { path: 'migration-plan', message: '只能确认当前、完整且可写入的迁移预览。' },
+      ]);
+    }
+
+    const prepared = await this.prepareLegacyCaseMigration(this.projectDirectory);
+    const currentPlan = prepared.plan;
+    if (
+      currentPlan.status !== 'ready' ||
+      currentPlan.sourceRevision !== plan.sourceRevision ||
+      currentPlan.migrationId !== plan.migrationId ||
+      currentPlan.backupDirectory !== plan.backupDirectory ||
+      !prepared.snapshot ||
+      !prepared.backupFiles
+    ) {
+      throw new ProjectAssetStoreError('legacy Case 迁移源已变化，请重新预览。', [
+        { path: 'project.json', message: '迁移预览的 source revision 已过期。' },
+      ]);
+    }
+
+    await this.writeSnapshotAtomically(prepared.snapshot, {
+      allowMissingTarget: false,
+      legacyCaseBackupFiles: prepared.backupFiles,
+      validateDisplacedTarget: async (directory) => {
+        const displaced = await this.prepareLegacyCaseMigration(directory);
+        if (displaced.plan.status !== 'ready' || displaced.plan.sourceRevision !== plan.sourceRevision) {
+          throw new ProjectAssetStoreError('legacy Case 迁移源在确认期间发生变化。', [
+            { path: 'project.json', message: '迁移 source revision 已变化，已拒绝提交。' },
+          ]);
+        }
+      },
+    });
+    await this.loadWithRevision();
+  }
+
   /** Writes only to an empty, pre-reviewed destination directory. */
   async saveInitial(project: ProjectDraft): Promise<void> {
     const plan = await this.planMigration(project);
@@ -390,6 +516,7 @@ export class ProjectAssetStore {
     const issues = validateProjectAssetSnapshot(snapshot);
     if (manifest.schemaVersion === projectAssetSchemaVersion) {
       issues.push(...await validateV2CaseDirectoryLayout(this.projectDirectory, manifest.assetIds.cases));
+      issues.push(...await validateLegacyCaseBackupDirectoryLayout(this.projectDirectory, manifest));
     }
     if (issues.length) {
       throw new ProjectAssetStoreError('项目资产文件已损坏或引用不一致。', issues);
@@ -403,32 +530,172 @@ export class ProjectAssetStore {
   }
 
   async save(project: ProjectDraft, expectedRevision: string): Promise<void> {
-    await this.assertUpdatePreconditions(this.projectDirectory, project.id, expectedRevision);
-    const snapshot = createProjectAssetSnapshot(project);
+    const legacyCaseBackup = await this.assertUpdatePreconditions(
+      this.projectDirectory,
+      project.id,
+      expectedRevision,
+    );
+    const snapshot = createProjectAssetSnapshot(project, legacyCaseBackup);
     await this.writeSnapshotAtomically(snapshot, {
       allowMissingTarget: false,
       validateDisplacedTarget: async (directory) => {
-        await this.assertUpdatePreconditions(directory, project.id, expectedRevision);
+        await this.assertUpdatePreconditions(directory, project.id, expectedRevision, legacyCaseBackup);
       },
     });
+  }
+
+  private async prepareLegacyCaseMigration(directory: string): Promise<PreparedLegacyCaseMigration> {
+    const sourceRevision = await calculateDirectoryContentRevision(directory);
+    const { value: manifestValue } = await readJsonWithText(path.join(directory, 'project.json'), 'project.json');
+    validateManifest(manifestValue);
+    const manifest = manifestValue;
+
+    if (manifest.schemaVersion === projectAssetSchemaVersion) {
+      const current = await new ProjectAssetStore(directory).loadWithRevision();
+      const legacyCaseBackup = await readLegacyCaseBackupDeclaration(directory, manifest);
+      return {
+        plan: {
+          projectId: current.project.id,
+          projectDirectory: this.projectDirectory,
+          snapshotRevision: current.revision,
+          files: listAssetFiles(createProjectAssetSnapshot(current.project, legacyCaseBackup)),
+          status: 'alreadyMigrated',
+          conflicts: [],
+          ...(legacyCaseBackup === undefined
+            ? {}
+            : { backupDirectory: legacyCaseBackup.directory }),
+        },
+      };
+    }
+
+    const [legacyCases, storedRecordings, documents, fixtures, suites] = await Promise.all([
+      readLegacyCaseCollectionWithContent(directory, manifest.assetIds.cases),
+      readAssetCollection<RecordingAsset>(directory, 'recordings', manifest.assetIds.recordings),
+      readAssetCollection<PrdDocumentAsset>(directory, 'documents', manifest.assetIds.documents),
+      readFixtureCollection(directory, manifest.assetIds.fixtures ?? []),
+      readSuiteCollection(directory, manifest.assetIds.suites ?? []),
+    ]);
+    const layoutIssues = await validateLegacyProjectDirectoryLayout(directory, manifest);
+    const finalSourceRevision = await calculateDirectoryContentRevision(directory);
+    if (finalSourceRevision !== sourceRevision) {
+      throw new ProjectAssetStoreError('legacy Case 迁移预览期间源目录发生变化。', [
+        { path: this.projectDirectory, message: '无法为变化中的 v1 快照创建可确认的迁移计划。' },
+      ]);
+    }
+
+    const migrationId = `legacy-cases-${sourceRevision.slice(0, 16)}`;
+    const backupDirectory = path.posix.join('migration-backup', migrationId);
+    const normalizedCases = legacyCases.map(({ testCase }) => ({
+      ...structuredClone(testCase),
+      schemaVersion: 2 as const,
+      version: isPositiveInteger(testCase.version) ? testCase.version : 1,
+    }));
+    const project = projectFromSnapshot({
+      manifest,
+      testCases: normalizedCases,
+      recordings: manifest.revision === undefined ? storedRecordings.map(stripRecordingRuntimeData) : storedRecordings,
+      documents,
+      fixtures,
+      suites,
+    });
+    const snapshot = createProjectAssetSnapshot(project, {
+      directory: backupDirectory,
+      files: legacyCases.map(({ relativePath, content }) => ({
+        path: relativePath,
+        contentHash: calculateContentHash(content),
+      })),
+    });
+    const issues = [...layoutIssues, ...validateProjectAssetSnapshot(snapshot)];
+    const targetPaths = normalizedCases.map(caseRelativePath);
+    const duplicateTarget = targetPaths.find((targetPath, index) => targetPaths.indexOf(targetPath) !== index);
+    if (duplicateTarget) {
+      issues.push({ path: duplicateTarget, message: '多个 legacy Case 将写入同一个 v2 目标。' });
+    }
+    await Promise.all(targetPaths.map(async (targetPath) => {
+      if (await pathExists(path.join(directory, targetPath))) {
+        issues.push({ path: targetPath, message: 'v2 Case 目标已存在，必须先审阅冲突。' });
+      }
+    }));
+
+    const plan: ProjectAssetMigrationPlan = {
+      projectId: project.id,
+      projectDirectory: this.projectDirectory,
+      snapshotRevision: snapshot.manifest.revision!,
+      files: listAssetFiles(snapshot),
+      status: issues.length ? 'blocked' : 'ready',
+      conflicts: issues.map((issue) => issue.path),
+      sourceRevision,
+      migrationId,
+      targetSchemaVersion: projectAssetSchemaVersion,
+      backupDirectory,
+      issues,
+    };
+    return {
+      plan,
+      ...(issues.length ? {} : {
+        snapshot,
+        backupFiles: legacyCases.map(({ relativePath, content }) => ({
+          relativePath,
+          content,
+          contentHash: calculateContentHash(content),
+        })),
+      }),
+    };
+  }
+
+  private async createBlockedLegacyCaseMigrationPlan(error: unknown): Promise<ProjectAssetMigrationPlan | undefined> {
+    if (!(error instanceof ProjectAssetStoreError)) {
+      return undefined;
+    }
+    const manifest = await readLegacyManifestForBlockedPlan(this.manifestPath);
+    let sourceRevision: string | undefined;
+    try {
+      sourceRevision = await calculateDirectoryContentRevision(this.projectDirectory);
+    } catch {
+      // The original structured read error is more useful than a second filesystem error.
+    }
+    return {
+      projectId: manifest?.id ?? 'unavailable-legacy-project',
+      projectDirectory: this.projectDirectory,
+      snapshotRevision: sourceRevision ?? '',
+      files: [],
+      status: 'blocked',
+      conflicts: error.issues.map((issue) => issue.path),
+      ...(sourceRevision === undefined ? {} : { sourceRevision }),
+      issues: error.issues,
+    };
   }
 
   private async assertUpdatePreconditions(
     directory: string,
     projectId: string,
     expectedRevision: string,
-  ): Promise<void> {
+    expectedLegacyCaseBackup?: LegacyCaseBackupDeclaration,
+  ): Promise<LegacyCaseBackupDeclaration | undefined> {
     const current = await new ProjectAssetStore(directory).loadWithRevision();
-    const issues = await validateProjectDirectoryLayout(directory, createProjectAssetSnapshot(current.project));
+    const manifest = await readJson(path.join(directory, 'project.json'), 'project.json');
+    validateManifest(manifest);
+    const legacyCaseBackup = await readLegacyCaseBackupDeclaration(directory, manifest);
+    const issues = await validateProjectDirectoryLayout(
+      directory,
+      createProjectAssetSnapshot(current.project, legacyCaseBackup),
+    );
     if (current.project.id !== projectId) {
       issues.push({ path: 'project.json.id', message: '目标目录属于另一个项目，拒绝覆盖。' });
     }
     if (current.revision !== expectedRevision) {
       issues.push({ path: 'project.json.revision', message: '项目资产已被外部修改，请重新加载后再保存。' });
     }
+    if (
+      expectedLegacyCaseBackup !== undefined &&
+      !sameLegacyCaseBackupDeclaration(legacyCaseBackup, expectedLegacyCaseBackup)
+    ) {
+      issues.push({ path: 'project.json.legacyCaseBackup', message: 'legacy Case 备份声明已被外部修改。' });
+    }
     if (issues.length) {
       throw new ProjectAssetStoreError('项目资产更新前置校验失败。', issues);
     }
+    return legacyCaseBackup;
   }
 
   private async writeSnapshotAtomically(
@@ -436,6 +703,7 @@ export class ProjectAssetStore {
     options: {
       allowMissingTarget: boolean;
       validateDisplacedTarget: (directory: string) => Promise<void>;
+      legacyCaseBackupFiles?: LegacyCaseBackupFile[];
     },
   ): Promise<void> {
     const parentDirectory = path.dirname(this.projectDirectory);
@@ -459,6 +727,12 @@ export class ProjectAssetStore {
       await writeAssetCollection(temporaryDirectory, 'documents', snapshot.documents);
       await writeFixtureCollection(temporaryDirectory, snapshot.fixtures);
       await writeSuiteCollection(temporaryDirectory, snapshot.suites);
+      await writeOrCopyLegacyCaseBackup(
+        temporaryDirectory,
+        this.projectDirectory,
+        snapshot.manifest,
+        options.legacyCaseBackupFiles,
+      );
 
       const targetExists = await pathExists(this.projectDirectory);
       if (!targetExists && !options.allowMissingTarget) {
@@ -469,6 +743,8 @@ export class ProjectAssetStore {
       if (targetExists) {
         await this.fileSystem.rename(this.projectDirectory, backupDirectory);
         displacedTarget = true;
+        await options.validateDisplacedTarget(backupDirectory);
+        await this.fileSystem.afterDisplacedTargetValidation?.(backupDirectory);
         await options.validateDisplacedTarget(backupDirectory);
       }
 
@@ -865,6 +1141,8 @@ function validateManifest(manifest: unknown): asserts manifest is ProjectAssetRe
       schemaVersion?: unknown;
       id?: unknown;
       revision?: unknown;
+      legacyCaseBackupDirectory?: unknown;
+      legacyCaseBackupFiles?: unknown;
       assetIds?: unknown;
     };
     if (
@@ -878,6 +1156,15 @@ function validateManifest(manifest: unknown): asserts manifest is ProjectAssetRe
     }
     if (candidate.revision !== undefined && !isRevision(candidate.revision)) {
       issues.push({ path: 'project.json.revision', message: '项目 revision 必须是 SHA-256 摘要。' });
+    }
+    if (
+      candidate.schemaVersion === projectAssetSchemaVersion &&
+      !isValidLegacyCaseBackupManifestDeclaration(
+        candidate.legacyCaseBackupDirectory,
+        candidate.legacyCaseBackupFiles,
+      )
+    ) {
+      issues.push({ path: 'project.json.legacyCaseBackupDirectory', message: 'legacy Case 备份声明必须包含安全的相对路径和固定文件清单。' });
     }
     const assetIds = candidate.assetIds;
     if (!assetIds || typeof assetIds !== 'object') {
@@ -923,6 +1210,7 @@ function listAssetFiles(snapshot: ProjectAssetSnapshot): string[] {
     ...snapshot.documents.map((asset) => assetRelativePath('documents', asset.id)),
     ...snapshot.fixtures.map(fixtureRelativePath),
     ...snapshot.suites.map(suiteRelativePath),
+    ...legacyCaseBackupFiles(snapshot),
   ];
 }
 
@@ -936,6 +1224,7 @@ async function validateProjectDirectoryLayout(
     'recordings/',
     ...(snapshot.manifest.assetIds.fixtures === undefined ? [] : ['fixtures/']),
     ...(snapshot.manifest.assetIds.suites === undefined ? [] : ['suites/']),
+    ...legacyCaseBackupEntries(snapshot),
     ...listAssetFiles(snapshot),
   ]);
   const actualEntries = new Set(await listDirectoryTreeEntries(directory));
@@ -951,6 +1240,147 @@ async function validateProjectDirectoryLayout(
     }
   });
   return issues;
+}
+
+async function validateLegacyProjectDirectoryLayout(
+  directory: string,
+  manifest: LegacyProjectAssetManifest,
+): Promise<ProjectAssetValidationIssue[]> {
+  const expectedEntries = new Set([
+    'cases/',
+    'documents/',
+    'recordings/',
+    ...(manifest.assetIds.fixtures === undefined ? [] : ['fixtures/']),
+    ...(manifest.assetIds.suites === undefined ? [] : ['suites/']),
+    'project.json',
+    ...manifest.assetIds.cases.map((id) => assetRelativePath('cases', id)),
+    ...manifest.assetIds.recordings.map((id) => assetRelativePath('recordings', id)),
+    ...manifest.assetIds.documents.map((id) => assetRelativePath('documents', id)),
+    ...(manifest.assetIds.fixtures ?? []).map(fixtureRelativePath),
+    ...(manifest.assetIds.suites ?? []).map(suiteRelativePath),
+  ]);
+  const actualEntries = new Set(await listDirectoryTreeEntries(directory));
+  const issues: ProjectAssetValidationIssue[] = [];
+  actualEntries.forEach((entry) => {
+    if (!expectedEntries.has(entry)) {
+      issues.push({ path: entry, message: 'legacy 项目目录包含未被 manifest 管理的外部条目，拒绝迁移。' });
+    }
+  });
+  expectedEntries.forEach((entry) => {
+    if (!actualEntries.has(entry)) {
+      issues.push({ path: entry, message: 'legacy 项目目录缺少 manifest 所需的资产条目。' });
+    }
+  });
+  return issues;
+}
+
+async function validateLegacyCaseBackupDirectoryLayout(
+  directory: string,
+  manifest: ProjectAssetV2ReadManifest,
+): Promise<ProjectAssetValidationIssue[]> {
+  const expectedEntries = new Set(legacyCaseBackupEntriesFor(
+    manifest.legacyCaseBackupDirectory,
+    manifest.legacyCaseBackupFiles,
+  ));
+  const issues: ProjectAssetValidationIssue[] = [];
+  let actualEntries: string[];
+  const backupDirectory = manifest.legacyCaseBackupDirectory;
+  if (backupDirectory === undefined) {
+    actualEntries = (await listDirectoryTreeEntries(directory))
+      .filter((entry) => entry === 'migration-backup/' || entry.startsWith('migration-backup/'));
+  } else {
+    try {
+      const declaredEntries = await listSafeProjectAssetTreeEntries(directory, backupDirectory);
+      actualEntries = [
+        'migration-backup/',
+        `${backupDirectory}/`,
+        ...declaredEntries,
+      ];
+      if (manifest.legacyCaseBackupFiles === undefined) {
+        const discoveredFiles = declaredEntries
+          .filter((entry) => !entry.endsWith('/'))
+          .map((entry) => entry.slice(backupDirectory.length + 1));
+        if (!discoveredFiles.every(isSafeLegacyCaseBackupFile) || new Set(discoveredFiles).size !== discoveredFiles.length) {
+          issues.push({
+            path: backupDirectory,
+            message: '旧备份目录包含未受支持的条目。',
+          });
+        } else {
+          discoveredFiles.forEach((file) => expectedEntries.add(path.posix.join(backupDirectory, file)));
+        }
+      }
+    } catch (error) {
+      if (error instanceof ProjectAssetStoreError) {
+        issues.push(...error.issues);
+      } else {
+        issues.push({ path: backupDirectory, message: errorMessage(error) });
+      }
+      actualEntries = (await listDirectoryTreeEntries(directory))
+        .filter((entry) => entry === 'migration-backup/' || entry.startsWith('migration-backup/'));
+    }
+  }
+  const actualEntrySet = new Set(actualEntries);
+  actualEntrySet.forEach((entry) => {
+    if (!expectedEntries.has(entry)) {
+      issues.push({ path: entry, message: 'legacy Case 备份目录未被 manifest 声明。' });
+    }
+  });
+  expectedEntries.forEach((entry) => {
+    if (!actualEntrySet.has(entry)) {
+      issues.push({ path: entry, message: 'manifest 声明的 legacy Case 备份内容缺失。' });
+    }
+  });
+  if (manifest.legacyCaseBackupDirectory && manifest.legacyCaseBackupFiles) {
+    const verification = await Promise.allSettled(manifest.legacyCaseBackupFiles.map((file) => (
+      readVerifiedLegacyCaseBackupFile(
+        directory,
+        manifest.legacyCaseBackupDirectory!,
+        legacyCaseBackupFilePath(file),
+        legacyCaseBackupFileContentHash(file),
+      )
+    )));
+    verification.forEach((result) => {
+      if (result.status === 'rejected') {
+        if (result.reason instanceof ProjectAssetStoreError) {
+          issues.push(...result.reason.issues);
+        } else {
+          issues.push({ path: manifest.legacyCaseBackupDirectory!, message: errorMessage(result.reason) });
+        }
+      }
+    });
+  }
+  return issues;
+}
+
+function legacyCaseBackupEntries(snapshot: ProjectAssetSnapshot): string[] {
+  return snapshot.manifest.schemaVersion === projectAssetSchemaVersion
+    ? legacyCaseBackupEntriesFor(
+      snapshot.manifest.legacyCaseBackupDirectory,
+      snapshot.manifest.legacyCaseBackupFiles,
+    )
+    : [];
+}
+
+function legacyCaseBackupEntriesFor(
+  legacyCaseBackupDirectory: string | undefined,
+  legacyCaseBackupFiles: LegacyCaseBackupFileRecord[] | string[] | undefined,
+): string[] {
+  if (!isValidLegacyCaseBackupManifestDeclaration(legacyCaseBackupDirectory, legacyCaseBackupFiles)) {
+    return [];
+  }
+  if (legacyCaseBackupDirectory === undefined) {
+    return [];
+  }
+  return [
+    'migration-backup/',
+    `${legacyCaseBackupDirectory}/`,
+    `${legacyCaseBackupDirectory}/cases/`,
+    ...(legacyCaseBackupFiles ?? []).map((file) => path.posix.join(legacyCaseBackupDirectory, legacyCaseBackupFilePath(file))),
+  ];
+}
+
+function legacyCaseBackupFiles(snapshot: ProjectAssetSnapshot): string[] {
+  return legacyCaseBackupEntries(snapshot).filter((entry) => !entry.endsWith('/'));
 }
 
 async function validateV2CaseDirectoryLayout(
@@ -995,6 +1425,87 @@ async function listDirectoryTreeEntries(
       result.push(relativePath);
     }
   }
+  return result.sort();
+}
+
+/**
+ * Resolves an asset path one component at a time. `lstat` on a complete path
+ * follows intermediate links, so checking only its endpoint is insufficient
+ * for project assets whose directories may have been replaced externally.
+ */
+async function lstatProjectAssetPath(
+  rootDirectory: string,
+  relativePath: string,
+): Promise<Awaited<ReturnType<typeof fs.lstat>>> {
+  const segments = relativePath.split('/');
+  let checkedPath = '';
+  let fileInfo: Awaited<ReturnType<typeof fs.lstat>> | undefined;
+  for (const [index, segment] of segments.entries()) {
+    checkedPath = path.posix.join(checkedPath, segment);
+    try {
+      fileInfo = await fs.lstat(path.join(rootDirectory, checkedPath));
+    } catch (error) {
+      throw new ProjectAssetStoreError('项目资产路径无法安全读取。', [
+        { path: checkedPath, message: errorMessage(error) },
+      ]);
+    }
+    if (fileInfo.isSymbolicLink()) {
+      throw new ProjectAssetStoreError('项目资产路径无法安全读取。', [
+        { path: checkedPath, message: '拒绝符号链接或非普通项目资产路径。' },
+      ]);
+    }
+    if (index < segments.length - 1 && !fileInfo.isDirectory()) {
+      throw new ProjectAssetStoreError('项目资产路径无法安全读取。', [
+        { path: checkedPath, message: '项目资产路径的父级必须是目录。' },
+      ]);
+    }
+  }
+  return fileInfo!;
+}
+
+async function assertProjectAssetDirectory(rootDirectory: string, relativePath: string): Promise<void> {
+  const fileInfo = await lstatProjectAssetPath(rootDirectory, relativePath);
+  if (!fileInfo.isDirectory()) {
+    throw new ProjectAssetStoreError('项目资产路径无法安全读取。', [
+      { path: relativePath, message: '项目资产路径必须是目录。' },
+    ]);
+  }
+}
+
+async function assertRegularProjectAssetFile(rootDirectory: string, relativePath: string): Promise<void> {
+  const fileInfo = await lstatProjectAssetPath(rootDirectory, relativePath);
+  if (!fileInfo.isFile()) {
+    throw new ProjectAssetStoreError('项目资产路径无法安全读取。', [
+      { path: relativePath, message: '项目资产路径必须是普通文件。' },
+    ]);
+  }
+}
+
+/** Lists one project-owned tree without ever following links below its root. */
+async function listSafeProjectAssetTreeEntries(
+  rootDirectory: string,
+  relativeDirectory: string,
+): Promise<string[]> {
+  await assertProjectAssetDirectory(rootDirectory, relativeDirectory);
+  const result: string[] = [];
+  async function visit(directory: string): Promise<void> {
+    const entries = await fs.readdir(path.join(rootDirectory, directory), { withFileTypes: true });
+    for (const entry of entries) {
+      const entryPath = path.posix.join(directory, entry.name);
+      const fileInfo = await lstatProjectAssetPath(rootDirectory, entryPath);
+      if (fileInfo.isDirectory()) {
+        result.push(`${entryPath}/`);
+        await visit(entryPath);
+      } else if (fileInfo.isFile()) {
+        result.push(entryPath);
+      } else {
+        throw new ProjectAssetStoreError('项目资产路径无法安全读取。', [
+          { path: entryPath, message: '项目资产树只能包含目录和普通文件。' },
+        ]);
+      }
+    }
+  }
+  await visit(relativeDirectory);
   return result.sort();
 }
 
@@ -1073,6 +1584,39 @@ async function readCaseCollection(
   }));
 }
 
+async function readLegacyCaseCollectionWithContent(
+  rootDirectory: string,
+  ids: string[],
+): Promise<Array<{ testCase: TestCaseDraft; relativePath: string; content: string }>> {
+  return Promise.all(ids.map(async (id) => {
+    const relativePath = assetRelativePath('cases', id);
+    await assertRegularProjectAssetFile(rootDirectory, relativePath);
+    const { value, text: content } = await readJsonWithText(path.join(rootDirectory, relativePath), relativePath);
+    const testCase = value as TestCaseDraft;
+    const issues: ProjectAssetValidationIssue[] = [];
+    if (!testCase || typeof testCase !== 'object' || Array.isArray(testCase)) {
+      issues.push({ path: relativePath, message: 'legacy Case 必须是对象。' });
+    } else {
+      if (testCase.id !== id) {
+        issues.push({ path: relativePath, message: 'Case ID 不匹配。' });
+      }
+      if (testCase.schemaVersion !== undefined && testCase.schemaVersion !== 2) {
+        issues.push({ path: relativePath, message: 'legacy Case schema version 无效。' });
+      }
+      if (!Array.isArray(testCase.steps)) {
+        issues.push({ path: relativePath, message: 'legacy Case steps 必须是数组。' });
+      }
+      if (typeof testCase.version === 'number' && Number.isInteger(testCase.version) && !Number.isSafeInteger(testCase.version)) {
+        issues.push({ path: relativePath, message: 'legacy Case version 必须是安全整数。' });
+      }
+    }
+    if (issues.length) {
+      throw new ProjectAssetStoreError('legacy Case 文件无效。', issues);
+    }
+    return { testCase, relativePath, content };
+  }));
+}
+
 async function writeFixtureCollection(rootDirectory: string, fixtures: FixtureAsset[]): Promise<void> {
   const directory = path.join(rootDirectory, 'fixtures');
   await fs.mkdir(directory, { recursive: true });
@@ -1122,9 +1666,111 @@ async function writeJson(filePath: string, value: unknown): Promise<void> {
   await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
 }
 
+async function readLegacyCaseBackupDeclaration(
+  directory: string,
+  manifest: ProjectAssetReadManifest,
+): Promise<LegacyCaseBackupDeclaration | undefined> {
+  if (manifest.schemaVersion !== projectAssetSchemaVersion || !manifest.legacyCaseBackupDirectory) {
+    return undefined;
+  }
+  const declaredFiles = manifest.legacyCaseBackupFiles ?? (await listSafeProjectAssetTreeEntries(
+    directory,
+    manifest.legacyCaseBackupDirectory,
+  ))
+    .filter((entry) => entry.startsWith(`${manifest.legacyCaseBackupDirectory}/`) && !entry.endsWith('/'))
+    .map((entry) => entry.slice(manifest.legacyCaseBackupDirectory!.length + 1));
+  const paths = declaredFiles.map(legacyCaseBackupFilePath);
+  if (!paths.every(isSafeLegacyCaseBackupFile) || new Set(paths).size !== paths.length) {
+    throw new ProjectAssetStoreError('legacy Case 备份目录无法安全升级。', [
+      { path: manifest.legacyCaseBackupDirectory, message: '旧备份目录包含未受支持的条目。' },
+    ]);
+  }
+  const files = await Promise.all(paths.map(async (filePath, index) => {
+    const expectedHash = legacyCaseBackupFileContentHash(declaredFiles[index]!);
+    const content = await readVerifiedLegacyCaseBackupFile(
+      directory,
+      manifest.legacyCaseBackupDirectory!,
+      filePath,
+      expectedHash,
+    );
+    return { path: filePath, contentHash: calculateContentHash(content) };
+  }));
+  return { directory: manifest.legacyCaseBackupDirectory, files };
+}
+
+async function readVerifiedLegacyCaseBackupFile(
+  rootDirectory: string,
+  backupDirectory: string,
+  relativePath: string,
+  expectedHash?: string,
+): Promise<Buffer> {
+  const backupFilePath = path.posix.join(backupDirectory, relativePath);
+  await assertRegularProjectAssetFile(rootDirectory, backupFilePath);
+  const fullPath = path.join(rootDirectory, backupFilePath);
+  const content = await fs.readFile(fullPath);
+  const actualHash = calculateContentHash(content);
+  if (expectedHash !== undefined && actualHash !== expectedHash) {
+    throw new ProjectAssetStoreError('legacy Case 备份内容已变化。', [
+      { path: path.posix.join(backupDirectory, relativePath), message: '备份内容摘要与 manifest 声明不一致。' },
+    ]);
+  }
+  return content;
+}
+
+async function writeOrCopyLegacyCaseBackup(
+  stagingDirectory: string,
+  sourceDirectory: string,
+  manifest: ProjectAssetReadManifest,
+  legacyCaseBackupFiles: LegacyCaseBackupFile[] | undefined,
+): Promise<void> {
+  if (manifest.schemaVersion !== projectAssetSchemaVersion || !manifest.legacyCaseBackupDirectory) {
+    return;
+  }
+  const backupDirectory = manifest.legacyCaseBackupDirectory;
+  if (legacyCaseBackupFiles) {
+    await fs.mkdir(path.join(stagingDirectory, backupDirectory, 'cases'), { recursive: true });
+    await Promise.all(legacyCaseBackupFiles.map(async ({ relativePath, content, contentHash }) => {
+      if (calculateContentHash(content) !== contentHash) {
+        throw new ProjectAssetStoreError('legacy Case 迁移备份内容已变化。', [
+          { path: relativePath, message: '待写入备份内容摘要不一致。' },
+        ]);
+      }
+      const targetPath = path.join(stagingDirectory, backupDirectory, relativePath);
+      await fs.mkdir(path.dirname(targetPath), { recursive: true });
+      await fs.writeFile(targetPath, content, 'utf8');
+    }));
+    return;
+  }
+  const declaration = await readLegacyCaseBackupDeclaration(sourceDirectory, manifest);
+  if (!declaration) {
+    return;
+  }
+  await fs.mkdir(path.join(stagingDirectory, declaration.directory, 'cases'), { recursive: true });
+  await Promise.all(declaration.files.map(async ({ path: relativePath, contentHash }) => {
+    const content = await readVerifiedLegacyCaseBackupFile(
+      sourceDirectory,
+      declaration.directory,
+      relativePath,
+      contentHash,
+    );
+    const targetPath = path.join(stagingDirectory, declaration.directory, relativePath);
+    await fs.mkdir(path.dirname(targetPath), { recursive: true });
+    await fs.writeFile(targetPath, content);
+  }));
+}
+
 async function readJson(filePath: string, label: string): Promise<unknown> {
+  return (await readJsonWithText(filePath, label)).value;
+}
+
+async function readJsonWithText(filePath: string, label: string): Promise<{ value: unknown; text: string }> {
   try {
-    return JSON.parse(await fs.readFile(filePath, 'utf8')) as unknown;
+    const fileInfo = await fs.lstat(filePath);
+    if (fileInfo.isSymbolicLink() || !fileInfo.isFile()) {
+      throw new Error('拒绝符号链接或非普通项目资产文件。');
+    }
+    const text = await fs.readFile(filePath, 'utf8');
+    return { value: JSON.parse(text) as unknown, text };
   } catch (error) {
     throw new ProjectAssetStoreError(`无法读取项目资产文件：${label}。`, [
       { path: label, message: (error as Error).message || 'JSON 文件损坏或不存在。' },
@@ -1132,13 +1778,33 @@ async function readJson(filePath: string, label: string): Promise<unknown> {
   }
 }
 
+async function readLegacyManifestForBlockedPlan(filePath: string): Promise<{ id: string } | undefined> {
+  try {
+    const fileInfo = await fs.lstat(filePath);
+    if (fileInfo.isSymbolicLink() || !fileInfo.isFile()) {
+      return undefined;
+    }
+    const candidate = JSON.parse(await fs.readFile(filePath, 'utf8')) as {
+      schemaVersion?: unknown;
+      id?: unknown;
+    };
+    return candidate.schemaVersion === legacyProjectAssetSchemaVersion && isNonEmptyString(candidate.id)
+      ? { id: candidate.id }
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function projectFromSnapshot(snapshot: ProjectAssetSnapshot): ProjectDraft {
   const {
     schemaVersion: _schemaVersion,
     revision: _revision,
+    legacyCaseBackupDirectory: _legacyCaseBackupDirectory,
+    legacyCaseBackupFiles: _legacyCaseBackupFiles,
     assetIds: _assetIds,
     ...projectMetadata
-  } = snapshot.manifest;
+  } = snapshot.manifest as ProjectAssetManifest;
   return {
     ...structuredClone(projectMetadata),
     testCases: structuredClone(snapshot.testCases),
@@ -1152,6 +1818,34 @@ function projectFromSnapshot(snapshot: ProjectAssetSnapshot): ProjectDraft {
 export function calculateProjectAssetRevision(project: ProjectDraft): string {
   const canonicalProject = JSON.stringify(canonicalize(sanitizeProjectAsset(project)));
   return createHash('sha256').update(canonicalProject, 'utf8').digest('hex');
+}
+
+function calculateContentHash(content: string | Buffer): string {
+  return createHash('sha256').update(content).digest('hex');
+}
+
+async function calculateDirectoryContentRevision(directory: string): Promise<string> {
+  const hash = createHash('sha256');
+  const entries = await listDirectoryTreeEntries(directory);
+  for (const entry of entries) {
+    if (entry.endsWith('/')) {
+      continue;
+    }
+    hash.update(entry, 'utf8');
+    hash.update('\0', 'utf8');
+    const entryPath = path.join(directory, entry);
+    const entryInfo = await fs.lstat(entryPath);
+    if (entryInfo.isSymbolicLink()) {
+      // Never dereference a link while fingerprinting a migration source. The
+      // later asset reader will reject any link declared by the manifest.
+      hash.update('symlink:', 'utf8');
+      hash.update(await fs.readlink(entryPath), 'utf8');
+    } else {
+      hash.update(await fs.readFile(entryPath));
+    }
+    hash.update('\0', 'utf8');
+  }
+  return hash.digest('hex');
 }
 
 function canonicalize(value: unknown): unknown {
@@ -1220,7 +1914,77 @@ function isVersionedAssetReference(value: unknown): value is VersionedTestAssetR
 }
 
 function isPositiveInteger(value: unknown): value is number {
-  return typeof value === 'number' && Number.isInteger(value) && value >= 1;
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 1;
+}
+
+function isSafeLegacyCaseBackupDirectory(value: unknown): value is string {
+  if (typeof value !== 'string' || path.posix.isAbsolute(value) || path.win32.isAbsolute(value)) {
+    return false;
+  }
+  const segments = value.split('/');
+  return (
+    segments.length === 2 &&
+    segments[0] === 'migration-backup' &&
+    /^[a-z0-9][a-z0-9-]*$/u.test(segments[1] ?? '') &&
+    !value.includes('\\') &&
+    path.posix.normalize(value) === value
+  );
+}
+
+function isSafeLegacyCaseBackupFile(value: unknown): value is string {
+  if (typeof value !== 'string' || path.posix.isAbsolute(value) || path.win32.isAbsolute(value) || value.includes('\\')) {
+    return false;
+  }
+  const segments = value.split('/');
+  return (
+    segments.length === 2 &&
+    segments[0] === 'cases' &&
+    segments[1] !== '' &&
+    segments[1] !== '.' &&
+    segments[1] !== '..' &&
+    segments[1]!.endsWith('.json') &&
+    path.posix.normalize(value) === value
+  );
+}
+
+function isLegacyCaseBackupFileRecord(value: unknown): value is LegacyCaseBackupFileRecord {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+  const record = value as Partial<LegacyCaseBackupFileRecord>;
+  return isSafeLegacyCaseBackupFile(record.path) && isRevision(record.contentHash);
+}
+
+function legacyCaseBackupFilePath(file: LegacyCaseBackupFileRecord | string): string {
+  return typeof file === 'string' ? file : file.path;
+}
+
+function legacyCaseBackupFileContentHash(file: LegacyCaseBackupFileRecord | string): string | undefined {
+  return typeof file === 'string' ? undefined : file.contentHash;
+}
+
+function isValidLegacyCaseBackupManifestDeclaration(
+  directory: unknown,
+  files: unknown,
+): boolean {
+  if (directory === undefined && files === undefined) {
+    return true;
+  }
+  return (
+    isSafeLegacyCaseBackupDirectory(directory) &&
+    (files === undefined || (
+      Array.isArray(files) &&
+      (files.every(isLegacyCaseBackupFileRecord) || files.every(isSafeLegacyCaseBackupFile)) &&
+      new Set(files.map(legacyCaseBackupFilePath)).size === files.length
+    ))
+  );
+}
+
+function sameLegacyCaseBackupDeclaration(
+  left: LegacyCaseBackupDeclaration | undefined,
+  right: LegacyCaseBackupDeclaration | undefined,
+): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
 }
 
 function isNonEmptyString(value: unknown): value is string {
