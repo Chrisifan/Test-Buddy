@@ -2741,17 +2741,30 @@ a.motion-surface:hover,
 
   .startup-step-list {
     grid-column: 1 / -1;
-    gap: 10px;
+    gap: 6px;
   }
 
   .startup-main .home-start-step {
     min-height: 44px;
-    padding: 4px 6px 4px 0;
+    gap: 6px;
+    padding: 4px 2px 4px 0;
   }
 
   .startup-main .home-start-step::after {
     inset: 18px -5px auto auto;
     width: 5px;
+  }
+
+  .startup-main .home-start-step-title {
+    font-size: 11px;
+    line-height: 15px;
+    white-space: nowrap;
+  }
+
+  .startup-main .home-start-step-status {
+    font-size: 10px;
+    line-height: 14px;
+    white-space: nowrap;
   }
 
   .startup-main .home-start-panel {

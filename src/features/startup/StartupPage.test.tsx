@@ -91,5 +91,7 @@ describe('StartupPage', () => {
     expect(startupStyles).toContain('grid-template-rows: 72px minmax(0, 1fr) 32px;');
     expect(startupStyles).toContain('.startup-header {');
     expect(startupStyles).not.toContain('grid-template-columns: 224px minmax(0, 1fr);');
+    expect(startupStyles).toContain('gap: 6px;');
+    expect(startupStyles).toContain('white-space: nowrap;');
   });
 });
