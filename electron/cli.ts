@@ -8,6 +8,7 @@ import {
   hydrateStudioState,
   isAgentRunnableTestCase,
   isMidsceneConfigured,
+  type BrowserSessionState,
   type ProjectEnvironment,
   type RunTestCaseResponse,
   type RunTone,
@@ -20,6 +21,7 @@ import { nodePngImageAdapter } from './runtime/node-png-image-adapter.js';
 import { appendRunToStudioState } from './runtime/run-history.js';
 import { createRuntimeBundle } from './runtime/runtime-bundle.js';
 import { ProjectRepository, type ProjectSnapshot } from './projectRepository.js';
+import { SuiteRunner } from './runtime/suite-runner.js';
 import { StudioStore } from './studioStore.js';
 
 const usage = `Usage:
@@ -195,7 +197,7 @@ export async function executeCliCommand(command: Exclude<ParsedCommand, { kind: 
   const dataDir = path.resolve(command.dataDir);
   const store = new StudioStore(dataDir);
   const rawState = await loadExistingState(store);
-  let state = hydrateStudioState(rawState);
+  const runtimeState = hydrateStudioState(rawState);
   const projectSnapshot = await loadProjectSnapshot(store, command.projectId);
   const project = projectSnapshot.project;
   const selections = command.caseReferences.map((reference) => selectTestCase(projectSnapshot, reference, command.environmentId));
@@ -207,11 +209,12 @@ export async function executeCliCommand(command: Exclude<ParsedCommand, { kind: 
   });
   const results: CliCaseResult[] = [];
   let suiteInfo: CliSuiteRunInfo | undefined;
+  const persistRun = createSerializedRunHistoryPersister(store, () => runtime.browserRuntime.getState());
 
   try {
     await runtime.ensureReady();
     const executeSelection = async (selection: { testCase: TestCaseDraft; environment: ProjectEnvironment }): Promise<CliCaseResult> => {
-      if (isAgentRunnableTestCase(selection.testCase) && !isMidsceneConfigured(state.midsceneConfig)) {
+      if (isAgentRunnableTestCase(selection.testCase) && !isMidsceneConfigured(runtimeState.midsceneConfig)) {
         return {
           projectId: project.id,
           testCaseId: selection.testCase.id,
@@ -235,12 +238,11 @@ export async function executeCliCommand(command: Exclude<ParsedCommand, { kind: 
             locale: selection.environment.locale,
             headless: selection.environment.headless,
           },
-          midsceneConfig: state.midsceneConfig,
-          agentModelConfig: state.agentModelConfig,
-          browserSession: state.browserSession,
+          midsceneConfig: runtimeState.midsceneConfig,
+          agentModelConfig: runtimeState.agentModelConfig,
+          browserSession: runtimeState.browserSession,
         });
-        state = appendRunToStudioState(state, result, selection.environment, runtime.browserRuntime.getState());
-        await store.save(state);
+        await persistRun(result, selection.environment);
         return toCliCaseResult(result, selection.environment);
       } catch (error) {
         return {
@@ -257,87 +259,47 @@ export async function executeCliCommand(command: Exclude<ParsedCommand, { kind: 
     };
 
     if (suite) {
-      const suiteCases = suite.caseReferences
-        .map((reference) => findTestCaseVersion(project, reference))
-        .filter((testCase): testCase is TestCaseDraft => Boolean(testCase));
-      const missingModelCases = suiteCases.filter((testCase) => isAgentRunnableTestCase(testCase) && !isMidsceneConfigured(state.midsceneConfig));
-      if (missingModelCases.length) {
-        suiteInfo = {
-          id: suite.id,
-          version: suite.version,
-          status: 'failed',
-          effectiveConcurrency: 1,
-          issues: [],
-        };
-        missingModelCases.forEach((testCase) => {
-          results.push({
-            projectId: project.id,
-            testCaseId: testCase.id,
-            environmentId: suite.environmentId,
-            title: testCase.name,
-            status: 'failed',
-            summary: '该 Agent 用例需要已配置的 Midscene 模型，当前数据目录未包含可用模型配置。',
-            failureReason: 'Midscene 模型未配置。',
-            artifacts: [],
-            attempts: 1,
-            flaky: false,
-          });
+      const attemptedResults = new Map<string, CliCaseResult>();
+      const suiteResult = await new SuiteRunner({
+        execute: async ({ testCase, environment }) => {
+          const result = await executeSelection({ testCase, environment });
+          attemptedResults.set(`${testCase.id}@${testCase.version ?? 1}`, result);
+          return {
+            status: result.status === 'running' ? 'neutral' : result.status,
+            summary: result.summary,
+            ...(result.runId ? { runId: result.runId } : {}),
+          };
+        },
+      }).run(project, suite);
+      suiteInfo = {
+        id: suiteResult.suiteId,
+        version: suiteResult.suiteVersion,
+        status: suiteResult.status,
+        effectiveConcurrency: suiteResult.effectiveConcurrency,
+        issues: suiteResult.issues,
+      };
+      suiteResult.results.forEach((suiteCaseResult) => {
+        const testCase = findTestCaseVersion(project, {
+          id: suiteCaseResult.testCaseId,
+          version: suiteCaseResult.testCaseVersion,
         });
-      } else {
-        const suiteResponse = await runtime.runSuite({
-          projectSnapshot,
-          suite,
-          environment: findEnvironment(projectSnapshot, suite.environmentId),
-          runtimeProfile: state.runtimeProfile,
-          midsceneConfig: state.midsceneConfig,
-          agentModelConfig: state.agentModelConfig,
-          browserSession: state.browserSession,
-        });
-        const suiteResult = suiteResponse.detail.suite;
-        suiteInfo = {
-          id: suiteResult.suiteId,
-          version: suiteResult.suiteVersion,
-          status: suiteResult.status,
-          effectiveConcurrency: suiteResult.effectiveConcurrency,
-          issues: suiteResult.issues,
-        };
-        for (const detail of suiteResponse.detail.caseDetails) {
-          const environment = findEnvironment(projectSnapshot, detail.environmentId);
-          state = appendRunToStudioState(state, { runId: detail.id, title: detail.title, detail }, environment, runtime.browserRuntime.getState());
-        }
-        if (suiteResponse.detail.caseDetails.length) {
-          await store.save(state);
-        }
-        suiteResult.results.forEach((suiteCaseResult) => {
-          const testCase = findTestCaseVersion(project, {
-            id: suiteCaseResult.testCaseId,
-            version: suiteCaseResult.testCaseVersion,
-          });
-          if (!testCase) return;
-          const detail = suiteCaseResult.runId
-            ? suiteResponse.detail.caseDetails.find((candidate) => candidate.id === suiteCaseResult.runId)
-            : undefined;
-          results.push(detail
-            ? {
-                ...toCliCaseResult({ runId: detail.id, title: detail.title, detail }, findEnvironment(projectSnapshot, detail.environmentId)),
-                summary: suiteCaseResult.summary,
-                attempts: suiteCaseResult.attempts,
-                flaky: suiteCaseResult.flaky,
-              }
-            : {
-                projectId: project.id,
-                testCaseId: testCase.id,
-                environmentId: suite.environmentId,
-                title: testCase.name,
-                status: suiteCaseResult.status,
-                summary: suiteCaseResult.summary,
-                ...(suiteCaseResult.status === 'failed' ? { failureReason: suiteCaseResult.summary } : {}),
-                artifacts: [],
-                attempts: suiteCaseResult.attempts,
-                flaky: suiteCaseResult.flaky,
-              });
-        });
-      }
+        if (!testCase) return;
+        const attempted = attemptedResults.get(`${suiteCaseResult.testCaseId}@${suiteCaseResult.testCaseVersion}`);
+        results.push(attempted
+          ? { ...attempted, summary: suiteCaseResult.summary, attempts: suiteCaseResult.attempts, flaky: suiteCaseResult.flaky }
+          : {
+              projectId: project.id,
+              testCaseId: testCase.id,
+              environmentId: suite.environmentId,
+              title: testCase.name,
+              status: suiteCaseResult.status,
+              summary: suiteCaseResult.summary,
+              ...(suiteCaseResult.status === 'failed' ? { failureReason: suiteCaseResult.summary } : {}),
+              artifacts: [],
+              attempts: suiteCaseResult.attempts,
+              flaky: suiteCaseResult.flaky,
+            });
+      });
     } else {
       for (const selection of selections) {
         results.push(await executeSelection(selection));
@@ -416,14 +378,6 @@ function selectTestCase(
   return { testCase, environment };
 }
 
-function findEnvironment(projectSnapshot: ProjectSnapshot, environmentId: string): ProjectEnvironment {
-  const environment = projectSnapshot.project.environments.find((candidate) => candidate.id === environmentId);
-  if (!environment) {
-    throw new CliUsageError(`项目 ${projectSnapshot.project.id} 中未找到环境 ID：${environmentId}`);
-  }
-  return environment;
-}
-
 function parseVersionedReference(value: string, option: string): VersionedTestAssetReference {
   const separator = value.lastIndexOf('@');
   const id = separator > 0 ? value.slice(0, separator).trim() : '';
@@ -435,19 +389,26 @@ function parseVersionedReference(value: string, option: string): VersionedTestAs
 }
 
 async function loadExistingState(store: StudioStore): Promise<StudioState> {
-  try {
-    return await store.loadExisting();
-  } catch (error) {
-    throw new CliUsageError(messageFor(error));
-  }
+  return store.loadExisting();
 }
 
 async function loadProjectSnapshot(store: StudioStore, projectId: string): Promise<ProjectSnapshot> {
-  try {
-    return await new ProjectRepository({ studioStore: store }).load(projectId);
-  } catch (error) {
-    throw new CliUsageError(messageFor(error));
-  }
+  return new ProjectRepository({ studioStore: store }).load(projectId);
+}
+
+function createSerializedRunHistoryPersister(
+  store: Pick<StudioStore, 'loadExisting' | 'save'>,
+  getBrowserSession: () => BrowserSessionState,
+): (result: RunTestCaseResponse, environment: ProjectEnvironment) => Promise<void> {
+  let pending = Promise.resolve();
+  return async (result, environment) => {
+    const persistence = pending.then(async () => {
+      const latestState = hydrateStudioState(await store.loadExisting());
+      await store.save(appendRunToStudioState(latestState, result, environment, getBrowserSession()));
+    });
+    pending = persistence.catch(() => undefined);
+    return persistence;
+  };
 }
 
 function toCliCaseResult(result: RunTestCaseResponse, environment: ProjectEnvironment): CliCaseResult {

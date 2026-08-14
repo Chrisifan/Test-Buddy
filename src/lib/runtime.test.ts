@@ -254,46 +254,53 @@ describe('browser fallback agent runtime', () => {
       steps: [],
     };
     project.recordings = [recording];
+    const agentCase = {
+      id: 'case-agent',
+      version: 1,
+      kind: 'scenario' as const,
+      groupId: project.groups[0]!.id,
+      environmentId: environment.id,
+      source: 'manual' as const,
+      name: 'Agent Case',
+      category: '',
+      lastEdited: '',
+      url: environment.url,
+      notes: '',
+      steps: [{ id: 'step-agent', type: 'ai' as const, title: '检查', body: '检查页面' }],
+    };
+    const recordingCase = {
+      id: 'case-recording',
+      version: 1,
+      kind: 'recording' as const,
+      groupId: project.groups[0]!.id,
+      environmentId: environment.id,
+      source: 'recording' as const,
+      name: 'Recording Case',
+      category: '',
+      lastEdited: '',
+      url: environment.url,
+      notes: '',
+      steps: [{ id: 'step-recording', type: 'recordingReplay' as const, title: '回放', body: '回放', recordingId: recording.id }],
+    };
+    project.testCases = [agentCase, recordingCase];
 
     const agentResponse = await runTestCase({
       runId: 'suite-run-fallback-case-agent-attempt-1',
       project,
       environment,
-      testCase: {
-        id: 'case-agent',
-        kind: 'scenario',
-        groupId: project.groups[0]!.id,
-        environmentId: environment.id,
-        source: 'manual',
-        name: 'Agent Case',
-        category: '',
-        lastEdited: '',
-        url: environment.url,
-        notes: '',
-        steps: [{ id: 'step-agent', type: 'ai', title: '检查', body: '检查页面' }],
-      },
+      testCase: agentCase,
     });
     const recordingResponse = await runTestCase({
       runId: 'suite-run-fallback-case-recording-attempt-1',
       project,
       environment,
-      testCase: {
-        id: 'case-recording',
-        kind: 'recording',
-        groupId: project.groups[0]!.id,
-        environmentId: environment.id,
-        source: 'recording',
-        name: 'Recording Case',
-        category: '',
-        lastEdited: '',
-        url: environment.url,
-        notes: '',
-        steps: [{ id: 'step-recording', type: 'recordingReplay', title: '回放', body: '回放', recordingId: recording.id }],
-      },
+      testCase: recordingCase,
     });
 
     expect(agentResponse.runId).toBe('suite-run-fallback-case-agent-attempt-1');
+    expect(agentResponse.detail.agentRun?.intent.source).toBe('workflow');
     expect(recordingResponse.runId).toBe('suite-run-fallback-case-recording-attempt-1');
+    expect(recordingResponse.detail.agentRun?.intent.source).toBe('recording');
   });
 
   it('keeps non-Agent test cases neutral when desktop execution is unavailable', async () => {
