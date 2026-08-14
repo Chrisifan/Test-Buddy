@@ -100,7 +100,7 @@ describe('RuntimeBundle test case routing', () => {
     await expect(
       bundle.runTestCase({
         runId: 'run-legacy-ai',
-        project,
+        projectSnapshot: projectSnapshot(project),
         environment,
         testCase,
       }),
@@ -160,7 +160,7 @@ describe('RuntimeBundle test case routing', () => {
     await expect(
       bundle.runTestCase({
         runId: `run-confirmed-${actionName}`,
-        project,
+        projectSnapshot: projectSnapshot(project),
         environment,
         testCase,
       }),
@@ -218,7 +218,7 @@ describe('RuntimeBundle test case routing', () => {
     await expect(
       bundle.runTestCase({
         runId: 'run-confirmed-click',
-        project,
+        projectSnapshot: projectSnapshot(project),
         environment,
         testCase,
       }),
@@ -273,7 +273,7 @@ describe('RuntimeBundle test case routing', () => {
     await expect(
       bundle.runTestCase({
         runId: 'run-confirmed-assertion',
-        project,
+        projectSnapshot: projectSnapshot(project),
         environment,
         testCase,
       }),
@@ -341,7 +341,11 @@ describe('RuntimeBundle desktop Suite adapter', () => {
       } satisfies RunTestCaseResponse;
     });
 
-    const response = await bundle.runSuite({ project, suite: { id: suite.id, version: suite.version } });
+    const response = await bundle.runSuite({
+      projectSnapshot: projectSnapshot(project),
+      suite,
+      environment,
+    });
 
     expect(caseCalls).toEqual([`${first.id}:${environment.id}`, `${second.id}:${environment.id}`]);
     expect(response).toMatchObject({
@@ -439,8 +443,9 @@ describe('RuntimeBundle desktop Suite adapter', () => {
 
     const response = await bundle.runSuite({
       runId: 'suite-retry-run',
-      project,
-      suite: { id: suite.id, version: suite.version },
+      projectSnapshot: projectSnapshot(project),
+      suite,
+      environment,
     });
 
     expect(response.detail.caseDetails.map((detail) => detail.id)).toEqual([
@@ -476,8 +481,9 @@ describe('RuntimeBundle desktop Suite adapter', () => {
     const response = await bundle.runSuite({
       runId: 'suite-cancelled-run',
       cancellationSignal: controller.signal,
-      project,
-      suite: { id: suite.id, version: suite.version },
+      projectSnapshot: projectSnapshot(project),
+      suite,
+      environment,
     });
 
     expect(caseRun).not.toHaveBeenCalled();
@@ -489,3 +495,12 @@ describe('RuntimeBundle desktop Suite adapter', () => {
     await bundle.close();
   });
 });
+
+function projectSnapshot(project: ReturnType<typeof createEmptyProject>) {
+  return {
+    project,
+    revision: 'a'.repeat(64),
+    source: 'legacyStudioStore' as const,
+    reproducibility: 'legacy' as const,
+  };
+}

@@ -1,26 +1,29 @@
 import path from 'node:path';
 
 import type {
+  AgentModelConfig,
+  BrowserSessionState,
+  FixtureScriptTrustRecord,
   ProjectEnvironment,
   RecordingCapturedEvent,
   RunEventPayload,
   RunRecordingRequest,
   RunRecordingResponse,
-  RunSuiteRequest,
   RunSuiteResponse,
-  RunTestCaseRequest,
   RunTestCaseResponse,
   RunWorkflowRequest,
   RunWorkflowResponse,
   RuntimeProfile,
+  SuiteAsset,
+  TestCaseDraft,
 } from '../../shared/studio.js';
 import {
-  findSuiteAsset,
   getExclusiveRecordingReplayId,
   getTestCasePrdPath,
   isAgentRunnableTestCase,
   testCaseToWorkflow,
 } from '../../shared/studio.js';
+import type { ProjectSnapshot } from '../projectRepository.js';
 import { OpenAICompatibleAgentPlanner } from './agent-planner.js';
 import { OpenAICompatibleAgentReporter } from './agent-reporter.js';
 import { OpenAICompatibleAgentVerifier } from './agent-verifier.js';
@@ -43,12 +46,42 @@ export interface RuntimeBundle {
   studioRuntime: StudioRuntime;
   testRunner: TestRunner;
   ensureReady: () => Promise<void>;
-  runTestCase: (request: RunTestCaseRequest) => Promise<RunTestCaseResponse>;
-  runSuite: (request: RunSuiteRequest) => Promise<RunSuiteResponse>;
+  runTestCase: (request: ResolvedRunTestCaseRequest) => Promise<RunTestCaseResponse>;
+  runSuite: (request: ResolvedRunSuiteRequest) => Promise<RunSuiteResponse>;
   runRecording: (request: RunRecordingRequest) => Promise<RunRecordingResponse>;
   runWorkflow: (request: RunWorkflowRequest) => Promise<RunWorkflowResponse>;
   cancelRun: (runId: string) => boolean;
   close: () => Promise<void>;
+}
+
+/** Main-process-only Case execution input assembled from authoritative assets. */
+export interface ResolvedRunTestCaseRequest {
+  runId?: string;
+  cancellationSignal?: AbortSignal;
+  fixtureScriptTrustRecords?: FixtureScriptTrustRecord[];
+  fixtureScriptTrustDirectory?: string;
+  projectSnapshot: ProjectSnapshot;
+  testCase: TestCaseDraft;
+  environment: ProjectEnvironment;
+  runtimeProfile?: RuntimeProfile;
+  midsceneConfig?: import('../../shared/studio.js').MidsceneConfig;
+  agentModelConfig?: AgentModelConfig;
+  browserSession?: BrowserSessionState;
+}
+
+/** Main-process-only Suite execution input assembled from authoritative assets. */
+export interface ResolvedRunSuiteRequest {
+  runId?: string;
+  cancellationSignal?: AbortSignal;
+  fixtureScriptTrustRecords?: FixtureScriptTrustRecord[];
+  fixtureScriptTrustDirectory?: string;
+  projectSnapshot: ProjectSnapshot;
+  suite: SuiteAsset;
+  environment: ProjectEnvironment;
+  runtimeProfile?: RuntimeProfile;
+  midsceneConfig?: import('../../shared/studio.js').MidsceneConfig;
+  agentModelConfig?: AgentModelConfig;
+  browserSession?: BrowserSessionState;
 }
 
 export interface RuntimeBundleOptions {
@@ -138,18 +171,31 @@ export function createRuntimeBundle(options: RuntimeBundleOptions): RuntimeBundl
   };
 
   const executeTestCase = async (
-    request: RunTestCaseRequest,
+    request: ResolvedRunTestCaseRequest,
     runId: string,
     cancellationSignal: AbortSignal,
   ): Promise<RunTestCaseResponse> => {
+    const project = request.projectSnapshot.project;
     const recordingId = getExclusiveRecordingReplayId(request.testCase);
     const documentId = getTestCasePrdPath(request.testCase)?.documentId;
     const recording = recordingId
-      ? request.project.recordings.find((item) => item.id === recordingId)
+      ? project.recordings.find((item) => item.id === recordingId)
       : undefined;
 
     if (request.testCase.assetReferences?.fixtures.length) {
-      return testRunner.run({ ...request, runId, cancellationSignal });
+      return testRunner.run({
+        runId,
+        cancellationSignal,
+        project,
+        testCase: request.testCase,
+        environment: request.environment,
+        ...(request.runtimeProfile ? { runtimeProfile: request.runtimeProfile } : {}),
+        ...(request.midsceneConfig ? { midsceneConfig: request.midsceneConfig } : {}),
+        ...(request.agentModelConfig ? { agentModelConfig: request.agentModelConfig } : {}),
+        ...(request.browserSession ? { browserSession: request.browserSession } : {}),
+        ...(request.fixtureScriptTrustRecords ? { fixtureScriptTrustRecords: request.fixtureScriptTrustRecords } : {}),
+        ...(request.fixtureScriptTrustDirectory ? { fixtureScriptTrustDirectory: request.fixtureScriptTrustDirectory } : {}),
+      });
     }
 
     if (recording) {
@@ -157,8 +203,14 @@ export function createRuntimeBundle(options: RuntimeBundleOptions): RuntimeBundl
         ...request,
         runId,
         cancellationSignal,
-        project: request.project,
+        project,
         environment: request.environment,
+        ...(request.runtimeProfile ? { runtimeProfile: request.runtimeProfile } : {}),
+        ...(request.midsceneConfig ? { midsceneConfig: request.midsceneConfig } : {}),
+        ...(request.agentModelConfig ? { agentModelConfig: request.agentModelConfig } : {}),
+        ...(request.browserSession ? { browserSession: request.browserSession } : {}),
+        ...(request.fixtureScriptTrustRecords ? { fixtureScriptTrustRecords: request.fixtureScriptTrustRecords } : {}),
+        ...(request.fixtureScriptTrustDirectory ? { fixtureScriptTrustDirectory: request.fixtureScriptTrustDirectory } : {}),
         recording,
         testCaseId: request.testCase.id,
         ...(documentId ? { documentId } : {}),
@@ -175,13 +227,25 @@ export function createRuntimeBundle(options: RuntimeBundleOptions): RuntimeBundl
         ...(request.midsceneConfig ? { midsceneConfig: request.midsceneConfig } : {}),
         ...(request.agentModelConfig ? { agentModelConfig: request.agentModelConfig } : {}),
         ...(request.browserSession ? { browserSession: request.browserSession } : {}),
-        project: request.project,
+        project,
         environment: request.environment,
         ...(documentId ? { documentId } : {}),
       });
     }
 
-    return testRunner.run({ ...request, runId, cancellationSignal });
+    return testRunner.run({
+      runId,
+      cancellationSignal,
+      project,
+      testCase: request.testCase,
+      environment: request.environment,
+      ...(request.runtimeProfile ? { runtimeProfile: request.runtimeProfile } : {}),
+      ...(request.midsceneConfig ? { midsceneConfig: request.midsceneConfig } : {}),
+      ...(request.agentModelConfig ? { agentModelConfig: request.agentModelConfig } : {}),
+      ...(request.browserSession ? { browserSession: request.browserSession } : {}),
+      ...(request.fixtureScriptTrustRecords ? { fixtureScriptTrustRecords: request.fixtureScriptTrustRecords } : {}),
+      ...(request.fixtureScriptTrustDirectory ? { fixtureScriptTrustDirectory: request.fixtureScriptTrustDirectory } : {}),
+    });
   };
 
   return {
@@ -198,34 +262,13 @@ export function createRuntimeBundle(options: RuntimeBundleOptions): RuntimeBundl
     runSuite: async (request) => {
       const runId = request.runId ?? `suite-run-${Date.now()}`;
       return withActiveRun(runId, async (cancellationSignal) => {
-        const suite = findSuiteAsset(request.project, request.suite);
-        if (!suite) {
-          const now = new Date().toISOString();
-          return {
-            runId,
-            title: `Suite ${request.suite.id}@${request.suite.version}`,
-            detail: {
-              suite: {
-                suiteId: request.suite.id,
-                suiteVersion: request.suite.version,
-                environmentId: '',
-                status: 'neutral',
-                startedAt: now,
-                endedAt: now,
-                effectiveConcurrency: 1,
-                results: [],
-                issues: [`未找到 Suite：${request.suite.id}@${request.suite.version}。`],
-              },
-              caseDetails: [],
-            },
-          };
-        }
+        const { suite } = request;
         const caseDetails: RunTestCaseResponse['detail'][] = [];
         const suiteResult = await new SuiteRunner({
           execute: async ({ testCase, environment, attempt }) => {
             const response = await executeTestCase({
               runId: `${runId}-${testCase.id}-attempt-${attempt}`,
-              project: request.project,
+              projectSnapshot: request.projectSnapshot,
               testCase,
               environment,
               ...(request.runtimeProfile ? { runtimeProfile: request.runtimeProfile } : {}),
@@ -243,7 +286,7 @@ export function createRuntimeBundle(options: RuntimeBundleOptions): RuntimeBundl
               runId: response.runId,
             };
           },
-        }, { maxConcurrency: 1 }).run(request.project, suite, cancellationSignal);
+        }, { maxConcurrency: 1 }).run(request.projectSnapshot.project, suite, cancellationSignal);
         return {
           runId,
           title: suite.name,

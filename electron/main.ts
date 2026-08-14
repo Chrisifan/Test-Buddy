@@ -44,6 +44,7 @@ import { PrdSemanticAnalysisRuntime } from './runtime/prd-semantic-analyzer.js';
 import { appendRunToStudioState } from './runtime/run-history.js';
 import { createRuntimeBundle, type RuntimeBundle } from './runtime/runtime-bundle.js';
 import { registerRuntimeIpcHandlers } from './ipc/runtime-ipc-handlers.js';
+import { createProjectRepository, type ProjectRepository } from './projectRepository.js';
 import { StudioStore } from './studioStore.js';
 import {
   calculateProjectAssetRevision,
@@ -62,6 +63,7 @@ let credentialStore: CredentialStore | null = null;
 let scriptTrustStore: ScriptTrustStore | null = null;
 let storageStateStore: StorageStateStore | null = null;
 let runtimeBundle: RuntimeBundle | null = null;
+let projectRepository: ProjectRepository | null = null;
 let prdSemanticAnalysisRuntime: PrdSemanticAnalysisRuntime | null = null;
 const approvedProjectAssetDirectories = new Set<string>();
 
@@ -106,6 +108,13 @@ function getRuntimeBundleOrThrow(): RuntimeBundle {
   }
 
   return runtimeBundle;
+}
+
+function getProjectRepositoryOrThrow(): ProjectRepository {
+  if (!projectRepository) {
+    throw new Error('Project repository 尚未初始化。');
+  }
+  return projectRepository;
 }
 
 function getPrdSemanticAnalysisRuntimeOrThrow(): PrdSemanticAnalysisRuntime {
@@ -570,6 +579,7 @@ function registerIpcHandlers(): void {
     loadState: () => getStoreOrThrow().load(),
     saveState: (state) => getStoreOrThrow().save(state),
     getRuntimeBundle: getRuntimeBundleOrThrow,
+    projectRepository: getProjectRepositoryOrThrow(),
     getFixtureScriptTrustContext,
     openPath: (artifactPath) => shell.openPath(artifactPath),
     showSaveDialog: (options) => dialog.showSaveDialog(options),
@@ -669,6 +679,7 @@ app.whenReady().then(async () => {
   const rootDir = app.getPath('userData');
   studioStore = new StudioStore(rootDir);
   await studioStore.ensureReady();
+  projectRepository = createProjectRepository({ studioStore });
   credentialStore = new CredentialStore(rootDir);
   await credentialStore.ensureReady();
   scriptTrustStore = new ScriptTrustStore(rootDir);

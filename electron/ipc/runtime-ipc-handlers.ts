@@ -9,16 +9,19 @@ import type {
 
 import type {
   FixtureScriptTrustRecord,
+  ProjectEnvironment,
   RunDetail,
-  RunSuiteRequest,
   RunSuiteResponse,
-  RunTestCaseRequest,
+  RunSuiteIntent,
+  RunTestCaseIntent,
   RunTestCaseResponse,
   RuntimeInfo,
   StudioState,
 } from '../../shared/studio.js';
+import { findSuiteAsset, findTestCaseVersion } from '../../shared/studio.js';
+import type { ProjectRepository, ProjectSnapshot } from '../projectRepository.js';
 import { appendRunToStudioState } from '../runtime/run-history.js';
-import type { RuntimeBundle } from '../runtime/runtime-bundle.js';
+import type { ResolvedRunSuiteRequest, ResolvedRunTestCaseRequest, RuntimeBundle } from '../runtime/runtime-bundle.js';
 import channelModule from './runtime-ipc-channels.cjs';
 
 const { runtimeIpcChannels } = channelModule;
@@ -29,8 +32,8 @@ type RuntimeIpcChannel = (typeof runtimeIpcChannels)[keyof typeof runtimeIpcChan
 
 interface RuntimeIpcArguments {
   [runtimeIpcChannels.getInfo]: [];
-  [runtimeIpcChannels.runTestCase]: [RunTestCaseRequest];
-  [runtimeIpcChannels.runSuite]: [RunSuiteRequest];
+  [runtimeIpcChannels.runTestCase]: [RunTestCaseIntent];
+  [runtimeIpcChannels.runSuite]: [RunSuiteIntent];
   [runtimeIpcChannels.cancelRun]: [string];
   [runtimeIpcChannels.loadRunDetail]: [string];
   [runtimeIpcChannels.openArtifact]: [string];
@@ -54,6 +57,7 @@ export interface RuntimeIpcDependencies extends RuntimeIpcRegistrar {
   loadState: () => Promise<StudioState>;
   saveState: (state: StudioState) => Promise<void>;
   getRuntimeBundle: () => RuntimeIpcBundle;
+  projectRepository: Pick<ProjectRepository, 'load' | 'loadBound'>;
   getFixtureScriptTrustContext: (projectId: string) => Promise<{
     projectDirectory?: string;
     records: FixtureScriptTrustRecord[];
@@ -65,23 +69,47 @@ export interface RuntimeIpcDependencies extends RuntimeIpcRegistrar {
   getRuntimeInfo: () => RuntimeInfo;
 }
 
+export class RunIntentResolutionError extends Error {
+  constructor(
+    readonly code: 'missingAssetVersion',
+    message: string,
+  ) {
+    super(message);
+    this.name = 'RunIntentResolutionError';
+  }
+}
+
 export function registerRuntimeIpcHandlers(dependencies: RuntimeIpcDependencies): void {
   dependencies.handle(runtimeIpcChannels.getInfo, async () => dependencies.getRuntimeInfo());
 
   dependencies.handle(runtimeIpcChannels.runTestCase, async (_event, request) => {
-    const scriptTrust = await dependencies.getFixtureScriptTrustContext(request.project.id);
-    const runtime = dependencies.getRuntimeBundle();
-    const result = await runtime.runTestCase({
-      ...request,
-      fixtureScriptTrustRecords: scriptTrust.records,
-      fixtureScriptTrustDirectory: scriptTrust.projectDirectory,
-    });
+    const projectSnapshot = await loadProjectSnapshot(dependencies.projectRepository, request.projectId, request.expectedProjectRevision);
+    const testCase = findTestCaseVersion(projectSnapshot.project, request.testCase);
+    if (!testCase) {
+      throw new RunIntentResolutionError('missingAssetVersion', `未找到 Case：${request.testCase.id}@${request.testCase.version}。`);
+    }
+    const environment = findEnvironment(projectSnapshot, testCase.environmentId, `Case ${testCase.id}@${testCase.version}`);
     const state = await dependencies.loadState();
+    const scriptTrust = await dependencies.getFixtureScriptTrustContext(request.projectId);
+    const runtime = dependencies.getRuntimeBundle();
+    const resolvedRequest: ResolvedRunTestCaseRequest = {
+      ...(request.runId ? { runId: request.runId } : {}),
+      projectSnapshot,
+      testCase,
+      environment,
+      runtimeProfile: state.runtimeProfile,
+      midsceneConfig: state.midsceneConfig,
+      agentModelConfig: state.agentModelConfig,
+      browserSession: state.browserSession,
+      fixtureScriptTrustRecords: scriptTrust.records,
+      ...(scriptTrust.projectDirectory ? { fixtureScriptTrustDirectory: scriptTrust.projectDirectory } : {}),
+    };
+    const result = await runtime.runTestCase(resolvedRequest);
     await dependencies.saveState(
       appendRunToStudioState(
         state,
         result,
-        request.environment,
+        environment,
         runtime.browserRuntime.getState(),
       ),
     );
@@ -89,25 +117,33 @@ export function registerRuntimeIpcHandlers(dependencies: RuntimeIpcDependencies)
   });
 
   dependencies.handle(runtimeIpcChannels.runSuite, async (_event, request) => {
-    const {
-      cancellationSignal: _rendererCancellationSignal,
-      fixtureScriptTrustRecords: _rendererFixtureScriptTrustRecords,
-      fixtureScriptTrustDirectory: _rendererFixtureScriptTrustDirectory,
-      ...safeRequest
-    } = request;
-    const scriptTrust = await dependencies.getFixtureScriptTrustContext(request.project.id);
+    const projectSnapshot = await loadProjectSnapshot(dependencies.projectRepository, request.projectId, request.expectedProjectRevision);
+    const suite = findSuiteAsset(projectSnapshot.project, request.suite);
+    if (!suite) {
+      throw new RunIntentResolutionError('missingAssetVersion', `未找到 Suite：${request.suite.id}@${request.suite.version}。`);
+    }
+    const environment = findEnvironment(projectSnapshot, suite.environmentId, `Suite ${suite.id}@${suite.version}`);
+    const state = await dependencies.loadState();
+    const scriptTrust = await dependencies.getFixtureScriptTrustContext(request.projectId);
     const runtime = dependencies.getRuntimeBundle();
-    const result = await runtime.runSuite({
-      ...safeRequest,
+    const resolvedRequest: ResolvedRunSuiteRequest = {
+      ...(request.runId ? { runId: request.runId } : {}),
+      projectSnapshot,
+      suite,
+      environment,
+      runtimeProfile: state.runtimeProfile,
+      midsceneConfig: state.midsceneConfig,
+      agentModelConfig: state.agentModelConfig,
+      browserSession: state.browserSession,
       fixtureScriptTrustRecords: scriptTrust.records,
-      fixtureScriptTrustDirectory: scriptTrust.projectDirectory,
-    });
+      ...(scriptTrust.projectDirectory ? { fixtureScriptTrustDirectory: scriptTrust.projectDirectory } : {}),
+    };
+    const result = await runtime.runSuite(resolvedRequest);
     if (!result.detail.caseDetails.length) {
       return result;
     }
-    const state = await dependencies.loadState();
     const nextState = result.detail.caseDetails.reduce((current, detail) => {
-      const environment = request.project.environments.find((candidate) => candidate.id === detail.environmentId);
+      const environment = projectSnapshot.project.environments.find((candidate) => candidate.id === detail.environmentId);
       if (!environment) {
         return current;
       }
@@ -166,6 +202,37 @@ export function registerRuntimeIpcHandlers(dependencies: RuntimeIpcDependencies)
     }
     return dependencies.getRuntimeBundle().artifactManager.importManualEvidence(result.filePaths[0]);
   });
+}
+
+async function loadProjectSnapshot(
+  projectRepository: Pick<ProjectRepository, 'load' | 'loadBound'>,
+  projectId: string,
+  expectedProjectRevision?: string,
+): Promise<ProjectSnapshot> {
+  try {
+    return await projectRepository.loadBound(projectId, expectedProjectRevision);
+  } catch (error) {
+    if (isBindingUnavailableError(error)) {
+      return projectRepository.load(projectId);
+    }
+    throw error;
+  }
+}
+
+function isBindingUnavailableError(error: unknown): error is { code: 'bindingUnavailable' } {
+  return typeof error === 'object' && error !== null && 'code' in error && error.code === 'bindingUnavailable';
+}
+
+function findEnvironment(
+  projectSnapshot: ProjectSnapshot,
+  environmentId: string,
+  assetLabel: string,
+): ProjectEnvironment {
+  const environment = projectSnapshot.project.environments.find((candidate) => candidate.id === environmentId);
+  if (!environment) {
+    throw new RunIntentResolutionError('missingAssetVersion', `${assetLabel} 引用了不存在的环境：${environmentId}。`);
+  }
+  return environment;
 }
 
 function toCaseRunResponse(detail: RunDetail): RunTestCaseResponse {
