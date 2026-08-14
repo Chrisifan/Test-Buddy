@@ -105,9 +105,10 @@ export function registerRuntimeIpcHandlers(dependencies: RuntimeIpcDependencies)
       ...(scriptTrust.projectDirectory ? { fixtureScriptTrustDirectory: scriptTrust.projectDirectory } : {}),
     };
     const result = await runtime.runTestCase(resolvedRequest);
+    const latestState = await dependencies.loadState();
     await dependencies.saveState(
       appendRunToStudioState(
-        state,
+        latestState,
         result,
         environment,
         runtime.browserRuntime.getState(),
@@ -139,6 +140,7 @@ export function registerRuntimeIpcHandlers(dependencies: RuntimeIpcDependencies)
       ...(scriptTrust.projectDirectory ? { fixtureScriptTrustDirectory: scriptTrust.projectDirectory } : {}),
     };
     const result = await runtime.runSuite(resolvedRequest);
+    const latestState = await dependencies.loadState();
     if (!result.detail.caseDetails.length) {
       return result;
     }
@@ -148,7 +150,7 @@ export function registerRuntimeIpcHandlers(dependencies: RuntimeIpcDependencies)
         return current;
       }
       return appendRunToStudioState(current, toCaseRunResponse(detail), environment, runtime.browserRuntime.getState());
-    }, state);
+    }, latestState);
     await dependencies.saveState(nextState);
     return result;
   });

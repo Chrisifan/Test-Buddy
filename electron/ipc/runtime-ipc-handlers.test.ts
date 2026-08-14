@@ -168,6 +168,104 @@ describe('registerRuntimeIpcHandlers', () => {
     }));
   });
 
+  it('preserves a concurrent StudioState edit while a Case run is pending', async () => {
+    const project = createEmptyProject(1);
+    const environment = project.environments[0]!;
+    const testCase = createTestCase(project, 'case-concurrent-case', environment.id);
+    project.testCases = [testCase];
+    const response = runTestCaseResponse(project.id, testCase.id, environment.id);
+    const executionState = createInitialStudioState();
+    const concurrentState = { ...executionState, projects: [{ ...project, name: 'Concurrent Case edit' }] };
+    const deferred = deferredResult<RunTestCaseResponse>();
+    const runTestCase = vi.fn().mockImplementation(() => {
+      deferred.markStarted();
+      return deferred.promise;
+    });
+    const dependencies = createDependencies({
+      loadState: vi.fn()
+        .mockResolvedValueOnce(executionState)
+        .mockResolvedValueOnce(concurrentState),
+      getRuntimeBundle: vi.fn().mockReturnValue({
+        artifactManager: { isManagedArtifactPath: () => true, exportArtifact: vi.fn(), importManualEvidence: vi.fn() },
+        browserRuntime: { getState: () => ({ status: 'idle' }) },
+        runTestCase,
+        runSuite: vi.fn(),
+        cancelRun: vi.fn(),
+      }),
+      projectRepository: {
+        load: vi.fn(),
+        loadBound: vi.fn().mockResolvedValue(projectSnapshot(project, '1'.repeat(64), 'projectDirectory')),
+      },
+    });
+    const handlers = registerHandlers(dependencies);
+
+    const pending = handlers.get(runtimeIpcChannels.runTestCase)!({}, {
+      projectId: project.id,
+      testCase: { id: testCase.id, version: testCase.version },
+    });
+    await deferred.started;
+    deferred.resolve(response);
+    await expect(pending).resolves.toEqual(response);
+
+    expect(dependencies.saveState).toHaveBeenCalledWith(expect.objectContaining({
+      projects: [expect.objectContaining({ name: 'Concurrent Case edit' })],
+      runDetails: [response.detail],
+    }));
+  });
+
+  it('preserves a concurrent StudioState edit while a Suite run is pending', async () => {
+    const project = createEmptyProject(1);
+    const environment = project.environments[0]!;
+    const testCase = createTestCase(project, 'case-concurrent-suite', environment.id);
+    const suite = {
+      ...createEmptySuiteAsset(project, 1),
+      id: 'suite-concurrent',
+      version: 1,
+      environmentId: environment.id,
+      caseReferences: [{ id: testCase.id, version: testCase.version, dependsOn: [] }],
+    };
+    project.testCases = [testCase];
+    project.suites = [suite];
+    const response = runSuiteResponse(project.id, testCase.id, environment.id);
+    const executionState = createInitialStudioState();
+    const concurrentState = { ...executionState, projects: [{ ...project, name: 'Concurrent Suite edit' }] };
+    const deferred = deferredResult<typeof response>();
+    const runSuite = vi.fn().mockImplementation(() => {
+      deferred.markStarted();
+      return deferred.promise;
+    });
+    const dependencies = createDependencies({
+      loadState: vi.fn()
+        .mockResolvedValueOnce(executionState)
+        .mockResolvedValueOnce(concurrentState),
+      getRuntimeBundle: vi.fn().mockReturnValue({
+        artifactManager: { isManagedArtifactPath: () => true, exportArtifact: vi.fn(), importManualEvidence: vi.fn() },
+        browserRuntime: { getState: () => ({ status: 'idle' }) },
+        runTestCase: vi.fn(),
+        runSuite,
+        cancelRun: vi.fn(),
+      }),
+      projectRepository: {
+        load: vi.fn(),
+        loadBound: vi.fn().mockResolvedValue(projectSnapshot(project, '2'.repeat(64), 'projectDirectory')),
+      },
+    });
+    const handlers = registerHandlers(dependencies);
+
+    const pending = handlers.get(runtimeIpcChannels.runSuite)!({}, {
+      projectId: project.id,
+      suite: { id: suite.id, version: suite.version },
+    });
+    await deferred.started;
+    deferred.resolve(response);
+    await expect(pending).resolves.toEqual(response);
+
+    expect(dependencies.saveState).toHaveBeenCalledWith(expect.objectContaining({
+      projects: [expect.objectContaining({ name: 'Concurrent Suite edit' })],
+      runDetails: [response.detail.caseDetails[0]],
+    }));
+  });
+
   it('rejects a stale bound revision before RuntimeBundle execution', async () => {
     const project = createEmptyProject(1);
     const runTestCase = vi.fn();
@@ -536,6 +634,35 @@ function projectSnapshot(
     source,
     reproducibility: source === 'projectDirectory' ? 'versioned' as const : 'legacy' as const,
   };
+}
+
+function createTestCase(project: ProjectDraft, id: string, environmentId: string) {
+  return {
+    id,
+    version: 1,
+    kind: 'scenario' as const,
+    name: id,
+    category: 'Regression',
+    lastEdited: new Date(0).toISOString(),
+    url: project.environments.find((environment) => environment.id === environmentId)?.url ?? '',
+    notes: '',
+    groupId: project.groups[0]!.id,
+    environmentId,
+    source: 'manual' as const,
+    steps: [],
+  };
+}
+
+function deferredResult<T>() {
+  let resolve: (value: T) => void = () => undefined;
+  let markStarted: () => void = () => undefined;
+  const promise = new Promise<T>((nextResolve) => {
+    resolve = nextResolve;
+  });
+  const started = new Promise<void>((nextResolve) => {
+    markStarted = nextResolve;
+  });
+  return { promise, resolve, started, markStarted };
 }
 
 function loadRuntimeIpcHandlers(): {
