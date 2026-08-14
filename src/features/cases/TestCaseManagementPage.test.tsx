@@ -4,12 +4,14 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   createDemoStudioState,
+  createNextTestCaseVersion,
   createTestStep,
   insertTestStep,
   removeTestStep,
   type DeterministicTestAction,
   type ExplicitTestAssertion,
   type TestCaseDraft,
+  type VersionedTestAssetReference,
 } from '../../../shared/studio.js';
 import { I18nProvider } from '../../i18n/index.js';
 import { TestCaseManagementPage } from './TestCaseManagementPage.js';
@@ -170,7 +172,103 @@ function CasePageHarness({
   );
 }
 
+function ImmutableCaseHarness({ onPublished = vi.fn(), onRun = vi.fn() }: {
+  onPublished?: (testCase: TestCaseDraft) => void;
+  onRun?: (reference: VersionedTestAssetReference) => void;
+}) {
+  const v1 = React.useMemo(() => ({ ...selectedTestCase, id: 'immutable-case', version: 1, name: 'Checkout v1' }), []);
+  const [publishedCases, setPublishedCases] = React.useState<TestCaseDraft[]>([v1]);
+  const [reference, setReference] = React.useState<VersionedTestAssetReference>({ id: v1.id, version: 1 });
+  const [draft, setDraft] = React.useState<TestCaseDraft>();
+  const published = publishedCases.find((testCase) => testCase.id === reference.id && testCase.version === reference.version);
+  const immutableProject = { ...project, testCases: publishedCases };
+
+  return (
+    <I18nProvider locale="en-US">
+      <TestCaseManagementPage
+        isRunning={false}
+        onCopyStep={vi.fn()}
+        onCreateStep={vi.fn()}
+        onCreateTestCase={vi.fn()}
+        onDeleteStep={vi.fn()}
+        onDiscardCaseDraft={() => setDraft(undefined)}
+        onEditAsNewVersion={() => setDraft(structuredClone(published!))}
+        onMoveStep={vi.fn()}
+        onPublishCase={() => {
+          const next = createNextTestCaseVersion(immutableProject, published!, draft!);
+          setPublishedCases((current) => [...current, next]);
+          setReference({ id: next.id, version: next.version! });
+          setDraft(undefined);
+          onPublished(next);
+        }}
+        onRetrySave={vi.fn()}
+        onRunTestCase={(selected) => onRun(selected)}
+        onSelectTestCase={(selected) => setReference(selected)}
+        onUpdateTestCase={(updater) => setDraft((current) => current ? updater(current) : current)}
+        project={immutableProject}
+        publishedTestCase={published}
+        draftTestCase={draft}
+        runStatus="neutral"
+        saveStatus="idle"
+        selectedReference={reference}
+        selectedTestCase={published}
+        selectedTestCaseId={reference.id}
+      />
+    </I18nProvider>
+  );
+}
+
 describe('TestCaseManagementPage', () => {
+  it('keeps a discarded edit-as-new-version draft out of the published v1 asset', () => {
+    render(<ImmutableCaseHarness />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit as New Version' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Case Settings' }));
+    fireEvent.change(screen.getByLabelText('Case Name'), { target: { value: 'Checkout v2 draft' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Discard Draft' }));
+
+    expect(screen.getByRole('button', { name: 'Select a Case' })).toHaveTextContent('Checkout v1');
+    expect(screen.queryByDisplayValue('Checkout v2 draft')).not.toBeInTheDocument();
+  });
+
+  it('publishes a changed draft as v2 while retaining the unchanged v1 version', async () => {
+    const onPublished = vi.fn();
+    render(<ImmutableCaseHarness onPublished={onPublished} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit as New Version' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Case Settings' }));
+    fireEvent.change(screen.getByLabelText('Case Name'), { target: { value: 'Checkout v2' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Publish Version' }));
+
+    expect(onPublished).toHaveBeenCalledWith(expect.objectContaining({ id: 'immutable-case', version: 2, name: 'Checkout v2' }));
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Select Case version' }), { button: 0 });
+    expect(await screen.findByRole('menuitem', { name: 'Checkout v1 · v1' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'Checkout v2 · v2' })).toBeInTheDocument();
+  });
+
+  it('lists only the latest case by default and runs an explicitly selected older version', async () => {
+    const onPublished = vi.fn();
+    const onRun = vi.fn();
+    render(<ImmutableCaseHarness onPublished={onPublished} onRun={onRun} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit as New Version' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Case Settings' }));
+    fireEvent.change(screen.getByLabelText('Case Name'), { target: { value: 'Checkout v2' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Publish Version' }));
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Select a Case' }), { button: 0 });
+    const latestItems = (await screen.findAllByRole('menuitem', { name: /Checkout v2/u })).filter((item) => item.textContent?.includes('v2'));
+    expect(latestItems).toHaveLength(1);
+    fireEvent.click(latestItems[0]!);
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Select Case version' }), { button: 0 });
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Checkout v1 · v1' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Run Test' }));
+
+    expect(onRun).toHaveBeenCalledWith({ id: 'immutable-case', version: 1 });
+  });
+
   it('guides users to projects before opening the case composer', () => {
     const onOpenProjects = vi.fn();
 

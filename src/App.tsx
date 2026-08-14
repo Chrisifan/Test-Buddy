@@ -29,10 +29,12 @@ import {
   createRecordingStep,
   createRecordingFromGeneratedPath,
   copyTestStep,
+  createNextTestCaseVersion,
   createTestStep,
   createTestCaseFromRecording,
   createTestCaseFromGeneratedPath,
   detachRecordingFromTestCases,
+  findTestCaseVersion,
   findDefaultRecordingForCaseStep,
   getTestCasePrdPath,
   getTestCaseRunBlocker,
@@ -42,7 +44,7 @@ import {
   insertTestStep,
   isMidsceneConfigured,
   moveTestStep,
-  nextTestCaseVersion,
+  listLatestTestCaseVersions,
   prunePrdCoverageTriage,
   removeTestStep,
   testCaseToWorkflow,
@@ -158,6 +160,12 @@ function latestSuiteReference(project: ProjectDraft | undefined): VersionedTestA
   return latestSuite ? { id: latestSuite.id, version: latestSuite.version } : undefined;
 }
 
+function latestTestCaseReference(project: ProjectDraft | undefined, id?: string): VersionedTestAssetReference | undefined {
+  const latest = listLatestTestCaseVersions(project ?? { testCases: [] })
+    .find((testCase) => !id || testCase.id === id);
+  return latest ? { id: latest.id, version: latest.version ?? 1 } : undefined;
+}
+
 function RouteLoadingPlaceholder() {
   return <div aria-busy="true" className="h-full min-h-0 animate-pulse rounded-[var(--panel-radius)] bg-muted/30" />;
 }
@@ -186,7 +194,10 @@ export function App() {
   const [projectAssetBindings, setProjectAssetBindings] = useState<ProjectAssetBinding[]>(initialState.projectAssetBindings);
   const [selectedProjectId, setSelectedProjectId] = useState(initialState.selectedProjectId);
   const [selectedGroupId, setSelectedGroupId] = useState(initialState.selectedGroupId);
-  const [selectedTestCaseId, setSelectedTestCaseId] = useState(initialState.selectedTestCaseId);
+  const [selectedTestCaseReference, setSelectedTestCaseReference] = useState<VersionedTestAssetReference | undefined>(
+    () => initialState.selectedTestCaseReference ?? latestTestCaseReference(initialState.projects[0], initialState.selectedTestCaseId),
+  );
+  const [caseDraft, setCaseDraft] = useState<TestCaseDraft>();
   const [selectedRecordingId, setSelectedRecordingId] = useState(initialState.selectedRecordingId);
   const [selectedSuiteReference, setSelectedSuiteReference] = useState<VersionedTestAssetReference | undefined>(
     () => latestSuiteReference(initialState.projects[0]),
@@ -256,9 +267,11 @@ export function App() {
     selectedProject?.environments[0];
   const selectedGroup =
     selectedProject?.groups.find((group) => group.id === selectedGroupId) ?? selectedProject?.groups[0];
+  const selectedTestCaseId = selectedTestCaseReference?.id ?? '';
   const selectedTestCase =
-    selectedProject?.testCases.find((testCase) => testCase.id === selectedTestCaseId) ??
-    selectedProject?.testCases[0];
+    selectedProject && selectedTestCaseReference
+      ? findTestCaseVersion(selectedProject, selectedTestCaseReference)
+      : undefined;
   const selectedCaseEnvironment =
     selectedProject?.environments.find((environment) => environment.id === selectedTestCase?.environmentId) ??
     selectedEnvironment;
@@ -346,7 +359,13 @@ export function App() {
         setProjectAssetBindings(state.projectAssetBindings);
         setSelectedProjectId(state.selectedProjectId);
         setSelectedGroupId(state.selectedGroupId);
-        setSelectedTestCaseId(state.selectedTestCaseId);
+        setSelectedTestCaseReference(
+          state.selectedTestCaseReference ?? latestTestCaseReference(
+            state.projects.find((project) => project.id === state.selectedProjectId),
+            state.selectedTestCaseId,
+          ),
+        );
+        setCaseDraft(undefined);
         setSelectedRecordingId(state.selectedRecordingId);
         const hydratedProject = state.projects.find((project) => project.id === state.selectedProjectId);
         setSelectedSuiteReference(latestSuiteReference(hydratedProject));
@@ -405,7 +424,7 @@ export function App() {
     const payload: StudioState = {
       selectedProjectId,
       selectedGroupId,
-      selectedTestCaseId,
+      selectedTestCaseReference,
       selectedRecordingId,
       projects,
       projectAssetBindings,
@@ -440,6 +459,7 @@ export function App() {
     runtimeProfile,
     selectedGroupId,
     selectedProjectId,
+    selectedTestCaseReference,
     selectedTestCaseId,
     selectedRecordingId,
     storageLoadError,
@@ -686,41 +706,50 @@ export function App() {
 
   function updateSelectedTestCase(
     updater: (testCase: TestCaseDraft) => TestCaseDraft,
-    saveMode: SaveMode = 'debounced',
+    _saveMode: SaveMode = 'debounced',
   ) {
-    if (!selectedTestCase) {
+    if (!caseDraft) {
       return;
     }
 
-    const preview = updater(selectedTestCase);
-    if (preview.groupId !== selectedTestCase.groupId) {
+    const preview = updater(caseDraft);
+    if (preview.groupId !== caseDraft.groupId) {
       setSelectedGroupId(preview.groupId);
     }
+    setCaseDraft((current) => current ? updater(current) : current);
+  }
 
-    nextSaveModeRef.current = saveMode;
-    setProjects((current) =>
-      current.map((project) =>
-        project.id === selectedProject.id
-          ? {
-              ...project,
-              updatedAt: new Date().toISOString(),
-              testCases: project.testCases.map((testCase) =>
-                testCase.id === selectedTestCase.id
-                  ? {
-                      ...updater(testCase),
-                      version: nextTestCaseVersion(testCase.version ?? 1),
-                      lastEdited: t('app.runtime.justNow'),
-                    }
-                  : testCase,
-              ),
-            }
-          : project,
-      ),
-    );
+  function handleEditCaseVersion() {
+    if (!selectedTestCase) {
+      return;
+    }
+    setCaseDraft(structuredClone(selectedTestCase));
+  }
+
+  function handleDiscardCaseDraft() {
+    setCaseDraft(undefined);
+  }
+
+  function handlePublishCase() {
+    if (!selectedProject || !selectedTestCase || !caseDraft) {
+      return;
+    }
+    const { id: _id, version: _version, ...patch } = caseDraft;
+    const nextCase = createNextTestCaseVersion(selectedProject, selectedTestCase, {
+      ...patch,
+      lastEdited: t('app.runtime.justNow'),
+    });
+    updateSelectedProject((project) => ({
+      ...project,
+      testCases: [...project.testCases, nextCase],
+    }), 'immediate');
+    setSelectedTestCaseReference({ id: nextCase.id, version: nextCase.version ?? 1 });
+    setSelectedGroupId(nextCase.groupId);
+    setCaseDraft(undefined);
   }
 
   function updateSelectedWorkflow(updater: (workflow: WorkflowDraft) => WorkflowDraft) {
-    if (!selectedTestCase) {
+    if (!caseDraft) {
       return;
     }
 
@@ -741,7 +770,8 @@ export function App() {
   function syncSelectionToProject(project?: ProjectDraft) {
     setSelectedProjectId(project?.id ?? '');
     setSelectedGroupId(project?.groups[0]?.id ?? '');
-    setSelectedTestCaseId(project?.testCases[0]?.id ?? '');
+    setSelectedTestCaseReference(latestTestCaseReference(project));
+    setCaseDraft(undefined);
     setSelectedRecordingId(project?.recordings[0]?.id ?? '');
     setSelectedSuiteReference(latestSuiteReference(project));
     setSelectedDocumentId(project?.documents[0]?.id ?? '');
@@ -856,7 +886,7 @@ export function App() {
     const nextProjects = projects.filter((item) => item.id !== projectId);
     const nextProject = nextProjects[0];
     const nextSelectedGroupId = nextProject?.groups[0]?.id ?? '';
-    const nextSelectedTestCaseId = nextProject?.testCases[0]?.id ?? '';
+    const nextSelectedTestCaseReference = latestTestCaseReference(nextProject);
     const nextSelectedRecordingId = nextProject?.recordings[0]?.id ?? '';
     const nextSelectedSuiteReference = latestSuiteReference(nextProject);
     const nextSelectedDocumentId = nextProject?.documents[0]?.id ?? '';
@@ -868,7 +898,8 @@ export function App() {
     setRecentRuns((current) => current.filter((run) => run.projectId !== projectId));
     setSelectedProjectId(nextProject?.id ?? '');
     setSelectedGroupId(nextSelectedGroupId);
-    setSelectedTestCaseId(nextSelectedTestCaseId);
+    setSelectedTestCaseReference(nextSelectedTestCaseReference);
+    setCaseDraft(undefined);
     setSelectedRecordingId(nextSelectedRecordingId);
     setSelectedSuiteReference(nextSelectedSuiteReference);
     setSelectedDocumentId(nextSelectedDocumentId);
@@ -989,7 +1020,7 @@ export function App() {
       testCases: [testCase, ...project.testCases],
     }));
     setSelectedGroupId(groupId);
-    setSelectedTestCaseId(testCase.id);
+    setSelectedTestCaseReference({ id: testCase.id, version: testCase.version ?? 1 });
     switchPage('cases');
   }
 
@@ -1096,7 +1127,7 @@ export function App() {
       testCases: [...nextCases, ...project.testCases],
     }));
     setSelectedGroupId(nextCases[0]?.groupId ?? selectedProject.groups[0]?.id ?? '');
-    setSelectedTestCaseId(nextCases[0]?.id ?? selectedTestCaseId);
+    setSelectedTestCaseReference(nextCases[0] ? { id: nextCases[0].id, version: nextCases[0].version ?? 1 } : selectedTestCaseReference);
     switchPage('cases');
   }
 
@@ -1150,7 +1181,7 @@ export function App() {
       testCases: [...nextCases, ...project.testCases],
     }));
     setSelectedGroupId(nextCases[0]?.groupId ?? selectedProject.groups[0]?.id ?? '');
-    setSelectedTestCaseId(nextCases[0]?.id ?? selectedTestCaseId);
+    setSelectedTestCaseReference(nextCases[0] ? { id: nextCases[0].id, version: nextCases[0].version ?? 1 } : selectedTestCaseReference);
     switchPage('cases');
   }
 
@@ -1300,12 +1331,15 @@ export function App() {
       };
     const nextGroups = remainingGroups.length ? remainingGroups : [fallbackGroup];
     const nextGroupId = selectedGroupId === groupId ? fallbackGroup.id : selectedGroupId;
+    const movedSelectedCase = selectedTestCase?.groupId === groupId
+      ? createNextTestCaseVersion(selectedProject, selectedTestCase, { groupId: fallbackGroup.id })
+      : undefined;
 
     updateSelectedProject((project) => {
-      const nextTestCases = project.testCases.map((testCase) =>
+      const nextTestCases = project.testCases.flatMap((testCase) =>
         testCase.groupId === groupId
-          ? { ...testCase, groupId: fallbackGroup.id, version: nextTestCaseVersion(testCase.version ?? 1) }
-          : testCase,
+          ? [testCase, createNextTestCaseVersion(project, testCase, { groupId: fallbackGroup.id })]
+          : [testCase],
       );
       const nextRecordings = project.recordings.map((recording) =>
         recording.groupId === groupId ? { ...recording, groupId: fallbackGroup.id } : recording,
@@ -1320,7 +1354,11 @@ export function App() {
         nextRecordings[0];
 
       setSelectedGroupId(nextGroupId);
-      setSelectedTestCaseId(nextSelectedTestCase?.id ?? '');
+      setSelectedTestCaseReference(movedSelectedCase
+        ? { id: movedSelectedCase.id, version: movedSelectedCase.version ?? 1 }
+        : nextSelectedTestCase
+          ? { id: nextSelectedTestCase.id, version: nextSelectedTestCase.version ?? 1 }
+          : undefined);
       setSelectedRecordingId(nextSelectedRecording?.id ?? '');
 
       return {
@@ -1345,7 +1383,7 @@ export function App() {
       ...project,
       testCases: [testCase, ...project.testCases],
     }));
-    setSelectedTestCaseId(testCase.id);
+    setSelectedTestCaseReference({ id: testCase.id, version: testCase.version ?? 1 });
   }
 
   function handleCreateRecording(source: 'live' | 'imported' = 'live') {
@@ -1776,7 +1814,7 @@ export function App() {
       testCases: [testCase, ...project.testCases],
     }));
     setSelectedGroupId(testCase.groupId);
-    setSelectedTestCaseId(testCase.id);
+    setSelectedTestCaseReference({ id: testCase.id, version: testCase.version ?? 1 });
     switchPage('cases');
   }
 
@@ -1872,11 +1910,11 @@ export function App() {
     updateSelectedProject((project) => ({
       ...project,
       recordings: nextRecordings,
-      testCases: detached.testCases.map((testCase, index) =>
-        testCase === project.testCases[index]
-          ? testCase
-          : { ...testCase, version: nextTestCaseVersion(project.testCases[index]?.version ?? testCase.version ?? 1) },
-      ),
+      testCases: project.testCases.flatMap((testCase, index) => (
+        detached.testCases[index]?.steps.every((step, stepIndex) => step === testCase.steps[stepIndex])
+          ? [testCase]
+          : [testCase, createNextTestCaseVersion(project, testCase, detached.testCases[index]!)]
+      )),
     }));
     setSelectedRecordingId(nextRecordings[0]?.id ?? '');
   }
@@ -1899,7 +1937,7 @@ export function App() {
   }
 
   function handleCreateStep(type: TestStepDraft['type'], index: number): string | undefined {
-    if (!selectedProject || !selectedTestCase) {
+    if (!selectedProject || !caseDraft) {
       return undefined;
     }
 
@@ -1907,11 +1945,11 @@ export function App() {
       type === 'recordingReplay'
         ? findDefaultRecordingForCaseStep(
             selectedProject.recordings,
-            selectedTestCase.groupId,
-            selectedTestCase.environmentId,
+            caseDraft.groupId,
+            caseDraft.environmentId,
           )
         : undefined;
-    const step = createTestStep(type, selectedTestCase.steps.length + 1, recording);
+    const step = createTestStep(type, caseDraft.steps.length + 1, recording);
 
     updateSelectedTestCase((testCase) => ({
       ...testCase,
@@ -1921,7 +1959,7 @@ export function App() {
   }
 
   function handleAppendStep(type: TestStepDraft['type'] = 'ai') {
-    return handleCreateStep(type, selectedTestCase?.steps.length ?? 0);
+    return handleCreateStep(type, caseDraft?.steps.length ?? 0);
   }
 
   function handleMoveStep(stepId: string, index: number) {
@@ -1932,11 +1970,11 @@ export function App() {
   }
 
   function handleCopyStep(stepId: string): string | undefined {
-    if (!selectedTestCase?.steps.some((step) => step.id === stepId)) {
+    if (!caseDraft?.steps.some((step) => step.id === stepId)) {
       return undefined;
     }
 
-    const copyId = `step-${Date.now()}-${selectedTestCase.steps.length + 1}`;
+    const copyId = `step-${Date.now()}-${caseDraft.steps.length + 1}`;
     updateSelectedTestCase((testCase) => ({
       ...testCase,
       steps: copyTestStep(testCase.steps, stepId, copyId),
@@ -1951,14 +1989,17 @@ export function App() {
     }), 'immediate');
   }
 
-  function handleSelectTestCase(testCaseId: string) {
-    const testCase = selectedProject?.testCases.find((item) => item.id === testCaseId);
+  function handleSelectTestCase(reference: VersionedTestAssetReference) {
+    if (caseDraft) {
+      return;
+    }
+    const testCase = selectedProject && findTestCaseVersion(selectedProject, reference);
     if (!testCase) {
       return;
     }
 
     setSelectedGroupId(testCase.groupId);
-    setSelectedTestCaseId(testCase.id);
+    setSelectedTestCaseReference(reference);
   }
 
   function handlePublishSuite(suite: SuiteAsset) {
@@ -2247,7 +2288,7 @@ export function App() {
 
   function handleSavePromptAsStep() {
     const prompt = chatInput.trim();
-    if (!prompt || !selectedTestCase) {
+    if (!prompt || !caseDraft) {
       return;
     }
 
@@ -2302,7 +2343,7 @@ export function App() {
       testCases: [testCase, ...project.testCases],
     }));
     setSelectedGroupId(testCase.groupId);
-    setSelectedTestCaseId(testCase.id);
+    setSelectedTestCaseReference({ id: testCase.id, version: testCase.version ?? 1 });
     switchPage('cases');
   }
 
@@ -2363,9 +2404,15 @@ export function App() {
   }
 
   async function handleRunTestCase(
-    testCaseToRun: TestCaseDraft | undefined = selectedTestCase,
+    selection: TestCaseDraft | VersionedTestAssetReference | undefined = selectedTestCase,
     environmentToRun = selectedCaseEnvironment,
   ) {
+    let testCaseToRun: TestCaseDraft | undefined;
+    if (selection && 'steps' in selection) {
+      testCaseToRun = selection;
+    } else if (selectedProject && selection) {
+      testCaseToRun = findTestCaseVersion(selectedProject, selection);
+    }
     const runBlocker = selectedProject && testCaseToRun
       ? getTestCaseRunBlocker(testCaseToRun, selectedProject.recordings)
       : undefined;
@@ -2447,14 +2494,15 @@ export function App() {
       return;
     }
 
-    const testCase = selectedProject.testCases.find((item) => item.id === run.testCaseId);
+    const testCaseReference = latestTestCaseReference(selectedProject, run.testCaseId);
+    const testCase = testCaseReference && findTestCaseVersion(selectedProject, testCaseReference);
     const environment = selectedProject.environments.find((item) => item.id === run.environmentId);
     if (!testCase || !environment) {
       appendSystemMessage(t('app.runtime.rerunUnavailable'));
       return;
     }
 
-    setSelectedTestCaseId(testCase.id);
+    setSelectedTestCaseReference({ id: testCase.id, version: testCase.version ?? 1 });
     setSelectedGroupId(testCase.groupId);
     void handleRunTestCase(testCase, environment);
   }
@@ -2500,7 +2548,7 @@ export function App() {
       testCases: [draft, ...project.testCases],
     }), 'immediate');
     setSelectedGroupId(draft.groupId);
-    setSelectedTestCaseId(draft.id);
+    setSelectedTestCaseReference({ id: draft.id, version: draft.version ?? 1 });
     switchPage('cases');
   }
 
@@ -2704,21 +2752,27 @@ export function App() {
 
           {activePage === 'cases' ? (
             <TestCaseManagementPage
+              draftTestCase={caseDraft}
               isRunning={isRunning}
               onCopyStep={handleCopyStep}
               onCreateStep={handleCreateStep}
               onCreateTestCase={handleCreateTestCase}
               onDeleteStep={handleDeleteStep}
+              onDiscardCaseDraft={handleDiscardCaseDraft}
+              onEditAsNewVersion={handleEditCaseVersion}
               onMoveStep={handleMoveStep}
+              onPublishCase={handlePublishCase}
               onOpenProjects={() => goToPage('projects')}
               onRetrySave={() => persistLatestStudioState('immediate')}
               onRunTestCase={handleRunTestCase}
               onSelectTestCase={handleSelectTestCase}
               onUpdateTestCase={updateSelectedTestCase}
               project={selectedProject}
+              publishedTestCase={selectedTestCase}
               runBlocker={selectedTestCaseRunBlocker}
               runStatus={runStatus}
               saveStatus={saveStatus}
+              selectedReference={selectedTestCaseReference}
               selectedTestCase={selectedTestCase}
               selectedTestCaseId={selectedTestCaseId}
             />
@@ -2802,7 +2856,7 @@ export function App() {
               onDuplicateStepType={(type) => handleAppendStep(type)}
               onOpenProjects={() => goToPage('projects')}
               onRunWorkflow={handleRunWorkflow}
-              onSelectWorkflow={setSelectedTestCaseId}
+              onSelectWorkflow={(id) => setSelectedTestCaseReference(latestTestCaseReference(selectedProject, id))}
               onUpdateRuntimeProfile={updateRuntimeProfile}
               onUpdateWorkflow={updateSelectedWorkflow}
               runId={runId}

@@ -1304,7 +1304,10 @@ export interface StartupGuideState {
 export interface StudioState {
   selectedProjectId: string;
   selectedGroupId: string;
-  selectedTestCaseId: string;
+  /** Exact immutable Case revision selected by current UI state. */
+  selectedTestCaseReference?: VersionedTestAssetReference;
+  /** Legacy selection input accepted only while hydrating old persisted state. */
+  selectedTestCaseId?: string;
   selectedRecordingId: string;
   projects: ProjectDraft[];
   projectAssetBindings: ProjectAssetBinding[];
@@ -2196,11 +2199,21 @@ export function hydrateStudioState(
     rawState.selectedGroupId && selectedProject?.groups.some((group) => group.id === rawState.selectedGroupId)
       ? rawState.selectedGroupId
       : selectedProject?.groups[0]?.id ?? '';
-  const selectedTestCaseId =
+  const legacySelectedTestCaseId =
     rawState.selectedTestCaseId &&
     selectedProject?.testCases.some((testCase) => testCase.id === rawState.selectedTestCaseId)
       ? rawState.selectedTestCaseId
       : selectedProject?.testCases[0]?.id ?? '';
+  const selectedTestCaseReference =
+    rawState.selectedTestCaseReference && selectedProject && findTestCaseVersion(selectedProject, rawState.selectedTestCaseReference)
+      ? rawState.selectedTestCaseReference
+      : legacySelectedTestCaseId
+        ? (() => {
+            const latest = listLatestTestCaseVersions(selectedProject ?? { testCases: [] })
+              .find((testCase) => testCase.id === legacySelectedTestCaseId);
+            return latest ? { id: latest.id, version: normalizeTestCaseVersion(latest.version) } : undefined;
+          })()
+        : undefined;
   const selectedRecordingId =
     rawState.selectedRecordingId &&
     selectedProject?.recordings.some((recording) => recording.id === rawState.selectedRecordingId)
@@ -2232,7 +2245,7 @@ export function hydrateStudioState(
   return {
     selectedProjectId,
     selectedGroupId,
-    selectedTestCaseId,
+    ...(selectedTestCaseReference ? { selectedTestCaseReference } : {}),
     selectedRecordingId,
     projects: migratedProjects,
     projectAssetBindings,
@@ -2267,7 +2280,7 @@ export function hydrateStudioState(
     // A Playwright page belongs to the Electron process and cannot outlive it.
     // Restoring its former status would display stale errors or a false-ready state.
     browserSession: initialState.browserSession,
-    selectedWorkflowId: selectedTestCaseId,
+    selectedWorkflowId: selectedTestCaseReference?.id ?? '',
     workflows: selectedProject?.testCases.map(testCaseToWorkflow) ?? initialState.workflows,
   };
 }

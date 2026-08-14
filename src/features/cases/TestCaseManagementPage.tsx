@@ -38,6 +38,8 @@ import {
   getConfirmedExplicitTestAssertion,
   getTestCaseFixtureOutputBindingOptions,
   getTestStepRunBlocker,
+  listLatestTestCaseVersions,
+  type VersionedTestAssetReference,
 } from '../../../shared/studio.js';
 import { StatusPill } from '../../components/StatusPill.js';
 import { Badge } from '../../components/ui/badge.js';
@@ -228,16 +230,25 @@ function FlowInsertionPoint({
 
 function CaseSelector({
   project,
+  selectedReference,
   selectedTestCase,
   onSelect,
 }: {
   project: ProjectDraft;
+  selectedReference?: VersionedTestAssetReference;
   selectedTestCase?: TestCaseDraft;
-  onSelect: (testCaseId: string) => void;
+  onSelect: (reference: VersionedTestAssetReference) => void;
 }) {
   const { t } = useI18n();
+  const latestCases = listLatestTestCaseVersions(project);
+  const versions = selectedReference
+    ? project.testCases
+        .filter((testCase) => testCase.id === selectedReference.id)
+        .sort((left, right) => (right.version ?? 1) - (left.version ?? 1))
+    : [];
 
   return (
+    <>
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button aria-label={t('cases.select.title')} className="max-w-56 justify-between" type="button" variant="outline">
@@ -246,7 +257,7 @@ function CaseSelector({
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="max-h-[min(28rem,calc(100vh-8rem))] min-w-72 overflow-y-auto">
         {project.groups.map((group, groupIndex) => {
-          const cases = project.testCases.filter((testCase) => testCase.groupId === group.id);
+          const cases = latestCases.filter((testCase) => testCase.groupId === group.id);
           if (!cases.length) {
             return null;
           }
@@ -256,7 +267,7 @@ function CaseSelector({
               {groupIndex ? <DropdownMenuSeparator /> : null}
               <DropdownMenuLabel>{group.name}</DropdownMenuLabel>
               {cases.map((testCase) => (
-                <DropdownMenuItem key={testCase.id} onSelect={() => onSelect(testCase.id)}>
+                <DropdownMenuItem key={testCase.id} onSelect={() => onSelect({ id: testCase.id, version: testCase.version ?? 1 })}>
                   <span className="min-w-0 flex-1 truncate">{testCase.name}</span>
                   <span className="shrink-0 text-xs text-muted-foreground">
                     {t('cases.steps.count', { count: testCase.steps.length })}
@@ -268,6 +279,26 @@ function CaseSelector({
         })}
       </DropdownMenuContent>
     </DropdownMenu>
+    {selectedTestCase && versions.length > 1 ? (
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button aria-label={t('cases.select.version')} type="button" variant="outline">
+            v{selectedReference?.version ?? selectedTestCase.version ?? 1}
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start">
+          {versions.map((testCase) => (
+            <DropdownMenuItem
+              key={`${testCase.id}@${testCase.version ?? 1}`}
+              onSelect={() => onSelect({ id: testCase.id, version: testCase.version ?? 1 })}
+            >
+              {testCase.name} · v{testCase.version ?? 1}
+            </DropdownMenuItem>
+          ))}
+        </DropdownMenuContent>
+      </DropdownMenu>
+    ) : null}
+    </>
   );
 }
 
@@ -992,6 +1023,9 @@ function SerialStepRow({
 
 export function TestCaseManagementPage({
   project,
+  publishedTestCase,
+  draftTestCase,
+  selectedReference,
   selectedTestCase,
   selectedTestCaseId,
   runStatus,
@@ -1004,44 +1038,58 @@ export function TestCaseManagementPage({
   onMoveStep,
   onCopyStep,
   onDeleteStep,
+  onEditAsNewVersion,
+  onPublishCase,
+  onDiscardCaseDraft,
   onRetrySave,
   onRunTestCase,
   onUpdateTestCase,
   onOpenProjects,
 }: {
   project?: ProjectDraft;
+  publishedTestCase?: TestCaseDraft;
+  draftTestCase?: TestCaseDraft;
+  selectedReference?: VersionedTestAssetReference;
   selectedTestCase?: TestCaseDraft;
-  selectedTestCaseId: string;
+  selectedTestCaseId?: string;
   runStatus: RunTone;
   isRunning: boolean;
   saveStatus: SaveStatus;
   runBlocker?: TestCaseRunBlocker;
-  onSelectTestCase: (testCaseId: string) => void;
+  onSelectTestCase: (reference: VersionedTestAssetReference) => void;
   onCreateTestCase: () => void;
   onCreateStep: (type: TestStepDraft['type'], index: number) => string | undefined;
   onMoveStep: (stepId: string, index: number) => void;
   onCopyStep: (stepId: string) => string | undefined;
   onDeleteStep: (stepId: string) => void;
   onRetrySave: () => void;
-  onRunTestCase: () => void;
+  onEditAsNewVersion?: () => void;
+  onPublishCase?: () => void;
+  onDiscardCaseDraft?: () => void;
+  onRunTestCase: (reference: VersionedTestAssetReference) => void;
   onUpdateTestCase: (updater: (testCase: TestCaseDraft) => TestCaseDraft, mode?: SaveMode) => void;
   onOpenProjects?: () => void;
 }) {
   const { t } = useI18n();
-  const [selectedStepId, setSelectedStepId] = useState(() => selectedTestCase?.steps[0]?.id);
+  const versionedMode = Boolean(publishedTestCase || selectedReference);
+  const selectedCase = draftTestCase ?? publishedTestCase ?? selectedTestCase;
+  const isDraftOpen = Boolean(draftTestCase);
+  const isEditable = !versionedMode || isDraftOpen;
+  const currentReference = selectedReference ?? (selectedCase ? { id: selectedCase.id, version: selectedCase.version ?? 1 } : undefined);
+  const [selectedStepId, setSelectedStepId] = useState(() => selectedCase?.steps[0]?.id);
   const [draggedStepId, setDraggedStepId] = useState<string>();
   const [dropIndex, setDropIndex] = useState<number>();
   const [focusStepId, setFocusStepId] = useState<string>();
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [deleteStepId, setDeleteStepId] = useState<string>();
   const stepRowRefs = useRef(new Map<string, HTMLElement>());
-  const selectedStep = selectedTestCase?.steps.find((step) => step.id === selectedStepId);
-  const deleteStep = selectedTestCase?.steps.find((step) => step.id === deleteStepId);
+  const selectedStep = selectedCase?.steps.find((step) => step.id === selectedStepId);
+  const deleteStep = selectedCase?.steps.find((step) => step.id === deleteStepId);
 
   useEffect(() => {
-    const steps = selectedTestCase?.steps ?? [];
+    const steps = selectedCase?.steps ?? [];
     setSelectedStepId((current) => (steps.some((step) => step.id === current) ? current : steps[0]?.id));
-  }, [selectedTestCase?.id, selectedTestCase?.steps]);
+  }, [selectedCase?.id, selectedCase?.steps]);
 
   useEffect(() => {
     if (!focusStepId) {
@@ -1049,9 +1097,12 @@ export function TestCaseManagementPage({
     }
 
     stepRowRefs.current.get(focusStepId)?.scrollIntoView?.({ block: 'nearest' });
-  }, [focusStepId, selectedTestCase?.id, selectedTestCase?.steps]);
+  }, [focusStepId, selectedCase?.id, selectedCase?.steps]);
 
   function createStep(type: TestStepDraft['type'], index: number) {
+    if (!isEditable) {
+      return;
+    }
     const stepId = onCreateStep(type, index);
     if (!stepId) {
       return;
@@ -1072,8 +1123,8 @@ export function TestCaseManagementPage({
   function handleDrop(event: DragEvent<HTMLButtonElement>, index: number) {
     event.preventDefault();
     const stepId = event.dataTransfer?.getData('text/testbuddy-step') || draggedStepId;
-    const sourceIndex = selectedTestCase?.steps.findIndex((step) => step.id === stepId) ?? -1;
-    if (stepId && sourceIndex >= 0 && index !== sourceIndex && index !== sourceIndex + 1) {
+    const sourceIndex = selectedCase?.steps.findIndex((step) => step.id === stepId) ?? -1;
+    if (isEditable && stepId && sourceIndex >= 0 && index !== sourceIndex && index !== sourceIndex + 1) {
       onMoveStep(stepId, index);
     }
     setDraggedStepId(undefined);
@@ -1081,12 +1132,12 @@ export function TestCaseManagementPage({
   }
 
   function confirmDelete() {
-    if (!deleteStepId || !selectedTestCase) {
+    if (!isEditable || !deleteStepId || !selectedCase) {
       return;
     }
 
-    const deletedIndex = selectedTestCase.steps.findIndex((step) => step.id === deleteStepId);
-    const nextStepId = selectedTestCase.steps[deletedIndex + 1]?.id ?? selectedTestCase.steps[deletedIndex - 1]?.id;
+    const deletedIndex = selectedCase.steps.findIndex((step) => step.id === deleteStepId);
+    const nextStepId = selectedCase.steps[deletedIndex + 1]?.id ?? selectedCase.steps[deletedIndex - 1]?.id;
     onDeleteStep(deleteStepId);
     setSelectedStepId(nextStepId);
     setDeleteStepId(undefined);
@@ -1115,23 +1166,43 @@ export function TestCaseManagementPage({
       <PageHeader
         action={
           <>
-            {selectedTestCase ? (
+            {selectedCase && isEditable ? (
               <Button onClick={() => setIsSettingsOpen(true)} type="button" variant="outline">
                 <Settings2 className="size-4" />
                 {t('cases.action.settings')}
               </Button>
             ) : null}
+            {versionedMode && publishedTestCase && !draftTestCase ? (
+              <Button onClick={onEditAsNewVersion} type="button" variant="outline">
+                {t('cases.action.editVersion')}
+              </Button>
+            ) : null}
+            {versionedMode && draftTestCase ? (
+              <>
+                <Button onClick={onDiscardCaseDraft} type="button" variant="outline">
+                  {t('cases.action.discardDraft')}
+                </Button>
+                <Button onClick={onPublishCase} type="button">
+                  {t('cases.action.publishVersion')}
+                </Button>
+              </>
+            ) : null}
             <StepTypeMenu
-              index={selectedTestCase?.steps.length ?? 0}
+              index={selectedCase?.steps.length ?? 0}
               onCreate={createStep}
               trigger={
-                <Button disabled={!selectedTestCase} type="button">
+                <Button disabled={!selectedCase || !isEditable} type="button">
                   <Plus className="size-4" />
                   {t('cases.action.addStep')}
                 </Button>
               }
             />
-            <Button disabled={!selectedTestCase || Boolean(runBlocker) || isRunning} onClick={onRunTestCase} title={blockerLabel} type="button">
+            <Button
+              disabled={!publishedTestCase && !selectedTestCase || Boolean(runBlocker) || isRunning || isDraftOpen}
+              onClick={() => currentReference && onRunTestCase(currentReference)}
+              title={blockerLabel}
+              type="button"
+            >
               <Play className="size-4" />
               {isRunning ? t('cases.action.running') : t('cases.action.run')}
             </Button>
@@ -1139,8 +1210,8 @@ export function TestCaseManagementPage({
         }
         meta={
           <>
-            <CaseSelector onSelect={onSelectTestCase} project={project} selectedTestCase={selectedTestCase} />
-            {selectedTestCase ? <Badge className="case-editor-tag" variant="outline">{t('cases.status.source')} · {getSourceLabel(selectedTestCase, t)}</Badge> : null}
+            <CaseSelector onSelect={onSelectTestCase} project={project} selectedReference={currentReference} selectedTestCase={selectedCase} />
+            {selectedCase ? <Badge className="case-editor-tag" variant="outline">{t('cases.status.source')} · {getSourceLabel(selectedCase, t)}</Badge> : null}
             <StatusPill tone={runStatus} />
             {saveStatus !== 'idle' ? <Badge className="case-editor-tag" variant="outline">{t(`cases.save.${saveStatus === 'error' ? 'failed' : saveStatus}`)}</Badge> : null}
             {saveStatus === 'error' ? (
@@ -1160,7 +1231,7 @@ export function TestCaseManagementPage({
             {blockerLabel}
           </p>
         ) : null}
-        {!selectedTestCase ? (
+        {!selectedCase ? (
           <EvidenceCard
             action={
               <Button onClick={onCreateTestCase} type="button">
@@ -1176,9 +1247,9 @@ export function TestCaseManagementPage({
             <div className="case-step-list" role="list">
               <div className="case-step-flow-sequence">
                 <FlowTerminal terminal="start" />
-                {selectedTestCase.steps.length ? (
+                {selectedCase.steps.length ? (
                   <>
-                    {selectedTestCase.steps.map((step, index) => (
+                    {selectedCase.steps.map((step, index) => (
                       <div className="contents" key={step.id}>
                         <FlowInsertionPoint
                           dropActive={dropIndex === index}
@@ -1192,19 +1263,19 @@ export function TestCaseManagementPage({
                           dragActive={draggedStepId === step.id}
                           index={index}
                           onCopy={() => {
-                            const stepId = onCopyStep(step.id);
+                            const stepId = isEditable ? onCopyStep(step.id) : undefined;
                             if (stepId) {
                               setSelectedStepId(stepId);
                               setFocusStepId(stepId);
                             }
                           }}
-                          onDelete={() => setDeleteStepId(step.id)}
+                          onDelete={() => isEditable && setDeleteStepId(step.id)}
                           onDragEnd={() => {
                             setDraggedStepId(undefined);
                             setDropIndex(undefined);
                           }}
                           onDragStart={(event) => handleDragStart(event, step.id)}
-                          onMove={(targetIndex) => onMoveStep(step.id, targetIndex)}
+                          onMove={(targetIndex) => isEditable && onMoveStep(step.id, targetIndex)}
                           onRowRef={(element) => {
                             if (element) {
                               stepRowRefs.current.set(step.id, element);
@@ -1216,16 +1287,16 @@ export function TestCaseManagementPage({
                           project={project}
                           selected={selectedStepId === step.id}
                           step={step}
-                          totalSteps={selectedTestCase.steps.length}
+                          totalSteps={selectedCase.steps.length}
                         />
                       </div>
                     ))}
                     <FlowInsertionPoint
-                      dropActive={dropIndex === selectedTestCase.steps.length}
-                      index={selectedTestCase.steps.length}
+                      dropActive={dropIndex === selectedCase.steps.length}
+                      index={selectedCase.steps.length}
                       onCreate={createStep}
                       onDragEnd={() => setDropIndex(undefined)}
-                      onDragOver={() => setDropIndex(selectedTestCase.steps.length)}
+                      onDragOver={() => setDropIndex(selectedCase.steps.length)}
                       onDrop={handleDrop}
                     />
                     <FlowTerminal terminal="end" />
@@ -1257,10 +1328,10 @@ export function TestCaseManagementPage({
                   <StepInspector
                     focusTitle={focusStepId === selectedStep.id}
                     onFocused={() => setFocusStepId(undefined)}
-                    onUpdateTestCase={onUpdateTestCase}
+                    onUpdateTestCase={(updater, mode) => isEditable && onUpdateTestCase(updater, mode)}
                     project={project}
                     step={selectedStep}
-                    testCase={selectedTestCase}
+                    testCase={selectedCase}
                   />
                 ) : (
                   <EvidenceCard description={t('cases.empty.noStepsDescription')} title={t('cases.empty.noStepsTitle')} />
@@ -1271,13 +1342,13 @@ export function TestCaseManagementPage({
         )}
       </PageBody>
 
-      {selectedTestCase ? (
+      {selectedCase && isEditable ? (
         <CaseSettingsDialog
           onOpenChange={setIsSettingsOpen}
-          onUpdateTestCase={onUpdateTestCase}
+          onUpdateTestCase={(updater, mode) => isEditable && onUpdateTestCase(updater, mode)}
           open={isSettingsOpen}
           project={project}
-          testCase={selectedTestCase}
+          testCase={selectedCase}
         />
       ) : null}
 
