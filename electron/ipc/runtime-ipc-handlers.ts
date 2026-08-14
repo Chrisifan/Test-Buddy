@@ -19,7 +19,7 @@ import type {
   StudioState,
 } from '../../shared/studio.js';
 import { findSuiteAsset, findTestCaseVersion } from '../../shared/studio.js';
-import type { ProjectRepository, ProjectSnapshot } from '../projectRepository.js';
+import { ProjectRepositoryError, type ProjectRepository, type ProjectSnapshot } from '../projectRepository.js';
 import { appendRunToStudioState } from '../runtime/run-history.js';
 import type { ResolvedRunSuiteRequest, ResolvedRunTestCaseRequest, RuntimeBundle } from '../runtime/runtime-bundle.js';
 import channelModule from './runtime-ipc-channels.cjs';
@@ -213,7 +213,14 @@ async function loadProjectSnapshot(
     return await projectRepository.loadBound(projectId, expectedProjectRevision);
   } catch (error) {
     if (isProjectUnboundError(error)) {
-      return projectRepository.load(projectId);
+      const projectSnapshot = await projectRepository.load(projectId);
+      if (expectedProjectRevision !== undefined && projectSnapshot.revision !== expectedProjectRevision) {
+        throw new ProjectRepositoryError(
+          'staleProjectRevision',
+          `项目 ${projectId} 的请求 revision 已过期。`,
+        );
+      }
+      return projectSnapshot;
     }
     throw error;
   }

@@ -13,6 +13,7 @@ import {
   type ProjectDraft,
   type RunTestCaseResponse,
 } from '../../shared/studio.js';
+import { ProjectRepositoryError } from '../projectRepository.js';
 
 const { registerRuntimeIpcHandlers, runtimeIpcChannels } = loadRuntimeIpcHandlers();
 
@@ -222,6 +223,49 @@ describe('registerRuntimeIpcHandlers', () => {
     })).rejects.toMatchObject({ code: 'bindingUnavailable' });
 
     expect(load).not.toHaveBeenCalled();
+    expect(runTestCase).not.toHaveBeenCalled();
+  });
+
+  it('rejects a changed snapshot revision after an unbound fallback before RuntimeBundle execution', async () => {
+    const project = createEmptyProject(1);
+    const environment = project.environments[0]!;
+    const testCase = {
+      id: 'case/checkout',
+      version: 1,
+      kind: 'scenario' as const,
+      name: 'Checkout',
+      category: 'Regression',
+      lastEdited: new Date(0).toISOString(),
+      url: environment.url,
+      notes: '',
+      groupId: project.groups[0]!.id,
+      environmentId: environment.id,
+      source: 'manual' as const,
+      steps: [],
+    };
+    project.testCases = [testCase];
+    const runTestCase = vi.fn().mockResolvedValue(runTestCaseResponse(project.id, testCase.id, environment.id));
+    const dependencies = createDependencies({
+      getRuntimeBundle: vi.fn().mockReturnValue({
+        artifactManager: { isManagedArtifactPath: () => true, exportArtifact: vi.fn(), importManualEvidence: vi.fn() },
+        browserRuntime: { getState: () => ({ status: 'idle' }) },
+        runTestCase,
+        runSuite: vi.fn(),
+        cancelRun: vi.fn(),
+      }),
+      projectRepository: {
+        load: vi.fn().mockResolvedValue(projectSnapshot(project, '7'.repeat(64), 'projectDirectory')),
+        loadBound: vi.fn().mockRejectedValue(Object.assign(new Error('unbound'), { code: 'projectUnbound' })),
+      },
+    });
+    const handlers = registerHandlers(dependencies);
+
+    await expect(handlers.get(runtimeIpcChannels.runTestCase)!({}, {
+      projectId: project.id,
+      testCase: { id: testCase.id, version: testCase.version },
+      expectedProjectRevision: '6'.repeat(64),
+    })).rejects.toMatchObject({ code: 'staleProjectRevision' });
+
     expect(runTestCase).not.toHaveBeenCalled();
   });
 
@@ -537,6 +581,9 @@ function loadRuntimeIpcHandlers(): {
     }
     if (moduleId === '../../shared/studio.js') {
       return { findSuiteAsset, findTestCaseVersion };
+    }
+    if (moduleId === '../projectRepository.js') {
+      return { ProjectRepositoryError };
     }
     throw new Error(`Unexpected runtime IPC dependency: ${moduleId}`);
   };
