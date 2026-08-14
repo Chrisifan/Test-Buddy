@@ -2538,6 +2538,7 @@ export function App() {
   if (isHydrated && !startupGuide.completed) {
     return (
       <StartupPage
+        brandLogo={brandLogo}
         locale={effectiveLocale}
         midsceneConfig={midsceneConfig}
         midsceneReady={midsceneReady}

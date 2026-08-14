@@ -8,6 +8,7 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 
 export function StartupPage({
+  brandLogo,
   locale = 'zh-CN',
   midsceneConfig,
   midsceneReady,
@@ -15,6 +16,7 @@ export function StartupPage({
   onSkip,
   onUpdateMidsceneConfig,
 }: {
+  brandLogo: string;
   locale?: SupportedLocale;
   midsceneConfig: MidsceneConfig;
   midsceneReady: boolean;
@@ -31,36 +33,33 @@ export function StartupPage({
 
   return (
     <section aria-label={t('startup.aria.screen')} className="home-empty-shell startup-shell">
-      <main className="home-empty-main startup-main">
-        <section className="home-start-steps" aria-label={t('startup.aria.steps')}>
-          <div className="startup-brand" aria-label="TestBuddy">
-            <Bot aria-hidden="true" className="h-4 w-4" />
-            <span>
-              <strong>TestBuddy</strong>
-              <small>AUTOMATION ENGINE</small>
-            </span>
-          </div>
-          <div className="startup-step-list">
-            {startupSteps.map(([index, title, status], itemIndex) => {
-              const isDone = itemIndex === 0 && midsceneReady;
-              const isActive = midsceneReady ? itemIndex === 1 : itemIndex === 0;
-              return (
-                <div className={`home-start-step ${isDone ? 'is-done' : ''} ${isActive ? 'is-active' : ''}`} key={title}>
-                  <span className="home-start-step-index">{isDone ? '✓' : index}</span>
-                  <span>
-                    <span className="home-start-step-title">{title}</span>
-                    <span className="home-start-step-status">{status}</span>
-                  </span>
-                </div>
-              );
-            })}
-          </div>
-          <aside className="startup-help" aria-label="TestBuddy documentation">
-            <p>Need help? Documentation covers model connection and workspace setup.</p>
-            <a href="https://midscenejs.com" rel="noreferrer" target="_blank">View Docs</a>
-          </aside>
+      <header aria-label="TestBuddy" className="startup-header" role="banner">
+        <div className="startup-brand" aria-label="TestBuddy">
+          <img alt="TestBuddy" className="startup-brand-logo" src={brandLogo} />
+          <span>
+            <strong>TestBuddy</strong>
+            <small>AUTOMATION ENGINE</small>
+          </span>
+        </div>
+        <section className="startup-step-list" aria-label={t('startup.aria.steps')}>
+          {startupSteps.map(([index, title, status], itemIndex) => {
+            const isDone = itemIndex === 0 && midsceneReady;
+            const isActive = midsceneReady ? itemIndex === 1 : itemIndex === 0;
+            return (
+              <div className={`home-start-step ${isDone ? 'is-done' : ''} ${isActive ? 'is-active' : ''}`} key={title}>
+                <span className="home-start-step-index">{isDone ? '✓' : index}</span>
+                <span>
+                  <span className="home-start-step-title">{title}</span>
+                  <span className="home-start-step-status">{status}</span>
+                </span>
+              </div>
+            );
+          })}
         </section>
+        <a className="startup-help-link" href="https://midscenejs.com" rel="noreferrer" target="_blank">View Docs</a>
+      </header>
 
+      <main className="home-empty-main startup-main">
         <section className="home-start-panel">
           <div className="home-empty-hero">
             <div className="home-empty-orb" aria-hidden="true">

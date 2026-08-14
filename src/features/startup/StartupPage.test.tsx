@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -7,9 +10,34 @@ import { StartupPage } from './StartupPage.js';
 const state = createInitialStudioState();
 
 describe('StartupPage', () => {
+  it('renders the supplied TestBuddy brand asset above the startup steps', () => {
+    const brandLogo = '/assets/testbuddy-hammer-bot.png';
+
+    render(
+      <StartupPage
+        brandLogo={brandLogo}
+        midsceneConfig={state.midsceneConfig}
+        midsceneReady={false}
+        onComplete={vi.fn()}
+        onSkip={vi.fn()}
+        onUpdateMidsceneConfig={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole('banner', { name: 'TestBuddy' })).toContainElement(
+      screen.getByRole('img', { name: 'TestBuddy' }),
+    );
+    expect(screen.getByRole('banner', { name: 'TestBuddy' }).parentElement).toHaveClass('startup-shell');
+    expect(screen.getByRole('img', { name: 'TestBuddy' })).toHaveAttribute('src', brandLogo);
+    expect(screen.getAllByText('配置 MidScene').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText('进入工作台')).toBeInTheDocument();
+    expect(screen.getByText('开始测试')).toBeInTheDocument();
+  });
+
   it('shows first-run Midscene setup with a skippable stepper', () => {
     render(
       <StartupPage
+        brandLogo="/assets/testbuddy-hammer-bot.png"
         midsceneConfig={state.midsceneConfig}
         midsceneReady={false}
         onComplete={vi.fn()}
@@ -39,6 +67,7 @@ describe('StartupPage', () => {
 
     render(
       <StartupPage
+        brandLogo="/assets/testbuddy-hammer-bot.png"
         midsceneConfig={state.midsceneConfig}
         midsceneReady={false}
         onComplete={vi.fn()}
@@ -50,5 +79,22 @@ describe('StartupPage', () => {
     fireEvent.click(screen.getByRole('button', { name: '跳过，进入工作台' }));
 
     expect(onSkip).toHaveBeenCalledTimes(1);
+  });
+
+  it('defines a full-width top row for the startup header', () => {
+    const styles = readFileSync(resolve(process.cwd(), 'src/styles/luminous-precision.css'), 'utf8');
+    const startupStyles = styles.slice(
+      styles.indexOf('/* First-run configuration follows the same shell as the Figma onboarding view. */'),
+      styles.indexOf('/* Page-specific structure sourced from the Figma workbench screens. */'),
+    );
+    const mobileStartupStyles = startupStyles.slice(startupStyles.indexOf('@media (max-width: 760px)'));
+
+    expect(startupStyles).toContain('grid-template-columns: minmax(0, 1fr);');
+    expect(startupStyles).toContain('grid-template-rows: 72px minmax(0, 1fr) 32px;');
+    expect(startupStyles).toContain('.startup-header {');
+    expect(startupStyles).toContain('.startup-header .home-start-step {');
+    expect(startupStyles).not.toContain('grid-template-columns: 224px minmax(0, 1fr);');
+    expect(mobileStartupStyles).toMatch(/\.startup-step-list\s*\{[^}]*grid-template-columns:\s*1fr;/);
+    expect(mobileStartupStyles).toMatch(/\.startup-help-link\s*\{[^}]*grid-column:\s*2;[^}]*grid-row:\s*1;/);
   });
 });
