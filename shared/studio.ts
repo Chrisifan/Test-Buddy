@@ -1019,8 +1019,16 @@ export interface ProjectAssetMigrationPlan {
   projectDirectory: string;
   snapshotRevision: string;
   files: string[];
-  status: 'ready' | 'requiresReview';
+  status: 'ready' | 'requiresReview' | 'blocked' | 'alreadyMigrated';
   conflicts: string[];
+  /** A deterministic guard over the legacy directory reviewed by the user. */
+  sourceRevision?: string;
+  /** Stable identifier for one reviewed legacy Case conversion. */
+  migrationId?: string;
+  targetSchemaVersion?: 2;
+  /** Safe relative path recorded in a migrated v2 manifest. */
+  backupDirectory?: string;
+  issues?: ProjectAssetDiagnostic[];
 }
 
 /** A studio-data pointer to an explicitly reviewed project asset snapshot. */

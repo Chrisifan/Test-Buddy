@@ -1,6 +1,9 @@
+import { execFile } from 'node:child_process';
+import { constants as fsConstants } from 'node:fs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { promisify } from 'node:util';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -17,6 +20,7 @@ import {
 } from './projectAssetStore.js';
 
 const temporaryDirectories: string[] = [];
+const execFileAsync = promisify(execFile);
 
 afterEach(async () => {
   await Promise.all(temporaryDirectories.splice(0).map((directory) => fs.rm(directory, { recursive: true, force: true })));
@@ -228,6 +232,561 @@ describe('ProjectAssetStore', () => {
     expect(loaded.revision).toMatch(/^[a-f0-9]{64}$/);
     expect(loaded.project.recordings[0]?.steps[0]?.value).toBeUndefined();
     expect(JSON.parse(await fs.readFile(manifestPath, 'utf8'))).not.toHaveProperty('revision');
+  });
+
+  it('previews a legacy Case migration without writing the v1 directory', async () => {
+    const rootDirectory = await createTemporaryDirectory();
+    const projectDirectory = path.join(rootDirectory, 'legacy-project');
+    await writeLegacyCaseProject(projectDirectory);
+    const store = new ProjectAssetStore(projectDirectory);
+    const before = await readDirectorySnapshot(projectDirectory);
+
+    const preview = await store.planLegacyCaseMigration();
+
+    expect(preview).toMatchObject({
+      status: 'ready',
+      targetSchemaVersion: 2,
+      backupDirectory: expect.stringMatching(/^migration-backup\//),
+      sourceRevision: expect.stringMatching(/^[a-f0-9]{64}$/),
+      files: expect.arrayContaining(['cases/case%2Fcheckout@1.json']),
+    });
+    await expect(readDirectorySnapshot(projectDirectory)).resolves.toEqual(before);
+  });
+
+  it('confirms a reviewed legacy Case migration with a v2 asset and retained backup', async () => {
+    const rootDirectory = await createTemporaryDirectory();
+    const projectDirectory = path.join(rootDirectory, 'legacy-project');
+    await writeLegacyCaseProject(projectDirectory);
+    const legacyCasePath = path.join(projectDirectory, 'cases', 'case%2Fcheckout.json');
+    const originalLegacyCase = await fs.readFile(legacyCasePath, 'utf8');
+    const store = new ProjectAssetStore(projectDirectory);
+    const preview = await store.planLegacyCaseMigration();
+
+    await store.confirmLegacyCaseMigration(preview);
+
+    const manifest = JSON.parse(await fs.readFile(path.join(projectDirectory, 'project.json'), 'utf8')) as {
+      schemaVersion?: number;
+      legacyCaseBackupDirectory?: string;
+      legacyCaseBackupFiles?: Array<{ path: string; contentHash: string }>;
+      assetIds?: { cases?: unknown };
+    };
+    const loaded = await store.loadWithRevision();
+    expect(manifest).toMatchObject({
+      schemaVersion: 2,
+      legacyCaseBackupDirectory: preview.backupDirectory,
+      legacyCaseBackupFiles: [{
+        path: 'cases/case%2Fcheckout.json',
+        contentHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+      }],
+      assetIds: { cases: [{ id: 'case/checkout', version: 1 }] },
+    });
+    await expect(fs.readFile(path.join(projectDirectory, 'cases', 'case%2Fcheckout@1.json'), 'utf8')).resolves.toContain('"version": 1');
+    await expect(fs.readFile(path.join(projectDirectory, preview.backupDirectory!, 'cases', 'case%2Fcheckout.json'), 'utf8')).resolves.toBe(originalLegacyCase);
+    expect(loaded.project).toMatchObject({ testCases: [expect.objectContaining({ id: 'case/checkout', version: 1 })] });
+    expect(loaded.project).not.toHaveProperty('legacyCaseBackupDirectory');
+    expect(loaded.project).not.toHaveProperty('legacyCaseBackupFiles');
+  });
+
+  it('blocks a symlinked legacy Case file without reading its target', async () => {
+    const rootDirectory = await createTemporaryDirectory();
+    const projectDirectory = path.join(rootDirectory, 'legacy-project');
+    await writeLegacyCaseProject(projectDirectory);
+    const legacyCasePath = path.join(projectDirectory, 'cases', 'case%2Fcheckout.json');
+    await fs.rm(legacyCasePath);
+    await fs.symlink(path.join(rootDirectory, 'outside-project.json'), legacyCasePath);
+    const store = new ProjectAssetStore(projectDirectory);
+    const before = await readDirectorySnapshot(projectDirectory);
+
+    await expect(store.planLegacyCaseMigration()).resolves.toMatchObject({
+      status: 'blocked',
+      issues: expect.arrayContaining([expect.objectContaining({ path: 'cases/case%2Fcheckout.json' })]),
+    });
+    await expect(store.confirmLegacyCaseMigration(await store.planLegacyCaseMigration())).rejects.toBeInstanceOf(ProjectAssetStoreError);
+    await expect(readDirectorySnapshot(projectDirectory)).resolves.toEqual(before);
+  });
+
+  it('rejects a legacy FIFO before source revisioning can block on it', async () => {
+    const rootDirectory = await createTemporaryDirectory();
+    const projectDirectory = path.join(rootDirectory, 'legacy-project');
+    await writeLegacyCaseProject(projectDirectory);
+    const fifoPath = path.join(projectDirectory, 'unmanaged.fifo');
+    await execFileAsync('mkfifo', [fifoPath]);
+    const store = new ProjectAssetStore(projectDirectory);
+    const planPromise = store.planLegacyCaseMigration();
+    const releasePendingFifoRead = new Promise<void>((resolve) => {
+      setTimeout(() => {
+        void fs.open(fifoPath, fsConstants.O_RDWR | fsConstants.O_NONBLOCK)
+          .then((handle) => handle.close())
+          .catch(() => undefined)
+          .finally(resolve);
+      }, 100);
+    });
+
+    try {
+      await expect(Promise.race([
+        planPromise,
+        new Promise<never>((_resolve, reject) => setTimeout(() => reject(new Error('source revision attempted to read FIFO')), 50)),
+      ])).resolves.toMatchObject({
+        status: 'blocked',
+        issues: expect.arrayContaining([
+          expect.objectContaining({ path: 'unmanaged.fifo', message: expect.stringContaining('普通文件') }),
+        ]),
+      });
+    } finally {
+      await releasePendingFifoRead;
+      await planPromise.catch(() => undefined);
+    }
+  });
+
+  it('rejects a legacy cases directory swapped to a symlink after validation', async () => {
+    const rootDirectory = await createTemporaryDirectory();
+    const projectDirectory = path.join(rootDirectory, 'legacy-project');
+    await writeLegacyCaseProject(projectDirectory);
+    const externalCasesDirectory = path.join(rootDirectory, 'outside-cases');
+    let swapped = false;
+    const store = new ProjectAssetStore(projectDirectory, {
+      rename: fs.rename,
+      afterProjectAssetPathValidation: async (_rootDirectory: string, relativePath: string) => {
+        if (!swapped && relativePath === 'cases/case%2Fcheckout.json') {
+          swapped = true;
+          await fs.rename(path.join(projectDirectory, 'cases'), externalCasesDirectory);
+          await fs.symlink(externalCasesDirectory, path.join(projectDirectory, 'cases'), 'dir');
+        }
+      },
+    });
+
+    await expect(store.planLegacyCaseMigration()).resolves.toMatchObject({
+      status: 'blocked',
+      issues: expect.arrayContaining([
+        expect.objectContaining({ path: 'cases', message: expect.stringContaining('拒绝符号链接') }),
+      ]),
+    });
+    expect(swapped).toBe(true);
+  });
+
+  it('blocks a legacy Case directory symlink before resolving child assets', async () => {
+    const rootDirectory = await createTemporaryDirectory();
+    const projectDirectory = path.join(rootDirectory, 'legacy-project');
+    await writeLegacyCaseProject(projectDirectory);
+    const externalCasesDirectory = path.join(rootDirectory, 'outside-cases');
+    await fs.rename(path.join(projectDirectory, 'cases'), externalCasesDirectory);
+    await fs.symlink(externalCasesDirectory, path.join(projectDirectory, 'cases'), 'dir');
+    const store = new ProjectAssetStore(projectDirectory);
+    const before = await readDirectorySnapshot(projectDirectory);
+
+    await expect(store.planLegacyCaseMigration()).resolves.toMatchObject({
+      status: 'blocked',
+      issues: expect.arrayContaining([
+        expect.objectContaining({ path: 'cases', message: expect.stringContaining('拒绝符号链接') }),
+      ]),
+    });
+    await expect(store.confirmLegacyCaseMigration(await store.planLegacyCaseMigration())).rejects.toBeInstanceOf(ProjectAssetStoreError);
+    await expect(readDirectorySnapshot(projectDirectory)).resolves.toEqual(before);
+  });
+
+  it('rejects a symlinked declared backup file during v2 load and save', async () => {
+    const rootDirectory = await createTemporaryDirectory();
+    const projectDirectory = path.join(rootDirectory, 'legacy-project');
+    await writeLegacyCaseProject(projectDirectory);
+    const store = new ProjectAssetStore(projectDirectory);
+    const preview = await store.planLegacyCaseMigration();
+    await store.confirmLegacyCaseMigration(preview);
+    const current = await store.loadWithRevision();
+    const backupCasePath = path.join(projectDirectory, preview.backupDirectory!, 'cases', 'case%2Fcheckout.json');
+    await fs.rm(backupCasePath);
+    await fs.symlink(path.join(rootDirectory, 'outside-project.json'), backupCasePath);
+
+    await expect(store.loadWithRevision()).rejects.toMatchObject({
+      issues: expect.arrayContaining([expect.objectContaining({ path: expect.stringContaining('migration-backup/') })]),
+    });
+    await expect(store.save({ ...current.project, name: '不应保存' }, current.revision)).rejects.toBeInstanceOf(ProjectAssetStoreError);
+  });
+
+  it('rejects a symlinked declared backup cases directory during v2 load and save', async () => {
+    const rootDirectory = await createTemporaryDirectory();
+    const projectDirectory = path.join(rootDirectory, 'legacy-project');
+    await writeLegacyCaseProject(projectDirectory);
+    const store = new ProjectAssetStore(projectDirectory);
+    const preview = await store.planLegacyCaseMigration();
+    await store.confirmLegacyCaseMigration(preview);
+    const current = await store.loadWithRevision();
+    const backupDirectory = path.join(projectDirectory, preview.backupDirectory!);
+    const externalCasesDirectory = path.join(rootDirectory, 'outside-backup-cases');
+    await fs.rename(path.join(backupDirectory, 'cases'), externalCasesDirectory);
+    await fs.symlink(externalCasesDirectory, path.join(backupDirectory, 'cases'), 'dir');
+
+    await expect(store.loadWithRevision()).rejects.toMatchObject({
+      issues: expect.arrayContaining([
+        expect.objectContaining({
+          path: `${preview.backupDirectory}/cases`,
+          message: expect.stringContaining('拒绝符号链接'),
+        }),
+      ]),
+    });
+    await expect(store.save({ ...current.project, name: '不应保存' }, current.revision)).rejects.toBeInstanceOf(ProjectAssetStoreError);
+  });
+
+  it('rejects a backup cases directory swapped to a symlink after validation', async () => {
+    const rootDirectory = await createTemporaryDirectory();
+    const projectDirectory = path.join(rootDirectory, 'legacy-project');
+    await writeLegacyCaseProject(projectDirectory);
+    const setupStore = new ProjectAssetStore(projectDirectory);
+    const preview = await setupStore.planLegacyCaseMigration();
+    await setupStore.confirmLegacyCaseMigration(preview);
+    const externalCasesDirectory = path.join(rootDirectory, 'outside-backup-cases');
+    let swapped = false;
+    const store = new ProjectAssetStore(projectDirectory, {
+      rename: fs.rename,
+      afterProjectAssetPathValidation: async (_rootDirectory: string, relativePath: string) => {
+        if (!swapped && relativePath === `${preview.backupDirectory}/cases/case%2Fcheckout.json`) {
+          swapped = true;
+          const backupCasesDirectory = path.join(projectDirectory, preview.backupDirectory!, 'cases');
+          await fs.rename(backupCasesDirectory, externalCasesDirectory);
+          await fs.symlink(externalCasesDirectory, backupCasesDirectory, 'dir');
+        }
+      },
+    });
+
+    await expect(store.loadWithRevision()).rejects.toMatchObject({
+      issues: expect.arrayContaining([
+        expect.objectContaining({
+          path: `${preview.backupDirectory}/cases`,
+          message: expect.stringContaining('拒绝符号链接'),
+        }),
+      ]),
+    });
+    expect(swapped).toBe(true);
+  });
+
+  it('rejects a child symlink in a directory-only declared backup during planning and load', async () => {
+    const rootDirectory = await createTemporaryDirectory();
+    const projectDirectory = path.join(rootDirectory, 'legacy-project');
+    await writeLegacyCaseProject(projectDirectory);
+    const store = new ProjectAssetStore(projectDirectory);
+    const preview = await store.planLegacyCaseMigration();
+    await store.confirmLegacyCaseMigration(preview);
+    const manifestPath = path.join(projectDirectory, 'project.json');
+    const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8')) as Record<string, unknown>;
+    delete manifest.legacyCaseBackupFiles;
+    await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+    const backupCasePath = path.join(projectDirectory, preview.backupDirectory!, 'cases', 'case%2Fcheckout.json');
+    const externalCasePath = path.join(rootDirectory, 'outside-backup-case.json');
+    await fs.rename(backupCasePath, externalCasePath);
+    await fs.symlink(externalCasePath, backupCasePath);
+
+    const expectedIssue = expect.objectContaining({
+      path: `${preview.backupDirectory}/cases/case%2Fcheckout.json`,
+      message: expect.stringContaining('拒绝符号链接'),
+    });
+    await expect(store.planLegacyCaseMigration()).resolves.toMatchObject({
+      status: 'blocked',
+      issues: expect.arrayContaining([expectedIssue]),
+    });
+    await expect(store.loadWithRevision()).rejects.toMatchObject({
+      issues: expect.arrayContaining([expectedIssue]),
+    });
+  });
+
+  it('rejects a modified declared backup file during v2 load and save', async () => {
+    const rootDirectory = await createTemporaryDirectory();
+    const projectDirectory = path.join(rootDirectory, 'legacy-project');
+    await writeLegacyCaseProject(projectDirectory);
+    const store = new ProjectAssetStore(projectDirectory);
+    const preview = await store.planLegacyCaseMigration();
+    await store.confirmLegacyCaseMigration(preview);
+    const current = await store.loadWithRevision();
+    const backupCasePath = path.join(projectDirectory, preview.backupDirectory!, 'cases', 'case%2Fcheckout.json');
+    await fs.writeFile(backupCasePath, `${await fs.readFile(backupCasePath, 'utf8')}\n`, 'utf8');
+
+    await expect(store.loadWithRevision()).rejects.toMatchObject({
+      issues: expect.arrayContaining([expect.objectContaining({ path: expect.stringContaining('migration-backup/') })]),
+    });
+    await expect(store.save({ ...current.project, name: '不应保存' }, current.revision)).rejects.toBeInstanceOf(ProjectAssetStoreError);
+  });
+
+  it('migrates an empty legacy Case collection and creates its declared backup hierarchy', async () => {
+    const rootDirectory = await createTemporaryDirectory();
+    const projectDirectory = path.join(rootDirectory, 'legacy-project');
+    await writeLegacyCaseProject(projectDirectory, { emptyCases: true });
+    const store = new ProjectAssetStore(projectDirectory);
+    const preview = await store.planLegacyCaseMigration();
+
+    await store.confirmLegacyCaseMigration(preview);
+
+    await expect(new ProjectAssetStore(projectDirectory).loadWithRevision()).resolves.toMatchObject({
+      project: { testCases: [] },
+    });
+    expect((await fs.stat(path.join(projectDirectory, preview.backupDirectory!, 'cases'))).isDirectory()).toBe(true);
+  });
+
+  it('blocks a legacy Case migration when its exact v2 target already exists without mutation', async () => {
+    const rootDirectory = await createTemporaryDirectory();
+    const projectDirectory = path.join(rootDirectory, 'legacy-project');
+    await writeLegacyCaseProject(projectDirectory);
+    const legacyCasePath = path.join(projectDirectory, 'cases', 'case%2Fcheckout.json');
+    await fs.copyFile(legacyCasePath, path.join(projectDirectory, 'cases', 'case%2Fcheckout@1.json'));
+    const store = new ProjectAssetStore(projectDirectory);
+    const before = await readDirectorySnapshot(projectDirectory);
+
+    const preview = await store.planLegacyCaseMigration();
+
+    expect(preview).toMatchObject({
+      status: 'blocked',
+      issues: expect.arrayContaining([expect.objectContaining({ path: 'cases/case%2Fcheckout@1.json' })]),
+    });
+    await expect(store.confirmLegacyCaseMigration(preview)).rejects.toBeInstanceOf(ProjectAssetStoreError);
+    await expect(readDirectorySnapshot(projectDirectory)).resolves.toEqual(before);
+  });
+
+  it('blocks unmanaged legacy directory entries instead of replacing and deleting them', async () => {
+    const rootDirectory = await createTemporaryDirectory();
+    const projectDirectory = path.join(rootDirectory, 'legacy-project');
+    await writeLegacyCaseProject(projectDirectory);
+    await fs.writeFile(path.join(projectDirectory, 'README.md'), '# Preserve me\n', 'utf8');
+    const store = new ProjectAssetStore(projectDirectory);
+    const before = await readDirectorySnapshot(projectDirectory);
+
+    const preview = await store.planLegacyCaseMigration();
+
+    expect(preview).toMatchObject({
+      status: 'blocked',
+      issues: expect.arrayContaining([expect.objectContaining({ path: 'README.md' })]),
+    });
+    await expect(store.confirmLegacyCaseMigration(preview)).rejects.toBeInstanceOf(ProjectAssetStoreError);
+    await expect(readDirectorySnapshot(projectDirectory)).resolves.toEqual(before);
+  });
+
+  it('returns a blocked plan for a malformed legacy manifest without writing', async () => {
+    const rootDirectory = await createTemporaryDirectory();
+    const projectDirectory = path.join(rootDirectory, 'legacy-project');
+    await writeLegacyCaseProject(projectDirectory);
+    const manifestPath = path.join(projectDirectory, 'project.json');
+    const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8')) as { assetIds: { cases: string[] } };
+    manifest.assetIds.cases = ['case/checkout', 'case/checkout'];
+    await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+    const store = new ProjectAssetStore(projectDirectory);
+    const before = await readDirectorySnapshot(projectDirectory);
+
+    await expect(store.planLegacyCaseMigration()).resolves.toMatchObject({
+      status: 'blocked',
+      issues: expect.arrayContaining([expect.objectContaining({ path: 'project.json.assetIds.cases' })]),
+    });
+    await expect(readDirectorySnapshot(projectDirectory)).resolves.toEqual(before);
+  });
+
+  it.each([
+    ['invalid JSON', async (manifestPath: string) => { await fs.writeFile(manifestPath, '{\n', 'utf8'); }],
+    ['a blank project ID', async (manifestPath: string) => {
+      const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8')) as { id: string };
+      manifest.id = '   ';
+      await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+    }],
+  ])('returns a blocked preview for a legacy manifest with %s', async (_label, mutate) => {
+    const rootDirectory = await createTemporaryDirectory();
+    const projectDirectory = path.join(rootDirectory, 'legacy-project');
+    await writeLegacyCaseProject(projectDirectory);
+    const manifestPath = path.join(projectDirectory, 'project.json');
+    await mutate(manifestPath);
+    const store = new ProjectAssetStore(projectDirectory);
+    const before = await readDirectorySnapshot(projectDirectory);
+
+    await expect(store.planLegacyCaseMigration()).resolves.toMatchObject({
+      status: 'blocked',
+      issues: expect.any(Array),
+      conflicts: expect.any(Array),
+    });
+    await expect(store.confirmLegacyCaseMigration(await store.planLegacyCaseMigration())).rejects.toBeInstanceOf(ProjectAssetStoreError);
+    await expect(readDirectorySnapshot(projectDirectory)).resolves.toEqual(before);
+  });
+
+  it('returns a blocked plan for a legacy Case whose embedded ID disagrees with the manifest', async () => {
+    const rootDirectory = await createTemporaryDirectory();
+    const projectDirectory = path.join(rootDirectory, 'legacy-project');
+    await writeLegacyCaseProject(projectDirectory);
+    const casePath = path.join(projectDirectory, 'cases', 'case%2Fcheckout.json');
+    const testCase = JSON.parse(await fs.readFile(casePath, 'utf8')) as { id: string };
+    testCase.id = 'case/other';
+    await fs.writeFile(casePath, `${JSON.stringify(testCase, null, 2)}\n`, 'utf8');
+    const store = new ProjectAssetStore(projectDirectory);
+    const before = await readDirectorySnapshot(projectDirectory);
+
+    await expect(store.planLegacyCaseMigration()).resolves.toMatchObject({
+      status: 'blocked',
+      issues: expect.arrayContaining([expect.objectContaining({ path: 'cases/case%2Fcheckout.json' })]),
+    });
+    await expect(readDirectorySnapshot(projectDirectory)).resolves.toEqual(before);
+  });
+
+  it('is idempotent after a legacy Case migration and does not create another version or backup', async () => {
+    const rootDirectory = await createTemporaryDirectory();
+    const projectDirectory = path.join(rootDirectory, 'legacy-project');
+    await writeLegacyCaseProject(projectDirectory);
+    const store = new ProjectAssetStore(projectDirectory);
+    const firstPreview = await store.planLegacyCaseMigration();
+    await store.confirmLegacyCaseMigration(firstPreview);
+    const before = await readDirectorySnapshot(projectDirectory);
+
+    const repeatedPreview = await store.planLegacyCaseMigration();
+    await store.confirmLegacyCaseMigration(repeatedPreview);
+
+    expect(repeatedPreview).toMatchObject({ status: 'alreadyMigrated' });
+    await expect(fs.stat(path.join(projectDirectory, 'cases', 'case%2Fcheckout@2.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(fs.readdir(path.join(projectDirectory, 'migration-backup'))).resolves.toEqual([firstPreview.migrationId]);
+    await expect(readDirectorySnapshot(projectDirectory)).resolves.toEqual(before);
+  });
+
+  it('retains the declared legacy Case backup during normal v2 saves', async () => {
+    const rootDirectory = await createTemporaryDirectory();
+    const projectDirectory = path.join(rootDirectory, 'legacy-project');
+    await writeLegacyCaseProject(projectDirectory);
+    const store = new ProjectAssetStore(projectDirectory);
+    const preview = await store.planLegacyCaseMigration();
+    await store.confirmLegacyCaseMigration(preview);
+    const beforeBackup = await readDirectorySnapshot(path.join(projectDirectory, preview.backupDirectory!));
+    const current = await store.loadWithRevision();
+
+    await store.save({ ...current.project, name: '迁移后的正常更新' }, current.revision);
+
+    const manifest = JSON.parse(await fs.readFile(path.join(projectDirectory, 'project.json'), 'utf8')) as {
+      legacyCaseBackupDirectory?: string;
+    };
+    expect(manifest.legacyCaseBackupDirectory).toBe(preview.backupDirectory);
+    await expect(readDirectorySnapshot(path.join(projectDirectory, preview.backupDirectory!))).resolves.toEqual(beforeBackup);
+    await expect(store.load()).resolves.toMatchObject({ name: '迁移后的正常更新' });
+  });
+
+  it('keeps an immutable legacy backup inventory valid when later saves add and remove Cases', async () => {
+    const rootDirectory = await createTemporaryDirectory();
+    const projectDirectory = path.join(rootDirectory, 'legacy-project');
+    await writeLegacyCaseProject(projectDirectory);
+    const store = new ProjectAssetStore(projectDirectory);
+    const preview = await store.planLegacyCaseMigration();
+    await store.confirmLegacyCaseMigration(preview);
+    const backupBeforeChanges = await readDirectorySnapshot(path.join(projectDirectory, preview.backupDirectory!));
+    const first = await store.loadWithRevision();
+    const addedCase = {
+      ...first.project.testCases[0]!,
+      id: 'case/added-later',
+      name: '迁移后新增用例',
+    };
+
+    await store.save({ ...first.project, testCases: [...first.project.testCases, addedCase] }, first.revision);
+    const afterAddition = await new ProjectAssetStore(projectDirectory).loadWithRevision();
+    await store.save({ ...afterAddition.project, testCases: [] }, afterAddition.revision);
+
+    await expect(new ProjectAssetStore(projectDirectory).loadWithRevision()).resolves.toMatchObject({
+      project: { testCases: [] },
+    });
+    await expect(readDirectorySnapshot(path.join(projectDirectory, preview.backupDirectory!))).resolves.toEqual(backupBeforeChanges);
+  });
+
+  it('loads the previous backup declaration and upgrades it with an immutable inventory on save', async () => {
+    const rootDirectory = await createTemporaryDirectory();
+    const projectDirectory = path.join(rootDirectory, 'legacy-project');
+    await writeLegacyCaseProject(projectDirectory);
+    const store = new ProjectAssetStore(projectDirectory);
+    const preview = await store.planLegacyCaseMigration();
+    await store.confirmLegacyCaseMigration(preview);
+    const manifestPath = path.join(projectDirectory, 'project.json');
+    const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8')) as {
+      legacyCaseBackupDirectory?: string;
+      legacyCaseBackupFiles?: Array<{ path: string; contentHash: string }>;
+    };
+    delete manifest.legacyCaseBackupFiles;
+    await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+
+    const legacyDeclaration = await new ProjectAssetStore(projectDirectory).loadWithRevision();
+    await store.save({ ...legacyDeclaration.project, name: '升级历史备份清单' }, legacyDeclaration.revision);
+
+    await expect(new ProjectAssetStore(projectDirectory).loadWithRevision()).resolves.toMatchObject({
+      project: { name: '升级历史备份清单' },
+    });
+    const upgradedManifest = JSON.parse(await fs.readFile(manifestPath, 'utf8')) as {
+      legacyCaseBackupDirectory?: string;
+      legacyCaseBackupFiles?: string[];
+    };
+    expect(upgradedManifest).toMatchObject({
+      legacyCaseBackupDirectory: preview.backupDirectory,
+      legacyCaseBackupFiles: [{
+        path: 'cases/case%2Fcheckout.json',
+        contentHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+      }],
+    });
+  });
+
+  it('loads the previous string backup inventory and upgrades it with content hashes on save', async () => {
+    const rootDirectory = await createTemporaryDirectory();
+    const projectDirectory = path.join(rootDirectory, 'legacy-project');
+    await writeLegacyCaseProject(projectDirectory);
+    const store = new ProjectAssetStore(projectDirectory);
+    const preview = await store.planLegacyCaseMigration();
+    await store.confirmLegacyCaseMigration(preview);
+    const manifestPath = path.join(projectDirectory, 'project.json');
+    const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8')) as Record<string, unknown>;
+    manifest.legacyCaseBackupFiles = ['cases/case%2Fcheckout.json'];
+    await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+
+    const legacyDeclaration = await new ProjectAssetStore(projectDirectory).loadWithRevision();
+    await store.save({ ...legacyDeclaration.project, name: '升级历史字符串备份清单' }, legacyDeclaration.revision);
+
+    const upgradedManifest = JSON.parse(await fs.readFile(manifestPath, 'utf8')) as {
+      legacyCaseBackupFiles?: Array<{ path: string; contentHash: string }>;
+    };
+    expect(upgradedManifest.legacyCaseBackupFiles).toEqual([{
+      path: 'cases/case%2Fcheckout.json',
+      contentHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+    }]);
+  });
+
+  it.each([
+    ['an unsupported schema version', (testCase: Record<string, unknown>) => { testCase.schemaVersion = 99; }],
+    ['missing steps', (testCase: Record<string, unknown>) => { delete testCase.steps; }],
+    ['non-array steps', (testCase: Record<string, unknown>) => { testCase.steps = {}; }],
+    ['an unsafe integer version', (testCase: Record<string, unknown>) => { testCase.version = Number.MAX_SAFE_INTEGER + 1; }],
+  ])('returns a blocked plan for a legacy Case with %s', async (_label, mutate) => {
+    const rootDirectory = await createTemporaryDirectory();
+    const projectDirectory = path.join(rootDirectory, 'legacy-project');
+    await writeLegacyCaseProject(projectDirectory);
+    const casePath = path.join(projectDirectory, 'cases', 'case%2Fcheckout.json');
+    const testCase = JSON.parse(await fs.readFile(casePath, 'utf8')) as Record<string, unknown>;
+    mutate(testCase);
+    await fs.writeFile(casePath, `${JSON.stringify(testCase, null, 2)}\n`, 'utf8');
+    const store = new ProjectAssetStore(projectDirectory);
+    const before = await readDirectorySnapshot(projectDirectory);
+
+    await expect(store.planLegacyCaseMigration()).resolves.toMatchObject({
+      status: 'blocked',
+      issues: expect.arrayContaining([expect.objectContaining({ path: 'cases/case%2Fcheckout.json' })]),
+    });
+    await expect(store.confirmLegacyCaseMigration(await store.planLegacyCaseMigration())).rejects.toBeInstanceOf(ProjectAssetStoreError);
+    await expect(readDirectorySnapshot(projectDirectory)).resolves.toEqual(before);
+  });
+
+  it('rolls back a legacy migration when the displaced source changes after its first validation', async () => {
+    const rootDirectory = await createTemporaryDirectory();
+    const projectDirectory = path.join(rootDirectory, 'legacy-project');
+    await writeLegacyCaseProject(projectDirectory);
+    const preview = await new ProjectAssetStore(projectDirectory).planLegacyCaseMigration();
+    let displacedSnapshot: Record<string, string> | undefined;
+    const store = new ProjectAssetStore(projectDirectory, {
+      rename: fs.rename,
+      afterDisplacedTargetValidation: async (directory) => {
+        const manifestPath = path.join(directory, 'project.json');
+        await fs.writeFile(manifestPath, `${await fs.readFile(manifestPath, 'utf8')}\n`, 'utf8');
+        displacedSnapshot = await readDirectorySnapshot(directory);
+      },
+    });
+
+    await expect(store.confirmLegacyCaseMigration(preview)).rejects.toMatchObject({
+      name: 'ProjectAssetStoreError',
+      message: expect.stringContaining('变化'),
+    });
+
+    expect(displacedSnapshot).toBeDefined();
+    await expect(readDirectorySnapshot(projectDirectory)).resolves.toEqual(displacedSnapshot);
+    await expect(new ProjectAssetStore(projectDirectory).loadWithRevision()).resolves.toMatchObject({
+      project: { testCases: [expect.objectContaining({ id: 'case/checkout' })] },
+    });
   });
 
   it('loads a pre-fixture-and-suite snapshot whose manifest has no newer asset collections', async () => {
@@ -718,12 +1277,41 @@ async function readDirectorySnapshot(directory: string): Promise<Record<string, 
         await visit(relativePath);
         return;
       }
+      if (entry.isSymbolicLink()) {
+        files.push([relativePath, `symlink:${await fs.readlink(path.join(directory, relativePath))}`]);
+        return;
+      }
       files.push([relativePath, await fs.readFile(path.join(directory, relativePath), 'utf8')]);
     }));
   }
 
   await visit('');
   return Object.fromEntries(files.sort(([left], [right]) => left.localeCompare(right)));
+}
+
+/** Converts the current v2 fixture into the on-disk layout written by schema v1. */
+async function writeLegacyCaseProject(
+  projectDirectory: string,
+  options: { emptyCases?: boolean } = {},
+): Promise<void> {
+  const store = new ProjectAssetStore(projectDirectory);
+  await store.saveInitial(createAssetProject());
+  const manifestPath = path.join(projectDirectory, 'project.json');
+  const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8')) as {
+    schemaVersion: number;
+    revision?: string;
+    assetIds: { cases: unknown };
+  };
+  manifest.schemaVersion = 1;
+  manifest.assetIds.cases = options.emptyCases ? [] : ['case/checkout'];
+  delete manifest.revision;
+  await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+  const v2CasePath = path.join(projectDirectory, 'cases', 'case%2Fcheckout@1.json');
+  if (options.emptyCases) {
+    await fs.rm(v2CasePath);
+  } else {
+    await fs.rename(v2CasePath, path.join(projectDirectory, 'cases', 'case%2Fcheckout.json'));
+  }
 }
 
 function createAssetProject(): ProjectDraft {
