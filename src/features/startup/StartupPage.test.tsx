@@ -27,6 +27,7 @@ describe('StartupPage', () => {
     expect(screen.getByRole('banner', { name: 'TestBuddy' })).toContainElement(
       screen.getByRole('img', { name: 'TestBuddy' }),
     );
+    expect(screen.getByRole('banner', { name: 'TestBuddy' }).parentElement).toHaveClass('startup-shell');
     expect(screen.getByRole('img', { name: 'TestBuddy' })).toHaveAttribute('src', brandLogo);
     expect(screen.getAllByText('配置 MidScene').length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText('进入工作台')).toBeInTheDocument();
@@ -86,12 +87,14 @@ describe('StartupPage', () => {
       styles.indexOf('/* First-run configuration follows the same shell as the Figma onboarding view. */'),
       styles.indexOf('/* Page-specific structure sourced from the Figma workbench screens. */'),
     );
+    const mobileStartupStyles = startupStyles.slice(startupStyles.indexOf('@media (max-width: 760px)'));
 
     expect(startupStyles).toContain('grid-template-columns: minmax(0, 1fr);');
     expect(startupStyles).toContain('grid-template-rows: 72px minmax(0, 1fr) 32px;');
     expect(startupStyles).toContain('.startup-header {');
+    expect(startupStyles).toContain('.startup-header .home-start-step {');
     expect(startupStyles).not.toContain('grid-template-columns: 224px minmax(0, 1fr);');
-    expect(startupStyles).toContain('gap: 6px;');
-    expect(startupStyles).toContain('white-space: nowrap;');
+    expect(mobileStartupStyles).toMatch(/\.startup-step-list\s*\{[^}]*grid-template-columns:\s*1fr;/);
+    expect(mobileStartupStyles).toMatch(/\.startup-help-link\s*\{[^}]*grid-column:\s*2;[^}]*grid-row:\s*1;/);
   });
 });

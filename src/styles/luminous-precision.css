@@ -2550,7 +2550,7 @@ a.motion-surface:hover,
   gap: 16px;
 }
 
-.startup-main .home-start-step {
+.startup-header .home-start-step {
   min-width: 0;
   min-height: 36px;
   border-radius: 0;
@@ -2559,28 +2559,28 @@ a.motion-surface:hover,
   box-shadow: none;
 }
 
-.startup-main .home-start-step::after {
+.startup-header .home-start-step::after {
   inset: 18px -8px auto auto;
   width: 8px;
   height: 1px;
   background: var(--panel-border);
 }
 
-.startup-main .home-start-step:last-child::after {
+.startup-header .home-start-step:last-child::after {
   content: none;
 }
 
-.startup-main .home-start-step.is-active {
+.startup-header .home-start-step.is-active {
   background: transparent;
   color: var(--primary);
 }
 
-.startup-main .home-start-step.is-active::after,
-.startup-main .home-start-step.is-done::after {
+.startup-header .home-start-step.is-active::after,
+.startup-header .home-start-step.is-done::after {
   background: var(--panel-border);
 }
 
-.startup-main .home-start-step-index {
+.startup-header .home-start-step-index {
   width: 28px;
   height: 28px;
   border: 1px solid var(--outline-variant);
@@ -2589,19 +2589,19 @@ a.motion-surface:hover,
   color: var(--muted-foreground);
 }
 
-.startup-main .home-start-step.is-active .home-start-step-index,
-.startup-main .home-start-step.is-done .home-start-step-index {
+.startup-header .home-start-step.is-active .home-start-step-index,
+.startup-header .home-start-step.is-done .home-start-step-index {
   border-color: var(--primary);
   background: var(--primary);
   color: var(--primary-foreground);
 }
 
-.startup-main .home-start-step-title {
+.startup-header .home-start-step-title {
   font-size: var(--font-size-control);
   line-height: 17px;
 }
 
-.startup-main .home-start-step-status {
+.startup-header .home-start-step-status {
   color: var(--muted-foreground);
   font-size: var(--font-size-meta);
   line-height: 14px;
@@ -2739,29 +2739,35 @@ a.motion-surface:hover,
     padding: 12px 16px;
   }
 
+  .startup-help-link {
+    grid-column: 2;
+    grid-row: 1;
+    justify-self: end;
+  }
+
   .startup-step-list {
     grid-column: 1 / -1;
+    grid-template-columns: 1fr;
     gap: 6px;
   }
 
-  .startup-main .home-start-step {
+  .startup-header .home-start-step {
     min-height: 44px;
     gap: 6px;
     padding: 4px 2px 4px 0;
   }
 
-  .startup-main .home-start-step::after {
-    inset: 18px -5px auto auto;
-    width: 5px;
+  .startup-header .home-start-step::after {
+    content: none;
   }
 
-  .startup-main .home-start-step-title {
+  .startup-header .home-start-step-title {
     font-size: 11px;
     line-height: 15px;
     white-space: nowrap;
   }
 
-  .startup-main .home-start-step-status {
+  .startup-header .home-start-step-status {
     font-size: 10px;
     line-height: 14px;
     white-space: nowrap;
