@@ -16,6 +16,24 @@ describe('BrowserRuntime page access', () => {
     expect(runtime.hasRealPage()).toBe(false);
   });
 
+  it('captures a full-page PNG run artifact only from a real browser page', async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'playtest-browser-runtime-screenshot-'));
+    const runtime = new BrowserRuntime(rootDir, new ArtifactManager(rootDir));
+    const screenshot = vi.fn().mockResolvedValue(undefined);
+    (runtime as unknown as { page: { screenshot: typeof screenshot } }).page = { screenshot };
+
+    const artifact = await runtime.captureRunScreenshot('run-browser-evidence');
+
+    expect(artifact).toEqual(expect.objectContaining({
+      type: 'screenshot',
+      label: '运行起始截图',
+      path: expect.stringMatching(/run-browser-evidence-.+\.png$/),
+    }));
+    expect(screenshot).toHaveBeenCalledWith({ path: artifact?.path, fullPage: true });
+    (runtime as unknown as { page: null }).page = null;
+    await expect(runtime.captureRunScreenshot('run-without-page')).resolves.toBeNull();
+  });
+
   it('resolves a bound authentication state before loading Playwright and refuses an unavailable reference', async () => {
     const project = createEmptyProject(1);
     const environment = { ...project.environments[0]!, storageStateId: 'state-missing' };

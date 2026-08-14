@@ -748,6 +748,26 @@ export class BrowserRuntime {
     });
   }
 
+  /** Main-process-only run evidence; renderer callers receive only its artifact metadata. */
+  async captureRunScreenshot(runId: string): Promise<RunArtifact | null> {
+    if (!this.page) {
+      return null;
+    }
+
+    try {
+      const screenshotPath = await this.captureScreenshotPath(runId);
+      await this.page.screenshot({ path: screenshotPath, fullPage: true });
+      return {
+        id: `artifact-${runId}-screenshot`,
+        type: 'screenshot',
+        label: '运行起始截图',
+        path: screenshotPath,
+      };
+    } catch {
+      return null;
+    }
+  }
+
   /** Main-process-only snapshot of the authenticated context, never sent to the renderer. */
   async captureStorageState(projectId: string): Promise<string> {
     if (!this.context || this.state.status !== 'ready' || this.state.projectId !== projectId) {
@@ -1742,10 +1762,7 @@ const recorderScript = String.raw`
 
 async function loadPlaywright(): Promise<PlaywrightModule | null> {
   try {
-    const dynamicImport = new Function('specifier', 'return import(specifier)') as (
-      specifier: string,
-    ) => Promise<PlaywrightModule>;
-    return await dynamicImport('playwright');
+    return (await import('playwright')) as unknown as PlaywrightModule;
   } catch {
     return null;
   }

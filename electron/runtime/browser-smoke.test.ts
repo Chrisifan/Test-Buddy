@@ -1,0 +1,212 @@
+import fs from 'node:fs/promises';
+import http from 'node:http';
+import os from 'node:os';
+import path from 'node:path';
+
+import { describe, expect, it } from 'vitest';
+
+import { createEmptyProject, createEmptySuiteAsset, createEmptyTestCase } from '../../shared/studio.js';
+import { createRuntimeBundle } from './runtime-bundle.js';
+
+describe('local browser runtime smoke', () => {
+  it('runs confirmed deterministic Case steps and stores a real page PNG', async () => {
+    const fixture = await startFixture();
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'testbuddy-browser-smoke-'));
+    const bundle = createRuntimeBundle({
+      rootDir,
+      visualDiffImageAdapter: { read: async () => Buffer.alloc(0), write: async () => undefined },
+    });
+    const project = createEmptyProject(1);
+    const environment = {
+      ...project.environments[0]!,
+      url: fixture.url,
+      entryPath: '/',
+      browser: 'chromium' as const,
+      headless: true,
+    };
+    const testCase = {
+      ...createEmptyTestCase(1, project.groups[0]!.id, environment.id),
+      id: 'case-browser-smoke',
+      version: 1,
+      name: 'Browser smoke',
+      url: fixture.url,
+      steps: [
+        {
+          id: 'step-navigate',
+          type: 'ai' as const,
+          title: 'Open fixture',
+          body: 'Open the local fixture.',
+          execution: {
+            schemaVersion: 2 as const,
+            intent: 'Open the local fixture.',
+            reviewStatus: 'confirmed' as const,
+            actionRisk: 'low' as const,
+            action: { kind: 'navigate' as const, url: fixture.url },
+          },
+        },
+        {
+          id: 'step-click',
+          type: 'ai' as const,
+          title: 'Continue',
+          body: 'Click the continue button.',
+          execution: {
+            schemaVersion: 2 as const,
+            intent: 'Click the continue button.',
+            reviewStatus: 'confirmed' as const,
+            actionRisk: 'low' as const,
+            action: { kind: 'click' as const, locator: { selector: '#continue', quality: 'acceptable' as const } },
+          },
+        },
+        {
+          id: 'step-assert',
+          type: 'aiAssert' as const,
+          title: 'Fixture is ready',
+          body: 'Assert that the fixture says ready.',
+          execution: {
+            schemaVersion: 2 as const,
+            intent: 'Assert that the fixture says ready.',
+            reviewStatus: 'confirmed' as const,
+            actionRisk: 'low' as const,
+            assertion: { id: 'assert-ready', version: 1 as const, kind: 'pageContains' as const, expected: 'ready' },
+          },
+        },
+      ],
+    };
+
+    try {
+      const response = await bundle.runTestCase({
+        runId: 'browser-smoke-run',
+        project: { ...project, environments: [environment], testCases: [testCase] },
+        environment,
+        testCase,
+      });
+
+      expect(response.detail.status, JSON.stringify({
+        summary: response.detail.summary,
+        steps: response.detail.steps,
+        browser: bundle.browserRuntime.getState(),
+      })).toBe('passed');
+      expect(response.detail.steps.map((step) => step.status)).toEqual(['passed', 'passed', 'passed']);
+      await expect(bundle.browserRuntime.getPage()?.evaluate(() => document.body.dataset.continued)).resolves.toBe('yes');
+
+      const screenshot = response.detail.artifacts.find((artifact) => artifact.type === 'screenshot');
+      expect(screenshot).toBeDefined();
+      const png = await fs.readFile(screenshot!.path);
+      expect(png.byteLength).toBeGreaterThan(0);
+      expect(png.subarray(0, 8)).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+    } finally {
+      await bundle.close();
+      await fixture.close();
+      await fs.rm(rootDir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not start a second Case browser session after parent Suite cancellation', async () => {
+    const fixture = await startFixture();
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'testbuddy-browser-suite-cancel-'));
+    const bundle = createRuntimeBundle({
+      rootDir,
+      visualDiffImageAdapter: { read: async () => Buffer.alloc(0), write: async () => undefined },
+    });
+    const project = createEmptyProject(1);
+    const environment = {
+      ...project.environments[0]!,
+      url: fixture.url,
+      entryPath: '/',
+      browser: 'chromium' as const,
+      headless: true,
+    };
+    const first = browserStartCase(project, environment, 'case-browser-cancel-first', 1);
+    const second = browserStartCase(project, environment, 'case-browser-cancel-second', 2);
+    const suite = {
+      ...createEmptySuiteAsset(project, 1),
+      id: 'suite-browser-cancel',
+      environmentId: environment.id,
+      caseReferences: [
+        { id: first.id, version: first.version!, dependsOn: [] },
+        { id: second.id, version: second.version!, dependsOn: [] },
+      ],
+      execution: { concurrency: 1, failurePolicy: 'continue' as const, retryLimit: 0 },
+    };
+    const controller = new AbortController();
+    const originalStart = bundle.browserRuntime.start.bind(bundle.browserRuntime);
+    let starts = 0;
+    bundle.browserRuntime.start = async (request) => {
+      starts += 1;
+      const session = await originalStart(request);
+      controller.abort();
+      return session;
+    };
+
+    try {
+      const response = await bundle.runSuite({
+        runId: 'suite-browser-cancel-run',
+        cancellationSignal: controller.signal,
+        project: { ...project, environments: [environment], testCases: [first, second], suites: [suite] },
+        suite: { id: suite.id, version: suite.version },
+      });
+
+      expect(starts).toBe(1);
+      expect(response.detail.suite.status).toBe('neutral');
+      expect(response.detail.suite.results).toEqual([
+        expect.objectContaining({ testCaseId: first.id, status: 'neutral' }),
+        expect.objectContaining({ testCaseId: second.id, status: 'neutral', attempts: 0 }),
+      ]);
+    } finally {
+      await bundle.close();
+      await fixture.close();
+      await fs.rm(rootDir, { recursive: true, force: true });
+    }
+  });
+});
+
+function browserStartCase(
+  project: ReturnType<typeof createEmptyProject>,
+  environment: ReturnType<typeof createEmptyProject>['environments'][number],
+  id: string,
+  seed: number,
+) {
+  return {
+    ...createEmptyTestCase(seed, project.groups[0]!.id, environment.id),
+    id,
+    version: 1,
+    name: id,
+    url: environment.url,
+    steps: [
+      {
+        id: `${id}-navigate`,
+        type: 'ai' as const,
+        title: 'Open fixture',
+        body: 'Open the local fixture.',
+        execution: {
+          schemaVersion: 2 as const,
+          intent: 'Open the local fixture.',
+          reviewStatus: 'confirmed' as const,
+          actionRisk: 'low' as const,
+          action: { kind: 'navigate' as const, url: environment.url },
+        },
+      },
+    ],
+  };
+}
+
+async function startFixture(): Promise<{ url: string; close: () => Promise<void> }> {
+  const server = http.createServer((_request, response) => {
+    response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+    response.end(`<!doctype html>
+<html><head><title>Fixture</title></head>
+<body><button id="continue" onclick="document.body.dataset.continued = 'yes'">Continue</button><p>ready</p></body></html>`);
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const address = server.address();
+  if (!address || typeof address === 'string') {
+    throw new Error('Fixture server did not bind to TCP.');
+  }
+  return {
+    url: `http://127.0.0.1:${address.port}`,
+    close: () => new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())),
+  };
+}

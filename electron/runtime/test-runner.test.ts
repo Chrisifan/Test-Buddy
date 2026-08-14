@@ -72,6 +72,50 @@ function fixtureEvidence(
 }
 
 describe('TestRunner recording replay', () => {
+  it('uses a real browser screenshot after startup and labels the fallback a synthetic diagnostic', async () => {
+    const project = createProjectWithRecording();
+    const environment = project.environments[0]!;
+    const realScreenshot = { id: 'real-start', type: 'screenshot' as const, label: '运行起始截图', path: '/tmp/real-start.png' };
+    const browserRuntime = {
+      start: vi.fn().mockResolvedValue({
+        id: 'session-test', status: 'ready', projectId: project.id, environmentId: environment.id,
+        currentUrl: environment.url, pageTitle: project.name, message: 'ready', updatedAt: new Date(0).toISOString(),
+      }),
+      captureRunScreenshot: vi.fn().mockResolvedValue(realScreenshot),
+    };
+    const artifacts = { createSnapshot: vi.fn() };
+    const runner = new TestRunner(artifacts as never, browserRuntime as never, vi.fn());
+
+    const response = await runner.run({
+      project,
+      environment,
+      testCase: { ...project.testCases[0]!, steps: [] },
+    });
+
+    expect(browserRuntime.captureRunScreenshot).toHaveBeenCalledWith(expect.stringMatching(/^run-\d+$/));
+    expect(artifacts.createSnapshot).not.toHaveBeenCalled();
+    expect(response.detail.artifacts).toEqual([realScreenshot]);
+
+    browserRuntime.captureRunScreenshot.mockResolvedValueOnce(null);
+    artifacts.createSnapshot.mockResolvedValueOnce({ id: 'synthetic-start', type: 'screenshot', label: 'synthetic diagnostic', path: '/tmp/synthetic-start.svg' });
+    const fallback = await runner.run({
+      runId: 'run-synthetic-fallback',
+      project,
+      environment,
+      testCase: { ...project.testCases[0]!, steps: [] },
+    });
+
+    expect(artifacts.createSnapshot).toHaveBeenCalledWith(
+      'run-synthetic-fallback',
+      'synthetic diagnostic',
+      project.testCases[0]!.name,
+      environment.url,
+    );
+    expect(fallback.detail.artifacts).toEqual([
+      expect.objectContaining({ label: 'synthetic diagnostic', path: '/tmp/synthetic-start.svg' }),
+    ]);
+  });
+
   it('blocks unresolved fixture execution before opening a browser session', async () => {
     const project = createProjectWithRecording();
     const environment = project.environments[0]!;

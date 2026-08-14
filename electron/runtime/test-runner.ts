@@ -221,10 +221,14 @@ export class TestRunner {
           fixtureEvidence,
         );
       }
-      artifact = await awaitWithRunCancellation(
+      const browserArtifact = await awaitWithRunCancellation(
+        Promise.resolve(this.browserRuntime.captureRunScreenshot?.(runId)),
+        request.cancellationSignal,
+      );
+      artifact = browserArtifact ?? await awaitWithRunCancellation(
         this.artifacts.createSnapshot(
           runId,
-          '运行起始快照',
+          'synthetic diagnostic',
           request.testCase.name,
           session.currentUrl || request.environment.url,
         ),

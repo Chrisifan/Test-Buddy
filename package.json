@@ -15,8 +15,9 @@
     "build:renderer": "pnpm exec node node_modules/vite/bin/vite.js build",
     "build:electron": "pnpm exec node node_modules/typescript/bin/tsc -p tsconfig.electron.json",
     "check": "pnpm test && pnpm typecheck && pnpm build && git diff --check",
+    "test:browser-smoke": "pnpm exec node node_modules/vitest/vitest.mjs run electron/runtime/browser-smoke.test.ts",
     "cli": "node dist/electron/cli.js",
-    "test": "pnpm exec node node_modules/vitest/vitest.mjs run",
+    "test": "pnpm exec node node_modules/vitest/vitest.mjs run --exclude electron/runtime/browser-smoke.test.ts",
     "typecheck": "pnpm exec node node_modules/typescript/bin/tsc --noEmit && pnpm exec node node_modules/typescript/bin/tsc -p tsconfig.electron.json",
     "preview": "vite preview --host 127.0.0.1",
     "start": "electron dist/electron/main.js"
