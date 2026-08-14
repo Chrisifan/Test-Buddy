@@ -15,7 +15,9 @@ import {
   createEmptyTestCase,
   createEmptyProject,
   createEmptySuiteAsset,
+  createNextTestCaseVersion,
   createInitialStudioState,
+  findTestCaseVersion,
   createManualStepAutomationReplacement,
   createReporterFixDraft,
   getConfirmedDeterministicTestInputBinding,
@@ -37,8 +39,10 @@ import {
   mergeProjectAssetBindings,
   normalizeProjectAssetBindings,
   normalizeFixtureHttpDeclaration,
+  listLatestTestCaseVersions,
   removeTestStep,
   resolveTestCaseFixtures,
+  resolveSuiteCases,
   resolveSuiteTestCases,
   findSuiteAsset,
   prunePrdCoverageTriage,
@@ -82,7 +86,123 @@ describe('suite asset contract', () => {
     expect(findSuiteAsset(project, { id: suite.id, version: 1 })).toBeUndefined();
   });
 
-  it('resolves immutable Case versions in dependency order and rejects stale or cyclic references', () => {
+  it('finds exact Case versions without substituting the latest and lists the latest inventory', () => {
+    const project = createEmptyProject(1);
+    const caseV1 = { ...createEmptyTestCase(1, project.groups[0]!.id, project.environments[0]!.id), id: 'case-checkout', name: 'Checkout v1' };
+    const caseV2 = { ...caseV1, version: 2, name: 'Checkout v2' };
+    project.testCases = [caseV1, caseV2];
+
+    expect(findTestCaseVersion(project, { id: caseV1.id, version: 1 })).toBe(caseV1);
+    expect(findTestCaseVersion(project, { id: caseV1.id, version: 3 })).toBeUndefined();
+    expect(listLatestTestCaseVersions(project)).toEqual([caseV2]);
+  });
+
+  it('creates the next Case version without mutating its source or project history', () => {
+    const project = createEmptyProject(1);
+    const caseV1 = { ...createEmptyTestCase(1, project.groups[0]!.id, project.environments[0]!.id), id: 'case-checkout', name: 'Checkout v1' };
+    const source = { ...caseV1, version: 2, name: 'Checkout v2' };
+    project.testCases = [caseV1, source];
+    const originalProjectCases = [...project.testCases];
+
+    const next = createNextTestCaseVersion(project, source, { name: 'Checkout v3' });
+
+    expect(next).toMatchObject({ id: source.id, version: 3, name: 'Checkout v3' });
+    expect(source).toMatchObject({ id: 'case-checkout', version: 2, name: 'Checkout v2' });
+    expect(project.testCases).toEqual(originalProjectCases);
+  });
+
+  it('rejects an unpublished Case source without changing project history', () => {
+    const project = createEmptyProject(1);
+    const published = { ...createEmptyTestCase(1, project.groups[0]!.id, project.environments[0]!.id), id: 'case-checkout', name: 'Checkout v1' };
+    project.testCases = [published];
+    const originalProjectCases = structuredClone(project.testCases);
+    const staleSource = { ...published, version: 2, name: 'Forged Checkout v2' };
+
+    expect(() => createNextTestCaseVersion(project, staleSource, { name: 'Checkout v3' })).toThrow();
+    expect(project.testCases).toEqual(originalProjectCases);
+  });
+
+  it('clones the canonical published Case rather than caller-owned source contents', () => {
+    const project = createEmptyProject(1);
+    const published = { ...createEmptyTestCase(1, project.groups[0]!.id, project.environments[0]!.id), id: 'case-checkout', name: 'Checkout v2', version: 2 };
+    project.testCases = [published];
+    const forgedSource = { ...published, name: 'Forged Checkout v2' };
+
+    expect(createNextTestCaseVersion(project, forgedSource, { category: 'Release' })).toMatchObject({
+      id: published.id,
+      version: 3,
+      name: published.name,
+      category: 'Release',
+    });
+  });
+
+  it('treats duplicate exact Case versions as unavailable', () => {
+    const project = createEmptyProject(1);
+    const caseV1 = { ...createEmptyTestCase(1, project.groups[0]!.id, project.environments[0]!.id), id: 'case-checkout', name: 'Checkout v1' };
+    project.testCases = [caseV1, { ...caseV1, name: 'Duplicate checkout v1' }];
+
+    expect(findTestCaseVersion(project, { id: caseV1.id, version: 1 })).toBeUndefined();
+  });
+
+  it('rejects latest Case inventory with duplicate normalized versions', () => {
+    const project = createEmptyProject(1);
+    const caseV1 = { ...createEmptyTestCase(1, project.groups[0]!.id, project.environments[0]!.id), id: 'case-checkout', name: 'Checkout v1' };
+    project.testCases = [caseV1, { ...caseV1, version: undefined, name: 'Duplicate checkout v1' }];
+
+    expect(() => listLatestTestCaseVersions(project)).toThrow('Duplicate Case version');
+  });
+
+  it('reports duplicate Case versions explicitly when resolving a Suite', () => {
+    const project = createEmptyProject(1);
+    const environment = project.environments[0]!;
+    const caseV1 = { ...createEmptyTestCase(1, project.groups[0]!.id, environment.id), id: 'case-checkout', name: 'Checkout v1' };
+    project.testCases = [caseV1, { ...caseV1, name: 'Duplicate checkout v1' }];
+    const suite = {
+      ...createEmptySuiteAsset(project, 1),
+      caseReferences: [{ id: caseV1.id, version: 1, dependsOn: [] }],
+    };
+
+    expect(resolveSuiteCases(project, suite).issues).toEqual([
+      expect.objectContaining({ kind: 'duplicateCaseVersion', reference: expect.objectContaining({ id: caseV1.id, version: 1 }) }),
+    ]);
+  });
+
+  it('rejects duplicate exact Case references before Suite graph ordering', () => {
+    const project = createEmptyProject(1);
+    const environment = project.environments[0]!;
+    const testCase = { ...createEmptyTestCase(1, project.groups[0]!.id, environment.id), id: 'case-checkout' };
+    project.testCases = [testCase];
+    const reference = { id: testCase.id, version: 1, dependsOn: [] };
+    const suite = {
+      ...createEmptySuiteAsset(project, 1),
+      caseReferences: [reference, { ...reference }],
+    };
+
+    expect(resolveSuiteCases(project, suite)).toEqual(expect.objectContaining({
+      orderedCases: [],
+      issues: [expect.objectContaining({ kind: 'duplicateCaseReference', reference: suite.caseReferences[1] })],
+    }));
+  });
+
+  it('resolves a Suite pinned to Case v1 after Case v2 is published', () => {
+    const project = createEmptyProject(1);
+    const environment = project.environments[0]!;
+    const caseV1 = { ...createEmptyTestCase(1, project.groups[0]!.id, environment.id), id: 'case-checkout', name: 'Checkout v1' };
+    const caseV2 = { ...caseV1, version: 2, name: 'Checkout v2' };
+    project.testCases = [caseV1, caseV2];
+    const suite = {
+      ...createEmptySuiteAsset(project, 1),
+      caseReferences: [{ id: caseV1.id, version: 1, dependsOn: [] }],
+    };
+
+    expect(resolveSuiteCases(project, suite)).toEqual(expect.objectContaining({
+      environment,
+      issues: [],
+      orderedCases: [expect.objectContaining({ testCase: caseV1 })],
+    }));
+  });
+
+  it('resolves immutable Case versions in dependency order and rejects missing or cyclic references', () => {
     const project = createEmptyProject(1);
     const environment = project.environments[0]!;
     const checkout = createEmptyTestCase(1, project.groups[0]!.id, environment.id);
@@ -117,7 +237,7 @@ describe('suite asset contract', () => {
     expect(resolveSuiteTestCases(project, {
       ...suite,
       caseReferences: [{ id: checkout.id, version: 2, dependsOn: [] }],
-    }).issues).toEqual([expect.objectContaining({ kind: 'staleCaseVersion' })]);
+    }).issues).toEqual([expect.objectContaining({ kind: 'missingCase' })]);
     expect(resolveSuiteTestCases(project, {
       ...suite,
       caseReferences: [
@@ -158,7 +278,7 @@ describe('suite asset contract', () => {
 
     expect(hydrated.projects[0]?.suites).toEqual([suite]);
     expect(resolveSuiteTestCases(hydrated.projects[0]!, suite).issues).toEqual([
-      expect.objectContaining({ kind: 'staleCaseVersion' }),
+      expect.objectContaining({ kind: 'missingCase' }),
     ]);
     expect(hydrateStudioState({ ...createInitialStudioState(), projects: [{ ...project, testCases: [testCase] }] }).projects[0]?.suites).toEqual([]);
   });

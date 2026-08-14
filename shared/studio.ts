@@ -187,6 +187,8 @@ export type SuiteResolutionIssueKind =
   | 'emptySuite'
   | 'missingEnvironment'
   | 'missingCase'
+  | 'duplicateCaseVersion'
+  | 'duplicateCaseReference'
   | 'staleCaseVersion'
   | 'missingDependency'
   | 'cyclicDependency';
@@ -665,6 +667,67 @@ export interface TestCaseDraft extends Omit<WorkflowDraft, 'kind' | 'steps'> {
   steps: TestStepDraft[];
 }
 
+function findMatchingTestCaseVersions(
+  project: Pick<ProjectDraft, 'testCases'>,
+  reference: VersionedTestAssetReference,
+): TestCaseDraft[] {
+  return project.testCases.filter((testCase) => (
+    testCase.id === reference.id && normalizeTestCaseVersion(testCase.version) === reference.version
+  ));
+}
+
+/** Finds only the Case revision explicitly requested by the caller. */
+export function findTestCaseVersion(
+  project: Pick<ProjectDraft, 'testCases'>,
+  reference: VersionedTestAssetReference,
+): TestCaseDraft | undefined {
+  const matches = findMatchingTestCaseVersions(project, reference);
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
+/** Returns one highest immutable Case revision for every Case ID. */
+export function listLatestTestCaseVersions(
+  project: Pick<ProjectDraft, 'testCases'>,
+): TestCaseDraft[] {
+  const latest = new Map<string, TestCaseDraft>();
+  const seenVersions = new Set<string>();
+  project.testCases.forEach((testCase) => {
+    const version = normalizeTestCaseVersion(testCase.version);
+    const key = versionedReferenceKey({ id: testCase.id, version });
+    if (seenVersions.has(key)) {
+      throw new Error(`Duplicate Case version ${key}.`);
+    }
+    seenVersions.add(key);
+    const previous = latest.get(testCase.id);
+    if (!previous || normalizeTestCaseVersion(testCase.version) > normalizeTestCaseVersion(previous.version)) {
+      latest.set(testCase.id, testCase);
+    }
+  });
+  return [...latest.values()];
+}
+
+/** Clones a published Case and assigns its next immutable revision. */
+export function createNextTestCaseVersion(
+  project: Pick<ProjectDraft, 'testCases'>,
+  source: TestCaseDraft,
+  patch: Omit<Partial<TestCaseDraft>, 'id' | 'version'>,
+): TestCaseDraft {
+  const sourceReference = { id: source.id, version: normalizeTestCaseVersion(source.version) };
+  const canonicalSource = findTestCaseVersion(project, sourceReference);
+  if (!canonicalSource) {
+    throw new Error(`Case source ${versionedReferenceKey(sourceReference)} must match exactly one published Case version.`);
+  }
+  const highestVersion = project.testCases
+    .filter((candidate) => candidate.id === canonicalSource.id)
+    .reduce((highest, candidate) => Math.max(highest, normalizeTestCaseVersion(candidate.version)), 0);
+  return {
+    ...structuredClone(canonicalSource),
+    ...structuredClone(patch),
+    id: canonicalSource.id,
+    version: highestVersion + 1,
+  };
+}
+
 export interface RecordingStepDraft {
   id: string;
   kind: RecordingStepKind;
@@ -824,12 +887,8 @@ export interface ProjectDraft {
   updatedAt: string;
 }
 
-/**
- * Resolves a Suite without executing it. Member order remains the stable
- * tie-breaker for independent branches; dependency edges only add ordering.
- * A stale Case version is deliberately an issue, never an implicit upgrade.
- */
-export function resolveSuiteTestCases(
+/** Resolves a Suite without executing it, using only its exact Case revisions. */
+export function resolveSuiteCases(
   project: Pick<ProjectDraft, 'environments' | 'testCases'>,
   suite: SuiteAsset,
 ): SuiteCaseResolution {
@@ -848,28 +907,39 @@ export function resolveSuiteTestCases(
     });
   }
 
-  const casesById = new Map(project.testCases.map((testCase) => [testCase.id, testCase]));
+  const referenceKeys = new Set<string>();
+  const duplicateReference = suite.caseReferences.find((reference) => {
+    const key = versionedReferenceKey(reference);
+    if (referenceKeys.has(key)) {
+      return true;
+    }
+    referenceKeys.add(key);
+    return false;
+  });
+  if (duplicateReference) {
+    issues.push({
+      kind: 'duplicateCaseReference',
+      reference: duplicateReference,
+      message: `Suite ${suite.name}@${suite.version} 重复引用了用例 ${duplicateReference.id}@${duplicateReference.version}。`,
+    });
+    return { ...(environment ? { environment } : {}), orderedCases: [], issues };
+  }
+
   const referencesByKey = new Map(suite.caseReferences.map((reference) => [versionedReferenceKey(reference), reference]));
   const resolvedByKey = new Map<string, ResolvedSuiteCase>();
   suite.caseReferences.forEach((reference) => {
-    const testCase = casesById.get(reference.id);
-    if (!testCase) {
+    const matchingCases = findMatchingTestCaseVersions(project, reference);
+    if (matchingCases.length !== 1) {
       issues.push({
-        kind: 'missingCase',
+        kind: matchingCases.length ? 'duplicateCaseVersion' : 'missingCase',
         reference,
-        message: `Suite 未找到用例 ${reference.id}@${reference.version}。`,
+        message: matchingCases.length
+          ? `Suite 引用的用例 ${reference.id}@${reference.version} 存在重复版本。`
+          : `Suite 未找到用例 ${reference.id}@${reference.version}。`,
       });
       return;
     }
-    const currentVersion = normalizeTestCaseVersion(testCase.version);
-    if (currentVersion !== reference.version) {
-      issues.push({
-        kind: 'staleCaseVersion',
-        reference,
-        message: `Suite 引用的用例 ${reference.id}@${reference.version} 已不是当前版本。`,
-      });
-      return;
-    }
+    const testCase = matchingCases[0]!;
     resolvedByKey.set(versionedReferenceKey(reference), { reference, testCase });
   });
 
@@ -924,6 +994,14 @@ export function resolveSuiteTestCases(
     remainingDependencies.forEach((dependencies) => dependencies.delete(nextKey));
   }
   return { ...(environment ? { environment } : {}), orderedCases, issues };
+}
+
+/** @deprecated Use resolveSuiteCases; this compatibility wrapper has identical exact-version behavior. */
+export function resolveSuiteTestCases(
+  project: Pick<ProjectDraft, 'environments' | 'testCases'>,
+  suite: SuiteAsset,
+): SuiteCaseResolution {
+  return resolveSuiteCases(project, suite);
 }
 
 /** A review-only request to materialize project assets in a user-selected directory. */
