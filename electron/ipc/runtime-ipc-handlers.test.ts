@@ -174,17 +174,26 @@ describe('registerRuntimeIpcHandlers', () => {
     const testCase = createTestCase(project, 'case-concurrent-case', environment.id);
     project.testCases = [testCase];
     const response = runTestCaseResponse(project.id, testCase.id, environment.id);
-    const executionState = createInitialStudioState();
-    const concurrentState = { ...executionState, projects: [{ ...project, name: 'Concurrent Case edit' }] };
+    const initialState = createInitialStudioState();
+    const executionState = {
+      ...initialState,
+      runtimeProfile: { ...initialState.runtimeProfile, baseUrl: 'https://execution-case.example.test' },
+      midsceneConfig: { ...initialState.midsceneConfig, modelName: 'execution-case-model' },
+    };
+    const concurrentState = {
+      ...executionState,
+      projects: [{ ...project, name: 'Concurrent Case edit' }],
+      runtimeProfile: { ...executionState.runtimeProfile, baseUrl: 'https://concurrent-case.example.test' },
+      midsceneConfig: { ...executionState.midsceneConfig, modelName: 'concurrent-case-model' },
+    };
+    let currentState = executionState;
     const deferred = deferredResult<RunTestCaseResponse>();
     const runTestCase = vi.fn().mockImplementation(() => {
       deferred.markStarted();
       return deferred.promise;
     });
     const dependencies = createDependencies({
-      loadState: vi.fn()
-        .mockResolvedValueOnce(executionState)
-        .mockResolvedValueOnce(concurrentState),
+      loadState: vi.fn().mockImplementation(async () => currentState),
       getRuntimeBundle: vi.fn().mockReturnValue({
         artifactManager: { isManagedArtifactPath: () => true, exportArtifact: vi.fn(), importManualEvidence: vi.fn() },
         browserRuntime: { getState: () => ({ status: 'idle' }) },
@@ -204,11 +213,20 @@ describe('registerRuntimeIpcHandlers', () => {
       testCase: { id: testCase.id, version: testCase.version },
     });
     await deferred.started;
+    expect(runTestCase).toHaveBeenCalledWith(expect.objectContaining({
+      runtimeProfile: executionState.runtimeProfile,
+      midsceneConfig: executionState.midsceneConfig,
+      agentModelConfig: executionState.agentModelConfig,
+      browserSession: executionState.browserSession,
+    }));
+    currentState = concurrentState;
     deferred.resolve(response);
     await expect(pending).resolves.toEqual(response);
 
     expect(dependencies.saveState).toHaveBeenCalledWith(expect.objectContaining({
       projects: [expect.objectContaining({ name: 'Concurrent Case edit' })],
+      runtimeProfile: concurrentState.runtimeProfile,
+      midsceneConfig: concurrentState.midsceneConfig,
       runDetails: [response.detail],
     }));
   });
@@ -227,17 +245,26 @@ describe('registerRuntimeIpcHandlers', () => {
     project.testCases = [testCase];
     project.suites = [suite];
     const response = runSuiteResponse(project.id, testCase.id, environment.id);
-    const executionState = createInitialStudioState();
-    const concurrentState = { ...executionState, projects: [{ ...project, name: 'Concurrent Suite edit' }] };
+    const initialState = createInitialStudioState();
+    const executionState = {
+      ...initialState,
+      runtimeProfile: { ...initialState.runtimeProfile, baseUrl: 'https://execution-suite.example.test' },
+      midsceneConfig: { ...initialState.midsceneConfig, modelName: 'execution-suite-model' },
+    };
+    const concurrentState = {
+      ...executionState,
+      projects: [{ ...project, name: 'Concurrent Suite edit' }],
+      runtimeProfile: { ...executionState.runtimeProfile, baseUrl: 'https://concurrent-suite.example.test' },
+      midsceneConfig: { ...executionState.midsceneConfig, modelName: 'concurrent-suite-model' },
+    };
+    let currentState = executionState;
     const deferred = deferredResult<typeof response>();
     const runSuite = vi.fn().mockImplementation(() => {
       deferred.markStarted();
       return deferred.promise;
     });
     const dependencies = createDependencies({
-      loadState: vi.fn()
-        .mockResolvedValueOnce(executionState)
-        .mockResolvedValueOnce(concurrentState),
+      loadState: vi.fn().mockImplementation(async () => currentState),
       getRuntimeBundle: vi.fn().mockReturnValue({
         artifactManager: { isManagedArtifactPath: () => true, exportArtifact: vi.fn(), importManualEvidence: vi.fn() },
         browserRuntime: { getState: () => ({ status: 'idle' }) },
@@ -257,11 +284,20 @@ describe('registerRuntimeIpcHandlers', () => {
       suite: { id: suite.id, version: suite.version },
     });
     await deferred.started;
+    expect(runSuite).toHaveBeenCalledWith(expect.objectContaining({
+      runtimeProfile: executionState.runtimeProfile,
+      midsceneConfig: executionState.midsceneConfig,
+      agentModelConfig: executionState.agentModelConfig,
+      browserSession: executionState.browserSession,
+    }));
+    currentState = concurrentState;
     deferred.resolve(response);
     await expect(pending).resolves.toEqual(response);
 
     expect(dependencies.saveState).toHaveBeenCalledWith(expect.objectContaining({
       projects: [expect.objectContaining({ name: 'Concurrent Suite edit' })],
+      runtimeProfile: concurrentState.runtimeProfile,
+      midsceneConfig: concurrentState.midsceneConfig,
       runDetails: [response.detail.caseDetails[0]],
     }));
   });
