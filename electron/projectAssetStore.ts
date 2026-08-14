@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { constants as fileSystemConstants } from 'node:fs';
+import { constants as fileSystemConstants, type Dirent } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
@@ -197,7 +197,7 @@ export async function planProjectAssetUpdate(
   try {
     const published = await new ProjectAssetStore(binding.projectDirectory).loadWithRevision();
     const issues = [] as ProjectAssetUpdatePlan['issues'];
-    const publishedManifest = await readJson(path.join(binding.projectDirectory, 'project.json'), 'project.json');
+    const publishedManifest = await readJson(binding.projectDirectory, 'project.json');
     validateManifest(publishedManifest);
     const legacyCaseBackup = await readLegacyCaseBackupDeclaration(binding.projectDirectory, publishedManifest);
     const layoutIssues = await validateProjectDirectoryLayout(
@@ -246,7 +246,7 @@ export interface ProjectAssetStoreFileSystem {
   remove?(directory: string): Promise<void>;
   /** Runs after the first displaced-target validation and immediately before the second. */
   afterDisplacedTargetValidation?(directory: string): Promise<void>;
-  /** Test hook between a legacy asset-path inspection and its no-follow descriptor open. */
+  /** Test hook between any asset-path inspection and its no-follow descriptor open. */
   afterProjectAssetPathValidation?(rootDirectory: string, relativePath: string): Promise<void>;
 }
 
@@ -500,7 +500,11 @@ export class ProjectAssetStore {
   }
 
   async loadWithRevision(): Promise<ProjectAssetReadResult> {
-    const manifest = await readJson(this.manifestPath, 'project.json');
+    const manifest = await readJson(
+      this.projectDirectory,
+      'project.json',
+      this.fileSystem.afterProjectAssetPathValidation,
+    );
     validateManifest(manifest);
 
     const [testCases, storedRecordings, documents, fixtures, suites] = await Promise.all([
@@ -510,11 +514,11 @@ export class ProjectAssetStore {
           manifest.assetIds.cases,
           this.fileSystem.afterProjectAssetPathValidation,
         ).then((legacyCases) => legacyCases.map(({ testCase }) => testCase))
-        : readCaseCollection(this.projectDirectory, manifest.assetIds.cases),
-      readAssetCollection<RecordingAsset>(this.projectDirectory, 'recordings', manifest.assetIds.recordings),
-      readAssetCollection<PrdDocumentAsset>(this.projectDirectory, 'documents', manifest.assetIds.documents),
-      readFixtureCollection(this.projectDirectory, manifest.assetIds.fixtures ?? []),
-      readSuiteCollection(this.projectDirectory, manifest.assetIds.suites ?? []),
+        : readCaseCollection(this.projectDirectory, manifest.assetIds.cases, this.fileSystem.afterProjectAssetPathValidation),
+      readAssetCollection<RecordingAsset>(this.projectDirectory, 'recordings', manifest.assetIds.recordings, this.fileSystem.afterProjectAssetPathValidation),
+      readAssetCollection<PrdDocumentAsset>(this.projectDirectory, 'documents', manifest.assetIds.documents, this.fileSystem.afterProjectAssetPathValidation),
+      readFixtureCollection(this.projectDirectory, manifest.assetIds.fixtures ?? [], this.fileSystem.afterProjectAssetPathValidation),
+      readSuiteCollection(this.projectDirectory, manifest.assetIds.suites ?? [], this.fileSystem.afterProjectAssetPathValidation),
     ]);
     const recordings = manifest.revision === undefined
       ? storedRecordings.map(stripRecordingRuntimeData)
@@ -556,8 +560,12 @@ export class ProjectAssetStore {
   }
 
   private async prepareLegacyCaseMigration(directory: string): Promise<PreparedLegacyCaseMigration> {
-    const sourceRevision = await calculateDirectoryContentRevision(directory);
-    const { value: manifestValue } = await readJsonWithText(path.join(directory, 'project.json'), 'project.json');
+    const sourceRevision = await calculateDirectoryContentRevision(directory, this.fileSystem.afterProjectAssetPathValidation);
+    const { value: manifestValue } = await readJsonWithText(
+      directory,
+      'project.json',
+      this.fileSystem.afterProjectAssetPathValidation,
+    );
     validateManifest(manifestValue);
     const manifest = manifestValue;
 
@@ -589,13 +597,13 @@ export class ProjectAssetStore {
         manifest.assetIds.cases,
         this.fileSystem.afterProjectAssetPathValidation,
       ),
-      readAssetCollection<RecordingAsset>(directory, 'recordings', manifest.assetIds.recordings),
-      readAssetCollection<PrdDocumentAsset>(directory, 'documents', manifest.assetIds.documents),
-      readFixtureCollection(directory, manifest.assetIds.fixtures ?? []),
-      readSuiteCollection(directory, manifest.assetIds.suites ?? []),
+      readAssetCollection<RecordingAsset>(directory, 'recordings', manifest.assetIds.recordings, this.fileSystem.afterProjectAssetPathValidation),
+      readAssetCollection<PrdDocumentAsset>(directory, 'documents', manifest.assetIds.documents, this.fileSystem.afterProjectAssetPathValidation),
+      readFixtureCollection(directory, manifest.assetIds.fixtures ?? [], this.fileSystem.afterProjectAssetPathValidation),
+      readSuiteCollection(directory, manifest.assetIds.suites ?? [], this.fileSystem.afterProjectAssetPathValidation),
     ]);
     const layoutIssues = await validateLegacyProjectDirectoryLayout(directory, manifest);
-    const finalSourceRevision = await calculateDirectoryContentRevision(directory);
+    const finalSourceRevision = await calculateDirectoryContentRevision(directory, this.fileSystem.afterProjectAssetPathValidation);
     if (finalSourceRevision !== sourceRevision) {
       throw new ProjectAssetStoreError('legacy Case 迁移预览期间源目录发生变化。', [
         { path: this.projectDirectory, message: '无法为变化中的 v1 快照创建可确认的迁移计划。' },
@@ -666,7 +674,7 @@ export class ProjectAssetStore {
     if (!(error instanceof ProjectAssetStoreError)) {
       return undefined;
     }
-    const manifest = await readLegacyManifestForBlockedPlan(this.manifestPath);
+    const manifest = await readLegacyManifestForBlockedPlan(this.projectDirectory);
     let sourceRevision: string | undefined;
     try {
       sourceRevision = await calculateDirectoryContentRevision(this.projectDirectory);
@@ -692,7 +700,7 @@ export class ProjectAssetStore {
     expectedLegacyCaseBackup?: LegacyCaseBackupDeclaration,
   ): Promise<LegacyCaseBackupDeclaration | undefined> {
     const current = await new ProjectAssetStore(directory, this.fileSystem).loadWithRevision();
-    const manifest = await readJson(path.join(directory, 'project.json'), 'project.json');
+    const manifest = await readJson(directory, 'project.json', this.fileSystem.afterProjectAssetPathValidation);
     validateManifest(manifest);
     const legacyCaseBackup = await readLegacyCaseBackupDeclaration(
       directory,
@@ -1443,22 +1451,8 @@ async function validateV2CaseDirectoryLayout(
 
 async function listDirectoryTreeEntries(
   rootDirectory: string,
-  relativeDirectory = '',
 ): Promise<string[]> {
-  const entries = await fs.readdir(path.join(rootDirectory, relativeDirectory), { withFileTypes: true });
-  const result: string[] = [];
-  for (const entry of entries) {
-    const relativePath = relativeDirectory
-      ? path.posix.join(relativeDirectory, entry.name)
-      : entry.name;
-    if (entry.isDirectory()) {
-      result.push(`${relativePath}/`);
-      result.push(...await listDirectoryTreeEntries(rootDirectory, relativePath));
-    } else {
-      result.push(relativePath);
-    }
-  }
-  return result.sort();
+  return listSafeProjectAssetTreeEntries(rootDirectory, '');
 }
 
 interface ProjectAssetPathIdentity {
@@ -1478,6 +1472,14 @@ interface ProjectAssetPathInspection {
   components: ProjectAssetPathComponent[];
 }
 
+type ProjectAssetFileHandle = Awaited<ReturnType<typeof fs.open>>;
+
+interface OpenProjectAssetPath {
+  rootDirectory: string;
+  inspection: ProjectAssetPathInspection;
+  handles: ProjectAssetFileHandle[];
+}
+
 function projectAssetPathIdentity(fileInfo: Awaited<ReturnType<typeof fs.lstat>>): ProjectAssetPathIdentity {
   return { device: fileInfo.dev, inode: fileInfo.ino };
 }
@@ -1494,8 +1496,11 @@ function projectAssetPathIssue(relativePath: string, message: string): ProjectAs
 }
 
 /**
- * Snapshots each component before opening it. The descriptor chain below then
- * checks these identities while it opens every component with O_NOFOLLOW.
+ * Pure TypeScript platform policy: Node does not expose POSIX openat or
+ * fdopendir on every supported desktop platform (including macOS). Every
+ * component is therefore opened with O_NOFOLLOW | O_NONBLOCK, its descriptor
+ * is matched to this full snapshot, and the snapshot is revalidated before
+ * any content or directory names are accepted.
  */
 async function inspectProjectAssetPath(
   rootDirectory: string,
@@ -1513,7 +1518,7 @@ async function inspectProjectAssetPath(
   if (!rootInfo.isDirectory()) {
     throw projectAssetPathIssue(rootDirectory, '项目资产根目录必须是目录。');
   }
-  const segments = relativePath.split('/');
+  const segments = relativePath === '' ? [] : relativePath.split('/');
   let checkedPath = '';
   const components: ProjectAssetPathComponent[] = [];
   for (const [index, segment] of segments.entries()) {
@@ -1545,10 +1550,7 @@ async function assertProjectAssetPathInspectionCurrent(
   rootDirectory: string,
   inspection: ProjectAssetPathInspection,
 ): Promise<void> {
-  const relativePath = inspection.components.at(-1)?.relativePath;
-  if (!relativePath) {
-    throw projectAssetPathIssue(rootDirectory, '项目资产路径不能为空。');
-  }
+  const relativePath = inspection.components.at(-1)?.relativePath ?? '';
   const current = await inspectProjectAssetPath(rootDirectory, relativePath);
   if (
     current.root.device !== inspection.root.device ||
@@ -1565,49 +1567,109 @@ async function assertProjectAssetPathInspectionCurrent(
       );
     })
   ) {
-    throw projectAssetPathIssue(relativePath, '项目资产路径在读取期间发生变化。');
+    throw projectAssetPathIssue(relativePath || rootDirectory, '项目资产路径在读取期间发生变化。');
   }
+}
+
+function projectAssetOpenFlags(kind: 'directory' | 'file'): number {
+  return fileSystemConstants.O_RDONLY |
+    fileSystemConstants.O_NOFOLLOW |
+    fileSystemConstants.O_NONBLOCK |
+    (kind === 'directory' ? fileSystemConstants.O_DIRECTORY : 0);
+}
+
+function inspectionTargetMatchesKind(
+  inspection: ProjectAssetPathInspection,
+  kind: 'directory' | 'file',
+): boolean {
+  const target = inspection.components.at(-1);
+  return kind === 'directory'
+    ? (target?.directory ?? true)
+    : target?.file === true;
+}
+
+async function assertOpenProjectAssetPathCurrent(openPath: OpenProjectAssetPath): Promise<void> {
+  const expected: Array<ProjectAssetPathIdentity & { directory: boolean; file: boolean; relativePath: string }> = [
+    { ...openPath.inspection.root, directory: true, file: false, relativePath: openPath.rootDirectory },
+    ...openPath.inspection.components,
+  ];
+  if (openPath.handles.length !== expected.length) {
+    throw projectAssetPathIssue('', '项目资产 descriptor 链不完整。');
+  }
+  await Promise.all(openPath.handles.map(async (handle, index) => {
+    const fileInfo = await handle.stat();
+    const component = expected[index]!;
+    if (
+      !hasProjectAssetPathIdentity(fileInfo, component) ||
+      (component.directory ? !fileInfo.isDirectory() : !component.file || !fileInfo.isFile())
+    ) {
+      throw projectAssetPathIssue(component.relativePath, '项目资产路径在读取期间发生变化。');
+    }
+  }));
+  await assertProjectAssetPathInspectionCurrent(openPath.rootDirectory, openPath.inspection);
+}
+
+async function closeOpenProjectAssetPath(openPath: OpenProjectAssetPath): Promise<void> {
+  await Promise.all([...openPath.handles].reverse().map((handle) => handle.close().catch(() => undefined)));
 }
 
 async function openInspectedProjectAssetPath(
   rootDirectory: string,
   inspection: ProjectAssetPathInspection,
   kind: 'directory' | 'file',
-) {
-  const finalComponent = inspection.components.at(-1);
-  if (!finalComponent) {
-    throw projectAssetPathIssue(rootDirectory, '项目资产路径不能为空。');
-  }
-  let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
-  try {
-    handle = await fs.open(
-      path.join(rootDirectory, finalComponent.relativePath),
-      fileSystemConstants.O_RDONLY |
-        fileSystemConstants.O_NOFOLLOW |
-        (kind === 'directory' ? fileSystemConstants.O_DIRECTORY : 0),
+): Promise<OpenProjectAssetPath> {
+  if (!inspectionTargetMatchesKind(inspection, kind)) {
+    throw projectAssetPathIssue(
+      inspection.components.at(-1)?.relativePath ?? rootDirectory,
+      kind === 'directory' ? '项目资产路径必须是目录。' : '项目资产路径必须是普通文件。',
     );
-    const fileInfo = await handle.stat();
-    if (
-      !hasProjectAssetPathIdentity(fileInfo, finalComponent) ||
-      (kind === 'directory' ? !fileInfo.isDirectory() : !fileInfo.isFile())
-    ) {
-      await handle.close();
-      handle = undefined;
-      throw projectAssetPathIssue(finalComponent.relativePath, '项目资产路径在读取期间发生变化。');
+  }
+  const handles: ProjectAssetFileHandle[] = [];
+  try {
+    const rootHandle = await fs.open(rootDirectory, projectAssetOpenFlags('directory'));
+    handles.push(rootHandle);
+    if (!hasProjectAssetPathIdentity(await rootHandle.stat(), inspection.root)) {
+      throw projectAssetPathIssue(rootDirectory, '项目资产根目录在读取期间发生变化。');
     }
-    await assertProjectAssetPathInspectionCurrent(rootDirectory, inspection);
-    return handle;
+    for (const [index, component] of inspection.components.entries()) {
+      const componentKind = index === inspection.components.length - 1 ? kind : 'directory';
+      const handle = await fs.open(
+        path.join(rootDirectory, component.relativePath),
+        projectAssetOpenFlags(componentKind),
+      );
+      handles.push(handle);
+      const fileInfo = await handle.stat();
+      if (
+        !hasProjectAssetPathIdentity(fileInfo, component) ||
+        (componentKind === 'directory' ? !fileInfo.isDirectory() : !fileInfo.isFile())
+      ) {
+        throw projectAssetPathIssue(component.relativePath, '项目资产路径在读取期间发生变化。');
+      }
+    }
+    const openPath = { rootDirectory, inspection, handles };
+    await assertOpenProjectAssetPathCurrent(openPath);
+    return openPath;
   } catch (error) {
-    if (handle) {
-      await handle.close().catch(() => undefined);
-    }
+    await Promise.all([...handles].reverse().map((handle) => handle.close().catch(() => undefined)));
     if (error instanceof ProjectAssetStoreError) {
       throw error;
     }
-    if ((error as NodeJS.ErrnoException).code === 'ELOOP') {
-      throw projectAssetPathIssue(finalComponent.relativePath, '拒绝符号链接或非普通项目资产路径。');
+    if (
+      (error as NodeJS.ErrnoException).code === 'ELOOP' ||
+      (error as NodeJS.ErrnoException).code === 'ENOTDIR'
+    ) {
+      // O_NOFOLLOW reports ELOOP for a final link but a swapped parent can
+      // surface as ENOTDIR. Re-run the full snapshot so the caller receives
+      // the component that became unsafe rather than an opaque open error.
+      await assertProjectAssetPathInspectionCurrent(rootDirectory, inspection);
     }
-    throw projectAssetPathIssue(finalComponent.relativePath, `项目资产路径在读取期间发生变化：${errorMessage(error)}`);
+    if ((error as NodeJS.ErrnoException).code === 'ELOOP') {
+      throw projectAssetPathIssue(inspection.components.at(-1)?.relativePath ?? rootDirectory, '拒绝符号链接或非普通项目资产路径。');
+    }
+    throw projectAssetPathIssue(
+      inspection.components.at(-1)?.relativePath ?? rootDirectory,
+      `项目资产路径在读取期间发生变化：${errorMessage(error)}`,
+    );
   }
 }
 
@@ -1622,11 +1684,12 @@ async function readInspectedProjectAssetFile(
     throw projectAssetPathIssue(relativePath, '项目资产路径必须是普通文件。');
   }
   await afterPathValidation?.(rootDirectory, relativePath);
-  const fileHandle = await openInspectedProjectAssetPath(rootDirectory, inspection, 'file');
+  const openPath = await openInspectedProjectAssetPath(rootDirectory, inspection, 'file');
   try {
-    return await fileHandle.readFile();
+    await assertOpenProjectAssetPathCurrent(openPath);
+    return await openPath.handles.at(-1)!.readFile();
   } finally {
-    await fileHandle.close().catch(() => undefined);
+    await closeOpenProjectAssetPath(openPath);
   }
 }
 
@@ -1635,26 +1698,30 @@ async function listSafeProjectAssetTreeEntries(
   rootDirectory: string,
   relativeDirectory: string,
 ): Promise<string[]> {
-  const inspection = await inspectProjectAssetPath(rootDirectory, relativeDirectory);
-  if (!inspection.components.at(-1)?.directory) {
-    throw projectAssetPathIssue(relativeDirectory, '项目资产路径必须是目录。');
-  }
   const result: string[] = [];
   async function visit(directory: string): Promise<void> {
     const directoryInspection = await inspectProjectAssetPath(rootDirectory, directory);
-    const directoryHandle = await openInspectedProjectAssetPath(rootDirectory, directoryInspection, 'directory');
-    const entries = await (async () => {
-      try {
-        const readEntries = await fs.readdir(path.join(rootDirectory, directory), {
-          encoding: 'utf8',
-          withFileTypes: true,
-        });
-        await assertProjectAssetPathInspectionCurrent(rootDirectory, directoryInspection);
-        return readEntries;
-      } finally {
-        await directoryHandle.close().catch(() => undefined);
+    const openPath = await openInspectedProjectAssetPath(rootDirectory, directoryInspection, 'directory');
+    let entries: Dirent[];
+    try {
+      await assertOpenProjectAssetPathCurrent(openPath);
+      // Node exposes no fdopendir equivalent on every supported desktop
+      // platform. The verified directory FD plus immediate pre/post snapshot
+      // checks ensure a swapped parent cannot contribute accepted names to
+      // the returned tree.
+      entries = await fs.readdir(path.join(rootDirectory, directory), {
+        encoding: 'utf8',
+        withFileTypes: true,
+      });
+      await assertOpenProjectAssetPathCurrent(openPath);
+    } catch (error) {
+      if (error instanceof ProjectAssetStoreError) {
+        throw error;
       }
-    })();
+      throw projectAssetPathIssue(directory || rootDirectory, `项目资产目录在读取期间发生变化：${errorMessage(error)}`);
+    } finally {
+      await closeOpenProjectAssetPath(openPath);
+    }
     for (const entry of entries) {
       const entryPath = path.posix.join(directory, entry.name);
       const entryInspection = await inspectProjectAssetPath(rootDirectory, entryPath);
@@ -1691,9 +1758,13 @@ function suiteRelativePath(suite: Pick<SuiteAsset, 'id' | 'version'>): string {
 
 async function listDirectoryEntries(directory: string): Promise<string[]> {
   try {
-    return (await fs.readdir(directory)).sort();
+    const treeEntries = await listSafeProjectAssetTreeEntries(directory, '');
+    return [...new Set(treeEntries.map((entry) => entry.split('/')[0]!))].sort();
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+    if (
+      (error as NodeJS.ErrnoException).code === 'ENOENT' ||
+      (error instanceof ProjectAssetStoreError && error.issues.some((issue) => issue.message.includes('ENOENT')))
+    ) {
       return [];
     }
     throw error;
@@ -1714,9 +1785,11 @@ async function readAssetCollection<T extends { id: string }>(
   rootDirectory: string,
   kind: 'cases' | 'recordings' | 'documents',
   ids: string[],
+  afterPathValidation?: (rootDirectory: string, relativePath: string) => Promise<void>,
 ): Promise<T[]> {
   return Promise.all(ids.map(async (id) => {
-    const asset = await readJson(path.join(rootDirectory, assetRelativePath(kind, id)), assetRelativePath(kind, id)) as T;
+    const relativePath = assetRelativePath(kind, id);
+    const asset = await readJson(rootDirectory, relativePath, afterPathValidation) as T;
     if (!asset || asset.id !== id) {
       throw new ProjectAssetStoreError('资产文件 ID 与 manifest 引用不一致。', [
         { path: assetRelativePath(kind, id), message: '资产 ID 不匹配。' },
@@ -1735,10 +1808,11 @@ async function writeCaseCollection(rootDirectory: string, testCases: TestCaseDra
 async function readCaseCollection(
   rootDirectory: string,
   references: VersionedTestAssetReference[],
+  afterPathValidation?: (rootDirectory: string, relativePath: string) => Promise<void>,
 ): Promise<TestCaseDraft[]> {
   return Promise.all(references.map(async (reference) => {
     const casePath = caseRelativePath(reference);
-    const testCase = await readJson(path.join(rootDirectory, casePath), casePath) as TestCaseDraft;
+    const testCase = await readJson(rootDirectory, casePath, afterPathValidation) as TestCaseDraft;
     if (!testCase || testCase.id !== reference.id || testCase.version !== reference.version) {
       throw new ProjectAssetStoreError('Case 文件与 manifest 引用不一致。', [
         { path: casePath, message: 'Case ID 或版本不匹配。' },
@@ -1802,10 +1876,11 @@ async function writeFixtureCollection(rootDirectory: string, fixtures: FixtureAs
 async function readFixtureCollection(
   rootDirectory: string,
   references: VersionedTestAssetReference[],
+  afterPathValidation?: (rootDirectory: string, relativePath: string) => Promise<void>,
 ): Promise<FixtureAsset[]> {
   return Promise.all(references.map(async (reference) => {
     const fixturePath = fixtureRelativePath(reference);
-    const fixture = await readJson(path.join(rootDirectory, fixturePath), fixturePath) as FixtureAsset;
+    const fixture = await readJson(rootDirectory, fixturePath, afterPathValidation) as FixtureAsset;
     if (!fixture || fixture.id !== reference.id || fixture.version !== reference.version) {
       throw new ProjectAssetStoreError('fixture 文件与 manifest 引用不一致。', [
         { path: fixturePath, message: 'fixture ID 或版本不匹配。' },
@@ -1824,10 +1899,11 @@ async function writeSuiteCollection(rootDirectory: string, suites: SuiteAsset[])
 async function readSuiteCollection(
   rootDirectory: string,
   references: VersionedTestAssetReference[],
+  afterPathValidation?: (rootDirectory: string, relativePath: string) => Promise<void>,
 ): Promise<SuiteAsset[]> {
   return Promise.all(references.map(async (reference) => {
     const suitePath = suiteRelativePath(reference);
-    const suite = await readJson(path.join(rootDirectory, suitePath), suitePath) as SuiteAsset;
+    const suite = await readJson(rootDirectory, suitePath, afterPathValidation) as SuiteAsset;
     if (!suite || suite.id !== reference.id || suite.version !== reference.version) {
       throw new ProjectAssetStoreError('suite 文件与 manifest 引用不一致。', [
         { path: suitePath, message: 'suite ID 或版本不匹配。' },
@@ -1938,32 +2014,34 @@ async function writeOrCopyLegacyCaseBackup(
   }));
 }
 
-async function readJson(filePath: string, label: string): Promise<unknown> {
-  return (await readJsonWithText(filePath, label)).value;
+async function readJson(
+  rootDirectory: string,
+  relativePath: string,
+  afterPathValidation?: (rootDirectory: string, relativePath: string) => Promise<void>,
+): Promise<unknown> {
+  return (await readJsonWithText(rootDirectory, relativePath, afterPathValidation)).value;
 }
 
-async function readJsonWithText(filePath: string, label: string): Promise<{ value: unknown; text: string }> {
+async function readJsonWithText(
+  rootDirectory: string,
+  relativePath: string,
+  afterPathValidation?: (rootDirectory: string, relativePath: string) => Promise<void>,
+): Promise<{ value: unknown; text: string }> {
   try {
-    const fileInfo = await fs.lstat(filePath);
-    if (fileInfo.isSymbolicLink() || !fileInfo.isFile()) {
-      throw new Error('拒绝符号链接或非普通项目资产文件。');
-    }
-    const text = await fs.readFile(filePath, 'utf8');
+    const text = (await readInspectedProjectAssetFile(rootDirectory, relativePath, afterPathValidation)).toString('utf8');
     return { value: JSON.parse(text) as unknown, text };
   } catch (error) {
-    throw new ProjectAssetStoreError(`无法读取项目资产文件：${label}。`, [
-      { path: label, message: (error as Error).message || 'JSON 文件损坏或不存在。' },
+    throw new ProjectAssetStoreError(`无法读取项目资产文件：${relativePath}。`, [
+      ...(error instanceof ProjectAssetStoreError
+        ? error.issues
+        : [{ path: relativePath, message: (error as Error).message || 'JSON 文件损坏或不存在。' }]),
     ]);
   }
 }
 
-async function readLegacyManifestForBlockedPlan(filePath: string): Promise<{ id: string } | undefined> {
+async function readLegacyManifestForBlockedPlan(rootDirectory: string): Promise<{ id: string } | undefined> {
   try {
-    const fileInfo = await fs.lstat(filePath);
-    if (fileInfo.isSymbolicLink() || !fileInfo.isFile()) {
-      return undefined;
-    }
-    const candidate = JSON.parse(await fs.readFile(filePath, 'utf8')) as {
+    const candidate = (await readJson(rootDirectory, 'project.json')) as {
       schemaVersion?: unknown;
       id?: unknown;
     };
@@ -2003,7 +2081,10 @@ function calculateContentHash(content: string | Buffer): string {
   return createHash('sha256').update(content).digest('hex');
 }
 
-async function calculateDirectoryContentRevision(directory: string): Promise<string> {
+async function calculateDirectoryContentRevision(
+  directory: string,
+  afterPathValidation?: (rootDirectory: string, relativePath: string) => Promise<void>,
+): Promise<string> {
   const hash = createHash('sha256');
   const entries = await listDirectoryTreeEntries(directory);
   for (const entry of entries) {
@@ -2012,20 +2093,7 @@ async function calculateDirectoryContentRevision(directory: string): Promise<str
     }
     hash.update(entry, 'utf8');
     hash.update('\0', 'utf8');
-    const entryPath = path.join(directory, entry);
-    const entryInfo = await fs.lstat(entryPath);
-    if (entryInfo.isSymbolicLink()) {
-      // Never dereference a link while fingerprinting a migration source. The
-      // later asset reader will reject any link declared by the manifest.
-      hash.update('symlink:', 'utf8');
-      hash.update(await fs.readlink(entryPath), 'utf8');
-    } else if (!entryInfo.isFile()) {
-      throw new ProjectAssetStoreError('项目目录无法安全生成内容摘要。', [
-        { path: entry, message: '项目目录摘要只能包含普通文件。' },
-      ]);
-    } else {
-      hash.update(await fs.readFile(entryPath));
-    }
+    hash.update(await readInspectedProjectAssetFile(directory, entry, afterPathValidation));
     hash.update('\0', 'utf8');
   }
   return hash.digest('hex');

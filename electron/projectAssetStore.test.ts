@@ -21,6 +21,7 @@ import {
 
 const temporaryDirectories: string[] = [];
 const execFileAsync = promisify(execFile);
+const fifoReadGuardTimeoutMs = 1_000;
 
 afterEach(async () => {
   await Promise.all(temporaryDirectories.splice(0).map((directory) => fs.rm(directory, { recursive: true, force: true })));
@@ -305,6 +306,160 @@ describe('ProjectAssetStore', () => {
     await expect(readDirectorySnapshot(projectDirectory)).resolves.toEqual(before);
   });
 
+  it('rejects a manifest root swapped to a symlink after inspection without reading the replacement', async () => {
+    const rootDirectory = await createTemporaryDirectory();
+    const projectDirectory = path.join(rootDirectory, 'orders-project');
+    const externalDirectory = path.join(rootDirectory, 'external-project');
+    const store = new ProjectAssetStore(projectDirectory);
+    await store.saveInitial(createAssetProject());
+    await fs.cp(projectDirectory, externalDirectory, { recursive: true });
+    const protectedProjectDirectory = path.join(rootDirectory, 'protected-project');
+    let swapped = false;
+    const swappedStore = new ProjectAssetStore(projectDirectory, {
+      rename: fs.rename,
+      afterProjectAssetPathValidation: async (_rootDirectory, relativePath) => {
+        if (!swapped && relativePath === 'project.json') {
+          swapped = true;
+          await fs.rename(projectDirectory, protectedProjectDirectory);
+          await fs.symlink(externalDirectory, projectDirectory, 'dir');
+        }
+      },
+    });
+
+    await expect(swappedStore.loadWithRevision()).rejects.toBeInstanceOf(ProjectAssetStoreError);
+    expect(swapped).toBe(true);
+  });
+
+  it('rejects a non-Case asset parent swapped to a symlink after inspection without reading the replacement', async () => {
+    const rootDirectory = await createTemporaryDirectory();
+    const projectDirectory = path.join(rootDirectory, 'orders-project');
+    const store = new ProjectAssetStore(projectDirectory);
+    await store.saveInitial(createAssetProject());
+    const externalDocumentsDirectory = path.join(rootDirectory, 'external-documents');
+    const protectedDocumentsDirectory = path.join(rootDirectory, 'protected-documents');
+    const documentName = (await fs.readdir(path.join(projectDirectory, 'documents')))[0]!;
+    await fs.cp(path.join(projectDirectory, 'documents'), externalDocumentsDirectory, { recursive: true });
+    let swapped = false;
+    const swappedStore = new ProjectAssetStore(projectDirectory, {
+      rename: fs.rename,
+      afterProjectAssetPathValidation: async (_rootDirectory, relativePath) => {
+        if (!swapped && relativePath === `documents/${documentName}`) {
+          swapped = true;
+          await fs.rename(path.join(projectDirectory, 'documents'), protectedDocumentsDirectory);
+          await fs.symlink(externalDocumentsDirectory, path.join(projectDirectory, 'documents'), 'dir');
+        }
+      },
+    });
+
+    await expect(swappedStore.loadWithRevision()).rejects.toBeInstanceOf(ProjectAssetStoreError);
+    expect(swapped).toBe(true);
+  });
+
+  it('rejects a legacy Case replaced with a FIFO after inspection without blocking', async () => {
+    const rootDirectory = await createTemporaryDirectory();
+    const projectDirectory = path.join(rootDirectory, 'legacy-project');
+    await writeLegacyCaseProject(projectDirectory);
+    const legacyCasePath = path.join(projectDirectory, 'cases', 'case%2Fcheckout.json');
+    let replaced = false;
+    const store = new ProjectAssetStore(projectDirectory, {
+      rename: fs.rename,
+      afterProjectAssetPathValidation: async (_rootDirectory, relativePath) => {
+        if (!replaced && relativePath === 'cases/case%2Fcheckout.json') {
+          replaced = true;
+          await fs.rm(legacyCasePath);
+          await execFileAsync('mkfifo', [legacyCasePath]);
+        }
+      },
+    });
+    const planPromise = store.planLegacyCaseMigration();
+    const releasePendingFifoRead = new Promise<void>((resolve) => {
+      setTimeout(() => {
+        void fs.open(legacyCasePath, fsConstants.O_RDWR | fsConstants.O_NONBLOCK)
+          .then((handle) => handle.close())
+          .catch(() => undefined)
+          .finally(resolve);
+      }, 100);
+    });
+
+    try {
+      await expect(Promise.race([
+        planPromise,
+        new Promise<never>((_resolve, reject) => setTimeout(() => reject(new Error('legacy Case read blocked on FIFO')), fifoReadGuardTimeoutMs)),
+      ])).resolves.toMatchObject({ status: 'blocked' });
+    } finally {
+      await releasePendingFifoRead;
+      await planPromise.catch(() => undefined);
+    }
+    expect(replaced).toBe(true);
+  });
+
+  it('rejects a legacy backup file replaced with a FIFO after inspection without blocking', async () => {
+    const rootDirectory = await createTemporaryDirectory();
+    const projectDirectory = path.join(rootDirectory, 'legacy-project');
+    await writeLegacyCaseProject(projectDirectory);
+    const setupStore = new ProjectAssetStore(projectDirectory);
+    const preview = await setupStore.planLegacyCaseMigration();
+    await setupStore.confirmLegacyCaseMigration(preview);
+    const backupCasePath = path.join(projectDirectory, preview.backupDirectory!, 'cases', 'case%2Fcheckout.json');
+    let replaced = false;
+    const store = new ProjectAssetStore(projectDirectory, {
+      rename: fs.rename,
+      afterProjectAssetPathValidation: async (_rootDirectory, relativePath) => {
+        if (!replaced && relativePath === `${preview.backupDirectory}/cases/case%2Fcheckout.json`) {
+          replaced = true;
+          await fs.rm(backupCasePath);
+          await execFileAsync('mkfifo', [backupCasePath]);
+        }
+      },
+    });
+    const loadPromise = store.loadWithRevision();
+    const releasePendingFifoRead = new Promise<void>((resolve) => {
+      setTimeout(() => {
+        void fs.open(backupCasePath, fsConstants.O_RDWR | fsConstants.O_NONBLOCK)
+          .then((handle) => handle.close())
+          .catch(() => undefined)
+          .finally(resolve);
+      }, 100);
+    });
+
+    try {
+      await expect(Promise.race([
+        loadPromise,
+        new Promise<never>((_resolve, reject) => setTimeout(() => reject(new Error('legacy backup read blocked on FIFO')), fifoReadGuardTimeoutMs)),
+      ])).rejects.toBeInstanceOf(ProjectAssetStoreError);
+    } finally {
+      await releasePendingFifoRead;
+      await loadPromise.catch(() => undefined);
+    }
+    expect(replaced).toBe(true);
+  });
+
+  it('rejects a legacy Case parent swapped to a symlink while computing the content revision', async () => {
+    const rootDirectory = await createTemporaryDirectory();
+    const projectDirectory = path.join(rootDirectory, 'legacy-project');
+    await writeLegacyCaseProject(projectDirectory);
+    const externalCasesDirectory = path.join(rootDirectory, 'external-cases');
+    let swapped = false;
+    const store = new ProjectAssetStore(projectDirectory, {
+      rename: fs.rename,
+      afterProjectAssetPathValidation: async (_rootDirectory, relativePath) => {
+        if (!swapped && relativePath === 'cases/case%2Fcheckout.json') {
+          swapped = true;
+          await fs.rename(path.join(projectDirectory, 'cases'), externalCasesDirectory);
+          await fs.symlink(externalCasesDirectory, path.join(projectDirectory, 'cases'), 'dir');
+        }
+      },
+    });
+
+    await expect(store.planLegacyCaseMigration()).resolves.toMatchObject({
+      status: 'blocked',
+      issues: expect.arrayContaining([
+        expect.objectContaining({ path: 'cases', message: expect.stringContaining('拒绝符号链接') }),
+      ]),
+    });
+    expect(swapped).toBe(true);
+  });
+
   it('rejects a legacy FIFO before source revisioning can block on it', async () => {
     const rootDirectory = await createTemporaryDirectory();
     const projectDirectory = path.join(rootDirectory, 'legacy-project');
@@ -325,7 +480,7 @@ describe('ProjectAssetStore', () => {
     try {
       await expect(Promise.race([
         planPromise,
-        new Promise<never>((_resolve, reject) => setTimeout(() => reject(new Error('source revision attempted to read FIFO')), 50)),
+        new Promise<never>((_resolve, reject) => setTimeout(() => reject(new Error('source revision attempted to read FIFO')), fifoReadGuardTimeoutMs)),
       ])).resolves.toMatchObject({
         status: 'blocked',
         issues: expect.arrayContaining([
