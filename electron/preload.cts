@@ -1,3 +1,5 @@
+import type { RunSuiteIntent, RunTestCaseIntent } from '../shared/studio.js';
+
 const { contextBridge, ipcRenderer } = require('electron');
 const { runtimeIpcChannels } = require('./ipc/runtime-ipc-channels.cjs');
 
@@ -27,8 +29,8 @@ contextBridge.exposeInMainWorld('desktopApi', {
   navigateBrowserSession: (request: unknown) =>
     ipcRenderer.invoke('runtime:navigate-browser-session', request),
   captureBrowserSnapshot: () => ipcRenderer.invoke('runtime:capture-browser-snapshot'),
-  runTestCase: (request: unknown) => ipcRenderer.invoke(runtimeIpcChannels.runTestCase, request),
-  runSuite: (request: unknown) => ipcRenderer.invoke(runtimeIpcChannels.runSuite, request),
+  runTestCase: (request: RunTestCaseIntent) => ipcRenderer.invoke(runtimeIpcChannels.runTestCase, request),
+  runSuite: (request: RunSuiteIntent) => ipcRenderer.invoke(runtimeIpcChannels.runSuite, request),
   runRecording: (request: unknown) => ipcRenderer.invoke('runtime:run-recording', request),
   cancelRun: (runId: string) => ipcRenderer.invoke(runtimeIpcChannels.cancelRun, runId),
   exportProjectReport: (request: unknown) => ipcRenderer.invoke('runtime:export-project-report', request),

@@ -44,6 +44,7 @@ import type {
 } from '../../shared/studio.js';
 import {
   findSuiteAsset,
+  findTestCaseVersion,
   getExclusiveRecordingReplayId,
   getTestCasePrdPath,
   isAgentRunnableTestCase,
@@ -617,11 +618,21 @@ export async function runWorkflow(
 export async function runTestCase(request: RunTestCaseRequest): Promise<RunTestCaseResponse> {
   const desktopApi = getDesktopApi();
   if (desktopApi) {
-    return desktopApi.runTestCase(request);
+    return desktopApi.runTestCase({
+      ...(request.runId ? { runId: request.runId } : {}),
+      projectId: request.project.id,
+      testCase: { id: request.testCase.id, version: request.testCase.version ?? 1 },
+    });
   }
 
-  const documentId = getTestCasePrdPath(request.testCase)?.documentId;
-  const recordingId = getExclusiveRecordingReplayId(request.testCase);
+  const testCaseReference = { id: request.testCase.id, version: request.testCase.version ?? 1 };
+  const testCase = findTestCaseVersion(request.project, testCaseReference);
+  if (!testCase) {
+    return createMissingLegacyCaseResponse(request, testCaseReference);
+  }
+
+  const documentId = getTestCasePrdPath(testCase)?.documentId;
+  const recordingId = getExclusiveRecordingReplayId(testCase);
   const recording = recordingId
     ? request.project.recordings.find((item) => item.id === recordingId)
     : undefined;
@@ -631,15 +642,15 @@ export async function runTestCase(request: RunTestCaseRequest): Promise<RunTestC
       project: request.project,
       environment: request.environment,
       recording,
-      testCaseId: request.testCase.id,
+      testCaseId: testCase.id,
       ...(documentId ? { documentId } : {}),
     });
   }
 
-  if (isAgentRunnableTestCase(request.testCase)) {
+  if (isAgentRunnableTestCase(testCase)) {
     return runWorkflow({
       ...(request.runId ? { runId: request.runId } : {}),
-      workflow: testCaseToWorkflow(request.testCase),
+      workflow: testCaseToWorkflow(testCase),
       targetEnvironment: request.environment.name,
       runtimeProfile: request.runtimeProfile ?? {
         browser: request.environment.browser,
@@ -658,17 +669,17 @@ export async function runTestCase(request: RunTestCaseRequest): Promise<RunTestC
   }
 
   const runId = request.runId ?? `run-${Date.now().toString().slice(-5)}`;
-  const title = request.testCase.name;
+  const title = testCase.name;
   emit({
     runId,
     title,
     type: 'status',
     status: 'running',
-    summary: `已排队执行 ${request.testCase.steps.length} 个步骤。`,
+    summary: `已排队执行 ${testCase.steps.length} 个步骤。`,
   });
 
   const logs = [
-    `[${nowLabel()}] Test case queued: ${request.testCase.name}`,
+    `[${nowLabel()}] Test case queued: ${testCase.name}`,
     `[${nowLabel()}] Project: ${request.project.name}`,
     `[${nowLabel()}] Environment: ${request.environment.name}`,
   ];
@@ -677,17 +688,17 @@ export async function runTestCase(request: RunTestCaseRequest): Promise<RunTestC
   const detail: RunDetail = {
     id: runId,
     projectId: request.project.id,
-    testCaseId: request.testCase.id,
+    testCaseId: testCase.id,
     ...(documentId ? { documentId } : {}),
     environmentId: request.environment.id,
     title,
     status: 'neutral',
     startedAt: new Date().toISOString(),
     endedAt: new Date().toISOString(),
-    duration: `00:00:${String(Math.max(1, request.testCase.steps.length * 2)).padStart(2, '0')}`,
-    summary: `浏览器 fallback 未执行 ${request.testCase.steps.length} 个步骤，结果保持等待态。`,
+    duration: `00:00:${String(Math.max(1, testCase.steps.length * 2)).padStart(2, '0')}`,
+    summary: `浏览器 legacy fallback 未执行 ${testCase.steps.length} 个步骤，结果保持等待态。`,
     logs,
-    steps: request.testCase.steps.map((step, index) => ({
+    steps: testCase.steps.map((step, index) => ({
       id: `run-step-${runId}-${index}`,
       stepId: step.id,
       title: step.title,
@@ -712,10 +723,42 @@ export async function runTestCase(request: RunTestCaseRequest): Promise<RunTestC
   return { runId, title, detail };
 }
 
+function createMissingLegacyCaseResponse(
+  request: RunTestCaseRequest,
+  reference: { id: string; version: number },
+): RunTestCaseResponse {
+  const runId = request.runId ?? `run-${Date.now().toString().slice(-5)}`;
+  const now = new Date().toISOString();
+  const title = `Case ${reference.id}@${reference.version}`;
+  return {
+    runId,
+    title,
+    detail: {
+      id: runId,
+      projectId: request.project.id,
+      testCaseId: reference.id,
+      environmentId: request.environment.id,
+      title,
+      status: 'neutral',
+      startedAt: now,
+      endedAt: now,
+      duration: '00:00:00',
+      summary: `浏览器 legacy fallback 未找到 Case：${reference.id}@${reference.version}。`,
+      logs: [],
+      steps: [],
+      artifacts: [],
+    },
+  };
+}
+
 export async function runSuite(request: RunSuiteRequest): Promise<RunSuiteResponse> {
   const desktopApi = getDesktopApi();
   if (desktopApi) {
-    return desktopApi.runSuite(request);
+    return desktopApi.runSuite({
+      ...(request.runId ? { runId: request.runId } : {}),
+      projectId: request.project.id,
+      suite: request.suite,
+    });
   }
 
   const runId = request.runId ?? `suite-run-${Date.now().toString().slice(-5)}`;

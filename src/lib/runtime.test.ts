@@ -93,7 +93,7 @@ describe('browser fallback agent runtime', () => {
     ]);
   });
 
-  it('delegates Suite execution unchanged to the desktop bridge', async () => {
+  it('delegates an exact Suite intent rather than renderer-owned project state to the desktop bridge', async () => {
     const originalDesktopApi = window.desktopApi;
     const project = createEmptyProject(1);
     const request = { project, suite: { id: 'suite-release', version: 2 } };
@@ -101,9 +101,41 @@ describe('browser fallback agent runtime', () => {
     const desktopApi = { runSuite: vi.fn().mockResolvedValue(response) } as unknown as DesktopApi;
     window.desktopApi = desktopApi;
 
-    await expect(runSuite(request)).resolves.toBe(response);
-    expect(desktopApi.runSuite).toHaveBeenCalledWith(request);
-    window.desktopApi = originalDesktopApi;
+    try {
+      await expect(runSuite(request)).resolves.toBe(response);
+      expect(desktopApi.runSuite).toHaveBeenCalledWith({
+        projectId: project.id,
+        suite: { id: 'suite-release', version: 2 },
+      });
+    } finally {
+      window.desktopApi = originalDesktopApi;
+    }
+  });
+
+  it('delegates the exact Case revision rather than a mutable Case draft to the desktop bridge', async () => {
+    const originalDesktopApi = window.desktopApi;
+    const project = createEmptyProject(1);
+    const environment = project.environments[0]!;
+    const testCase = {
+      ...createEmptyTestCase(1, project.groups[0]!.id, environment.id),
+      id: 'case-login',
+      version: 2,
+    };
+    project.testCases = [testCase];
+    const response = { runId: 'run-login', title: testCase.name, detail: {} };
+    const desktopApi = { runTestCase: vi.fn().mockResolvedValue(response) } as unknown as DesktopApi;
+    window.desktopApi = desktopApi;
+
+    try {
+      await expect(runTestCase({ project, environment, testCase, runId: 'run-login' })).resolves.toBe(response);
+      expect(desktopApi.runTestCase).toHaveBeenCalledWith({
+        projectId: project.id,
+        testCase: { id: 'case-login', version: 2 },
+        runId: 'run-login',
+      });
+    } finally {
+      window.desktopApi = originalDesktopApi;
+    }
   });
 
   it('keeps semantic actions neutral when no Midscene runtime is connected', async () => {
@@ -164,24 +196,27 @@ describe('browser fallback agent runtime', () => {
   it('routes Agent-only test cases through the workflow runtime with canonical PRD provenance', async () => {
     const project = createEmptyProject(1);
     const environment = project.environments[0];
+    const testCase = {
+      id: 'case-agent-only',
+      version: 1,
+      kind: 'scenario' as const,
+      groupId: project.groups[0].id,
+      environmentId: environment.id,
+      source: 'prd' as const,
+      provenance: [{ kind: 'prdPath' as const, documentId: 'doc-login', pathId: 'path-login' }],
+      name: '登录验证',
+      category: '核心链路',
+      lastEdited: '刚刚',
+      url: environment.url,
+      notes: '',
+      steps: [{ id: 'step-assert', type: 'aiAssert' as const, title: '验证登录', body: '断言页面包含 登录成功' }],
+    };
+    project.testCases = [testCase];
     const response = await runTestCase({
       project,
       environment,
       runtimeProfile: request.runtimeProfile,
-      testCase: {
-        id: 'case-agent-only',
-        kind: 'scenario',
-        groupId: project.groups[0].id,
-        environmentId: environment.id,
-        source: 'prd',
-        provenance: [{ kind: 'prdPath', documentId: 'doc-login', pathId: 'path-login' }],
-        name: '登录验证',
-        category: '核心链路',
-        lastEdited: '刚刚',
-        url: environment.url,
-        notes: '',
-        steps: [{ id: 'step-assert', type: 'aiAssert', title: '验证登录', body: '断言页面包含 登录成功' }],
-      },
+      testCase,
     });
 
     expect(response.detail.status).toBe('neutral');
@@ -254,22 +289,25 @@ describe('browser fallback agent runtime', () => {
   it('keeps non-Agent test cases neutral when desktop execution is unavailable', async () => {
     const project = createEmptyProject(1);
     const environment = project.environments[0];
+    const testCase = {
+      id: 'case-manual',
+      version: 1,
+      kind: 'scenario' as const,
+      groupId: project.groups[0].id,
+      environmentId: environment.id,
+      source: 'manual' as const,
+      name: '人工检查',
+      category: '核心链路',
+      lastEdited: '刚刚',
+      url: environment.url,
+      notes: '',
+      steps: [{ id: 'step-manual', type: 'manual' as const, title: '确认页面', body: '人工确认状态' }],
+    };
+    project.testCases = [testCase];
     const response = await runTestCase({
       project,
       environment,
-      testCase: {
-        id: 'case-manual',
-        kind: 'scenario',
-        groupId: project.groups[0].id,
-        environmentId: environment.id,
-        source: 'manual',
-        name: '人工检查',
-        category: '核心链路',
-        lastEdited: '刚刚',
-        url: environment.url,
-        notes: '',
-        steps: [{ id: 'step-manual', type: 'manual', title: '确认页面', body: '人工确认状态' }],
-      },
+      testCase,
     });
 
     expect(response.detail.status).toBe('neutral');
@@ -295,23 +333,26 @@ describe('browser fallback agent runtime', () => {
       steps: [],
     };
     project.recordings = [recording];
+    const testCase = {
+      id: 'case-recording-route',
+      version: 1,
+      kind: 'recording' as const,
+      groupId: project.groups[0].id,
+      environmentId: environment.id,
+      source: 'recording' as const,
+      name: '登录回放用例',
+      category: '核心链路',
+      lastEdited: '刚刚',
+      url: environment.url,
+      notes: '',
+      steps: [{ id: 'step-replay', type: 'recordingReplay' as const, title: '回放录制', body: '回放', recordingId: recording.id }],
+    };
+    project.testCases = [testCase];
 
     const response = await runTestCase({
       project,
       environment,
-      testCase: {
-        id: 'case-recording-route',
-        kind: 'recording',
-        groupId: project.groups[0].id,
-        environmentId: environment.id,
-        source: 'recording',
-        name: '登录回放用例',
-        category: '核心链路',
-        lastEdited: '刚刚',
-        url: environment.url,
-        notes: '',
-        steps: [{ id: 'step-replay', type: 'recordingReplay', title: '回放录制', body: '回放', recordingId: recording.id }],
-      },
+      testCase,
     });
 
     expect(response.detail.testCaseId).toBe('case-recording-route');

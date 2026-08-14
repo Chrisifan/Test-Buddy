@@ -59,8 +59,8 @@ describe('desktop preload runtime IPC contract', () => {
     const desktopApi = exposeInMainWorld.mock.calls[0]![1] as Record<string, (...args: unknown[]) => unknown>;
 
     desktopApi.getRuntimeInfo();
-    desktopApi.runSuite({ suite: 'suite-1' });
-    desktopApi.runTestCase({ testCase: 'case-1' });
+    desktopApi.runSuite({ projectId: 'project-1', suite: { id: 'suite-1', version: 3 }, expectedProjectRevision: 'a'.repeat(64) });
+    desktopApi.runTestCase({ projectId: 'project-1', testCase: { id: 'case-1', version: 2 }, runId: 'run-case-1' });
     desktopApi.cancelRun('suite-1');
     desktopApi.loadRunDetail('run-1');
     desktopApi.openArtifact('/artifacts/run.html');
@@ -68,8 +68,16 @@ describe('desktop preload runtime IPC contract', () => {
     desktopApi.attachManualEvidence();
 
     expect(invoke).toHaveBeenNthCalledWith(1, runtimeIpcChannels.getInfo);
-    expect(invoke).toHaveBeenNthCalledWith(2, runtimeIpcChannels.runSuite, { suite: 'suite-1' });
-    expect(invoke).toHaveBeenNthCalledWith(3, runtimeIpcChannels.runTestCase, { testCase: 'case-1' });
+    expect(invoke).toHaveBeenNthCalledWith(2, runtimeIpcChannels.runSuite, {
+      projectId: 'project-1',
+      suite: { id: 'suite-1', version: 3 },
+      expectedProjectRevision: 'a'.repeat(64),
+    });
+    expect(invoke).toHaveBeenNthCalledWith(3, runtimeIpcChannels.runTestCase, {
+      projectId: 'project-1',
+      testCase: { id: 'case-1', version: 2 },
+      runId: 'run-case-1',
+    });
     expect(invoke).toHaveBeenNthCalledWith(4, runtimeIpcChannels.cancelRun, 'suite-1');
     expect(invoke).toHaveBeenNthCalledWith(5, runtimeIpcChannels.loadRunDetail, 'run-1');
     expect(invoke).toHaveBeenNthCalledWith(6, runtimeIpcChannels.openArtifact, '/artifacts/run.html');

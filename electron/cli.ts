@@ -3,10 +3,11 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
+  findSuiteAsset,
+  findTestCaseVersion,
   hydrateStudioState,
   isAgentRunnableTestCase,
   isMidsceneConfigured,
-  type ProjectDraft,
   type ProjectEnvironment,
   type RunTestCaseResponse,
   type RunTone,
@@ -18,16 +19,16 @@ import {
 import { nodePngImageAdapter } from './runtime/node-png-image-adapter.js';
 import { appendRunToStudioState } from './runtime/run-history.js';
 import { createRuntimeBundle } from './runtime/runtime-bundle.js';
+import { ProjectRepository, type ProjectSnapshot } from './projectRepository.js';
 import { StudioStore } from './studioStore.js';
-import { SuiteRunner } from './runtime/suite-runner.js';
 
 const usage = `Usage:
-  testbuddy run --data-dir <path> --project-id <id> (--case-id <id> [--case-id <id> ...] | --suite-id <id@version>) [--environment-id <id>] [--junit <path>] [--json <path>]
+  testbuddy run --data-dir <path> --project-id <id> (--case-id <id@version> [--case-id <id@version> ...] | --suite-id <id@version>) [--environment-id <id>] [--junit <path>] [--json <path>]
 
 Options:
   --data-dir        TestBuddy data root containing studio-data/state.json
   --project-id      Stable project ID
-  --case-id         Stable test case ID; repeat for multiple cases
+  --case-id         Exact Case ID and version, formatted as <id@version>; repeat for multiple cases
   --suite-id        Exact Suite ID and version, formatted as <id@version>
   --environment-id  Override the environment saved on every selected case
   --junit           JUnit XML destination; defaults to studio-data/artifacts
@@ -40,7 +41,7 @@ type ParsedCommand =
       kind: 'run';
       dataDir: string;
       projectId: string;
-      caseIds: string[];
+      caseReferences: VersionedTestAssetReference[];
       suiteReference?: VersionedTestAssetReference;
       environmentId?: string;
       junitPath?: string;
@@ -121,12 +122,16 @@ export function parseCliArguments(argv: string[]): ParsedCommand {
   };
   const dataDir = singleValue('--data-dir');
   const projectId = singleValue('--project-id');
-  const caseIds = [...new Set(values.get('--case-id') ?? [])];
+  const caseReferences = [...new Map(
+    (values.get('--case-id') ?? [])
+      .map((value) => parseVersionedReference(value, '--case-id'))
+      .map((reference) => [`${reference.id}@${reference.version}`, reference] as const),
+  ).values()];
   const suiteId = singleValue('--suite-id');
-  if (!dataDir || !projectId || (!caseIds.length && !suiteId)) {
+  if (!dataDir || !projectId || (!caseReferences.length && !suiteId)) {
     throw new CliUsageError('run 命令必须提供 --data-dir、--project-id 和至少一个 --case-id 或 --suite-id。');
   }
-  if (caseIds.length && suiteId) {
+  if (caseReferences.length && suiteId) {
     throw new CliUsageError('--case-id 与 --suite-id 不能同时使用。');
   }
   if (suiteId && singleValue('--environment-id')) {
@@ -137,8 +142,8 @@ export function parseCliArguments(argv: string[]): ParsedCommand {
     kind: 'run',
     dataDir,
       projectId,
-      caseIds,
-      ...(suiteId ? { suiteReference: parseVersionedReference(suiteId, '--suite-id') } : {}),
+    caseReferences,
+    ...(suiteId ? { suiteReference: parseVersionedReference(suiteId, '--suite-id') } : {}),
     ...(singleValue('--environment-id') ? { environmentId: singleValue('--environment-id') } : {}),
     ...(singleValue('--junit') ? { junitPath: singleValue('--junit') } : {}),
     ...(singleValue('--json') ? { jsonPath: singleValue('--json') } : {}),
@@ -191,9 +196,10 @@ export async function executeCliCommand(command: Exclude<ParsedCommand, { kind: 
   const store = new StudioStore(dataDir);
   const rawState = await loadExistingState(store);
   let state = hydrateStudioState(rawState);
-  const project = findProject(state, command.projectId);
-  const selections = command.caseIds.map((caseId) => selectTestCase(project, caseId, command.environmentId));
-  const suite = command.suiteReference ? selectSuite(project, command.suiteReference) : undefined;
+  const projectSnapshot = await loadProjectSnapshot(store, command.projectId);
+  const project = projectSnapshot.project;
+  const selections = command.caseReferences.map((reference) => selectTestCase(projectSnapshot, reference, command.environmentId));
+  const suite = command.suiteReference ? selectSuite(projectSnapshot, command.suiteReference) : undefined;
   const startedAt = new Date();
   const runtime = createRuntimeBundle({
     rootDir: dataDir,
@@ -219,7 +225,7 @@ export async function executeCliCommand(command: Exclude<ParsedCommand, { kind: 
       }
       try {
         const result = await runtime.runTestCase({
-          project,
+          projectSnapshot,
           testCase: selection.testCase,
           environment: selection.environment,
           runtimeProfile: {
@@ -251,46 +257,87 @@ export async function executeCliCommand(command: Exclude<ParsedCommand, { kind: 
     };
 
     if (suite) {
-      const attemptedResults = new Map<string, CliCaseResult>();
-      const suiteResult = await new SuiteRunner({
-        execute: async ({ testCase, environment }) => {
-          const result = await executeSelection({ testCase, environment });
-          attemptedResults.set(`${testCase.id}@${testCase.version ?? 1}`, result);
-          return {
-            status: result.status === 'running' ? 'neutral' : result.status,
-            summary: result.summary,
-            ...(result.runId ? { runId: result.runId } : {}),
-          };
-        },
-      }).run(project, suite);
-      suiteInfo = {
-        id: suiteResult.suiteId,
-        version: suiteResult.suiteVersion,
-        status: suiteResult.status,
-        effectiveConcurrency: suiteResult.effectiveConcurrency,
-        issues: suiteResult.issues,
-      };
-      suiteResult.results.forEach((suiteCaseResult) => {
-        const testCase = project.testCases.find((item) => item.id === suiteCaseResult.testCaseId);
-        if (!testCase) {
-          return;
+      const suiteCases = suite.caseReferences
+        .map((reference) => findTestCaseVersion(project, reference))
+        .filter((testCase): testCase is TestCaseDraft => Boolean(testCase));
+      const missingModelCases = suiteCases.filter((testCase) => isAgentRunnableTestCase(testCase) && !isMidsceneConfigured(state.midsceneConfig));
+      if (missingModelCases.length) {
+        suiteInfo = {
+          id: suite.id,
+          version: suite.version,
+          status: 'failed',
+          effectiveConcurrency: 1,
+          issues: [],
+        };
+        missingModelCases.forEach((testCase) => {
+          results.push({
+            projectId: project.id,
+            testCaseId: testCase.id,
+            environmentId: suite.environmentId,
+            title: testCase.name,
+            status: 'failed',
+            summary: '该 Agent 用例需要已配置的 Midscene 模型，当前数据目录未包含可用模型配置。',
+            failureReason: 'Midscene 模型未配置。',
+            artifacts: [],
+            attempts: 1,
+            flaky: false,
+          });
+        });
+      } else {
+        const suiteResponse = await runtime.runSuite({
+          projectSnapshot,
+          suite,
+          environment: findEnvironment(projectSnapshot, suite.environmentId),
+          runtimeProfile: state.runtimeProfile,
+          midsceneConfig: state.midsceneConfig,
+          agentModelConfig: state.agentModelConfig,
+          browserSession: state.browserSession,
+        });
+        const suiteResult = suiteResponse.detail.suite;
+        suiteInfo = {
+          id: suiteResult.suiteId,
+          version: suiteResult.suiteVersion,
+          status: suiteResult.status,
+          effectiveConcurrency: suiteResult.effectiveConcurrency,
+          issues: suiteResult.issues,
+        };
+        for (const detail of suiteResponse.detail.caseDetails) {
+          const environment = findEnvironment(projectSnapshot, detail.environmentId);
+          state = appendRunToStudioState(state, { runId: detail.id, title: detail.title, detail }, environment, runtime.browserRuntime.getState());
         }
-        const attempted = attemptedResults.get(`${suiteCaseResult.testCaseId}@${suiteCaseResult.testCaseVersion}`);
-        results.push(attempted
-          ? { ...attempted, summary: suiteCaseResult.summary, attempts: suiteCaseResult.attempts, flaky: suiteCaseResult.flaky }
-          : {
-              projectId: project.id,
-              testCaseId: testCase.id,
-              environmentId: suite.environmentId,
-              title: testCase.name,
-              status: suiteCaseResult.status,
-              summary: suiteCaseResult.summary,
-              ...(suiteCaseResult.status === 'failed' ? { failureReason: suiteCaseResult.summary } : {}),
-              artifacts: [],
-              attempts: suiteCaseResult.attempts,
-              flaky: suiteCaseResult.flaky,
-            });
-      });
+        if (suiteResponse.detail.caseDetails.length) {
+          await store.save(state);
+        }
+        suiteResult.results.forEach((suiteCaseResult) => {
+          const testCase = findTestCaseVersion(project, {
+            id: suiteCaseResult.testCaseId,
+            version: suiteCaseResult.testCaseVersion,
+          });
+          if (!testCase) return;
+          const detail = suiteCaseResult.runId
+            ? suiteResponse.detail.caseDetails.find((candidate) => candidate.id === suiteCaseResult.runId)
+            : undefined;
+          results.push(detail
+            ? {
+                ...toCliCaseResult({ runId: detail.id, title: detail.title, detail }, findEnvironment(projectSnapshot, detail.environmentId)),
+                summary: suiteCaseResult.summary,
+                attempts: suiteCaseResult.attempts,
+                flaky: suiteCaseResult.flaky,
+              }
+            : {
+                projectId: project.id,
+                testCaseId: testCase.id,
+                environmentId: suite.environmentId,
+                title: testCase.name,
+                status: suiteCaseResult.status,
+                summary: suiteCaseResult.summary,
+                ...(suiteCaseResult.status === 'failed' ? { failureReason: suiteCaseResult.summary } : {}),
+                artifacts: [],
+                attempts: suiteCaseResult.attempts,
+                flaky: suiteCaseResult.flaky,
+              });
+        });
+      }
     } else {
       for (const selection of selections) {
         results.push(await executeSelection(selection));
@@ -343,30 +390,23 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
   }
 }
 
-function findProject(state: StudioState, projectId: string): ProjectDraft {
-  const project = state.projects.find((item) => item.id === projectId);
-  if (!project) {
-    throw new CliUsageError(`未找到项目 ID：${projectId}`);
-  }
-  return project;
-}
-
-function selectSuite(project: ProjectDraft, reference: VersionedTestAssetReference): SuiteAsset {
-  const suite = project.suites.find((item) => item.id === reference.id && item.version === reference.version);
+function selectSuite(projectSnapshot: ProjectSnapshot, reference: VersionedTestAssetReference): SuiteAsset {
+  const suite = findSuiteAsset(projectSnapshot.project, reference);
   if (!suite) {
-    throw new CliUsageError(`项目 ${project.id} 中未找到 Suite：${reference.id}@${reference.version}`);
+    throw new CliUsageError(`项目 ${projectSnapshot.project.id} 中未找到 Suite：${reference.id}@${reference.version}`);
   }
   return suite;
 }
 
 function selectTestCase(
-  project: ProjectDraft,
-  testCaseId: string,
+  projectSnapshot: ProjectSnapshot,
+  reference: VersionedTestAssetReference,
   environmentOverrideId?: string,
 ): { testCase: TestCaseDraft; environment: ProjectEnvironment } {
-  const testCase = project.testCases.find((item) => item.id === testCaseId);
+  const project = projectSnapshot.project;
+  const testCase = findTestCaseVersion(project, reference);
   if (!testCase) {
-    throw new CliUsageError(`项目 ${project.id} 中未找到用例 ID：${testCaseId}`);
+    throw new CliUsageError(`项目 ${project.id} 中未找到 Case：${reference.id}@${reference.version}`);
   }
   const environmentId = environmentOverrideId ?? testCase.environmentId;
   const environment = project.environments.find((item) => item.id === environmentId);
@@ -374,6 +414,14 @@ function selectTestCase(
     throw new CliUsageError(`项目 ${project.id} 中未找到环境 ID：${environmentId}`);
   }
   return { testCase, environment };
+}
+
+function findEnvironment(projectSnapshot: ProjectSnapshot, environmentId: string): ProjectEnvironment {
+  const environment = projectSnapshot.project.environments.find((candidate) => candidate.id === environmentId);
+  if (!environment) {
+    throw new CliUsageError(`项目 ${projectSnapshot.project.id} 中未找到环境 ID：${environmentId}`);
+  }
+  return environment;
 }
 
 function parseVersionedReference(value: string, option: string): VersionedTestAssetReference {
@@ -389,6 +437,14 @@ function parseVersionedReference(value: string, option: string): VersionedTestAs
 async function loadExistingState(store: StudioStore): Promise<StudioState> {
   try {
     return await store.loadExisting();
+  } catch (error) {
+    throw new CliUsageError(messageFor(error));
+  }
+}
+
+async function loadProjectSnapshot(store: StudioStore, projectId: string): Promise<ProjectSnapshot> {
+  try {
+    return await new ProjectRepository({ studioStore: store }).load(projectId);
   } catch (error) {
     throw new CliUsageError(messageFor(error));
   }

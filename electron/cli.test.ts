@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { createEmptyProject, createInitialStudioState } from '../shared/studio.js';
 import { executeCliCommand, parseCliArguments, renderJUnitReport, type CliRunSummary } from './cli.js';
+import { ProjectAssetStore } from './projectAssetStore.js';
 import { StudioStore } from './studioStore.js';
 
 const temporaryDirectories: string[] = [];
@@ -15,7 +16,7 @@ afterEach(async () => {
 });
 
 describe('TestBuddy CLI', () => {
-  it('requires explicit stable data, project, and test case IDs', () => {
+  it('requires explicit versioned data, project, and test case references', () => {
     expect(
       parseCliArguments([
         '--',
@@ -25,9 +26,9 @@ describe('TestBuddy CLI', () => {
         '--project-id',
         'project-web',
         '--case-id',
-        'case-login',
+        'case-login@2',
         '--case-id',
-        'case-checkout',
+        'case-checkout@4',
         '--environment-id',
         'env-ci',
       ]),
@@ -35,9 +36,19 @@ describe('TestBuddy CLI', () => {
       kind: 'run',
       dataDir: '/workspace/testbuddy',
       projectId: 'project-web',
-      caseIds: ['case-login', 'case-checkout'],
+      caseReferences: [{ id: 'case-login', version: 2 }, { id: 'case-checkout', version: 4 }],
       environmentId: 'env-ci',
     });
+  });
+
+  it('rejects bare Case IDs and de-duplicates exact Case references', () => {
+    expect(() => parseCliArguments([
+      'run', '--data-dir', '/workspace/testbuddy', '--project-id', 'project-web', '--case-id', 'case-login',
+    ])).toThrow('--case-id 必须使用 <id@version> 格式。');
+    expect(parseCliArguments([
+      'run', '--data-dir', '/workspace/testbuddy', '--project-id', 'project-web',
+      '--case-id', 'case-login@2', '--case-id', 'case-login@2',
+    ])).toMatchObject({ caseReferences: [{ id: 'case-login', version: 2 }] });
   });
 
   it('accepts an exact immutable Suite reference and rejects ambiguous selection mixes', () => {
@@ -53,11 +64,11 @@ describe('TestBuddy CLI', () => {
       kind: 'run',
       dataDir: '/workspace/testbuddy',
       projectId: 'project-web',
-      caseIds: [],
+      caseReferences: [],
       suiteReference: { id: 'release/core', version: 2 },
     });
     expect(() => parseCliArguments([
-      'run', '--data-dir', '/workspace/testbuddy', '--project-id', 'project-web', '--suite-id', 'release@1', '--case-id', 'case-login',
+      'run', '--data-dir', '/workspace/testbuddy', '--project-id', 'project-web', '--suite-id', 'release@1', '--case-id', 'case-login@1',
     ])).toThrow('不能同时使用');
     expect(() => parseCliArguments([
       'run', '--data-dir', '/workspace/testbuddy', '--project-id', 'project-web', '--suite-id', 'release',
@@ -152,7 +163,7 @@ describe('TestBuddy CLI', () => {
       kind: 'run',
       dataDir: directory,
       projectId: project.id,
-      caseIds: ['case-agent'],
+      caseReferences: [{ id: 'case-agent', version: 1 }],
     });
 
     expect(summary.status).toBe('failed');
@@ -201,7 +212,7 @@ describe('TestBuddy CLI', () => {
       kind: 'run',
       dataDir: directory,
       projectId: project.id,
-      caseIds: [],
+      caseReferences: [],
       suiteReference: { id: 'suite-release', version: 1 },
     });
 
@@ -213,5 +224,45 @@ describe('TestBuddy CLI', () => {
     expect(() => parseCliArguments([
       'run', '--data-dir', directory, '--project-id', project.id, '--suite-id', 'suite-release@1', '--environment-id', environment.id,
     ])).toThrow('固定目标环境');
+  });
+
+  it('runs the exact Case revision from a bound project snapshot instead of a newer StudioStore draft', async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'testbuddy-cli-bound-case-'));
+    temporaryDirectories.push(directory);
+    const snapshotProject = createEmptyProject(1);
+    const environment = snapshotProject.environments[0]!;
+    snapshotProject.id = 'project-bound-case';
+    snapshotProject.testCases = [{
+      id: 'case-login', version: 1, kind: 'scenario', name: 'Snapshot Case v1', category: '回归', lastEdited: '',
+      url: environment.url, notes: '', groupId: snapshotProject.groups[0]!.id, environmentId: environment.id,
+      source: 'manual', steps: [{ id: 'step-v1', type: 'ai', title: '执行 v1', body: '执行 v1' }],
+    }];
+    const projectDirectory = path.join(directory, 'bound-project');
+    const assetStore = new ProjectAssetStore(projectDirectory);
+    await assetStore.saveInitial(snapshotProject);
+    const snapshot = await assetStore.loadWithRevision();
+    const stateProject = structuredClone(snapshotProject);
+    stateProject.testCases = [{
+      ...stateProject.testCases[0]!, version: 2, name: 'Mutable StudioStore Case v2', steps: [{ id: 'step-v2', type: 'manual', title: '执行 v2', body: '执行 v2' }],
+    }];
+    const state = createInitialStudioState();
+    state.projects = [stateProject];
+    state.projectAssetBindings = [{
+      projectId: snapshotProject.id,
+      projectDirectory,
+      revision: snapshot.revision,
+      boundAt: '2026-08-14T00:00:00.000Z',
+    }];
+    await new StudioStore(directory).save(state);
+
+    const command = parseCliArguments([
+      'run', '--data-dir', directory, '--project-id', snapshotProject.id, '--case-id', 'case-login@1',
+    ]);
+    if (command.kind === 'help') throw new Error('Expected run command.');
+    const summary = await executeCliCommand(command);
+
+    expect(summary.results).toEqual([
+      expect.objectContaining({ testCaseId: 'case-login', title: 'Snapshot Case v1', status: 'failed' }),
+    ]);
   });
 });
