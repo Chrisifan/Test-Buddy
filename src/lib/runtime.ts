@@ -757,7 +757,7 @@ export async function runSuite(request: RunSuiteRequest): Promise<RunSuiteRespon
     return desktopApi.runSuite({
       ...(request.runId ? { runId: request.runId } : {}),
       projectId: request.project.id,
-      suite: request.suite,
+      suite: { id: request.suite.id, version: request.suite.version },
     });
   }
 

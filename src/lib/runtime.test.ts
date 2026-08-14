@@ -96,7 +96,17 @@ describe('browser fallback agent runtime', () => {
   it('delegates an exact Suite intent rather than renderer-owned project state to the desktop bridge', async () => {
     const originalDesktopApi = window.desktopApi;
     const project = createEmptyProject(1);
-    const request = { project, suite: { id: 'suite-release', version: 2 } };
+    const request = {
+      project,
+      suite: {
+        ...createEmptySuiteAsset(project, 1),
+        id: 'suite-release',
+        version: 2,
+        name: 'Mutable renderer Suite',
+        caseReferences: [{ id: 'case-login', version: 1, dependsOn: [] }],
+        execution: { concurrency: 4, failurePolicy: 'continue' as const, retryLimit: 2 },
+      },
+    };
     const response = { runId: 'suite-run-1', title: '发布回归', detail: { suite: {}, caseDetails: [] } };
     const desktopApi = { runSuite: vi.fn().mockResolvedValue(response) } as unknown as DesktopApi;
     window.desktopApi = desktopApi;
