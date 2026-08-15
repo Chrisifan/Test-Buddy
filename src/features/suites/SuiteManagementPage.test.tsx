@@ -107,6 +107,30 @@ describe('SuiteManagementPage', () => {
     }));
   });
 
+  it('resolves Suite member and dependency labels from their pinned Case revisions', () => {
+    const project = createProject();
+    const catalogV1 = { ...project.testCases[0]!, version: 1, name: '目录 v1' };
+    const catalogV2 = { ...catalogV1, version: 2, name: '目录 v2' };
+    const checkoutV1 = { ...project.testCases[1]!, version: 1, name: '结算 v1' };
+    const checkoutV2 = { ...checkoutV1, version: 2, name: '结算 v2' };
+    project.testCases = [catalogV1, catalogV2, checkoutV1, checkoutV2];
+    const suite = {
+      ...createEmptySuiteAsset(project, 1),
+      id: 'suite-exact-labels',
+      caseReferences: [
+        { id: catalogV2.id, version: 2, dependsOn: [] },
+        { id: checkoutV2.id, version: 2, dependsOn: [{ id: catalogV2.id, version: 2 }] },
+      ],
+    };
+    project.suites = [suite];
+
+    renderPage({ project, selectedSuiteReference: { id: suite.id, version: suite.version } });
+
+    expect(screen.getByText('1. 目录 v2')).toBeInTheDocument();
+    expect(screen.getByText('2. 结算 v2')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '设为 结算 v2 依赖 目录 v2' })).toBeInTheDocument();
+  });
+
   it('blocks Suite execution until the shared preflight has valid members', () => {
     const project = createProject();
     const emptySuite = { ...createEmptySuiteAsset(project, 1), id: 'suite-empty', name: '空 Suite' };

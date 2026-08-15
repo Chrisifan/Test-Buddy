@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Check, CircleAlert, Link2, PencilLine, Play, Plus, RotateCcw, Unlink, X } from 'lucide-react';
 
 import type { ProjectDraft, SuiteAsset, SuiteRunDetail, VersionedTestAssetReference } from '../../../shared/studio.js';
-import { createEmptySuiteAsset, findSuiteAsset, listLatestTestCaseVersions, resolveSuiteTestCases } from '../../../shared/studio.js';
+import { createEmptySuiteAsset, findSuiteAsset, findTestCaseVersion, listLatestTestCaseVersions, resolveSuiteTestCases } from '../../../shared/studio.js';
 import { StatusPill } from '../../components/StatusPill.js';
 import { Badge } from '../../components/ui/badge.js';
 import { Button } from '../../components/ui/button.js';
@@ -278,7 +278,7 @@ export function SuiteManagementPage({
                   </div>
                   <div className="mt-3 grid gap-2">
                     {editorSuite.caseReferences.map((reference, index) => {
-                      const testCase = project.testCases.find((candidate) => candidate.id === reference.id);
+                      const testCase = findTestCaseVersion(project, reference);
                       const dependencies = editorSuite.caseReferences.filter((candidate) => referenceKey(candidate) !== referenceKey(reference));
                       return (
                         <div className="rounded-[4px] border border-border p-3" key={referenceKey(reference)}>
@@ -296,7 +296,7 @@ export function SuiteManagementPage({
                           {dependencies.length ? (
                             <div className="mt-3 flex flex-wrap gap-1.5">
                               {dependencies.map((dependency) => {
-                                const dependencyCase = project.testCases.find((candidate) => candidate.id === dependency.id);
+                                const dependencyCase = findTestCaseVersion(project, dependency);
                                 const active = reference.dependsOn.some((item) => referenceKey(item) === referenceKey(dependency));
                                 return (
                                   <Button
@@ -421,7 +421,7 @@ function SuiteRunSummary({ lastRun, onOpenRun, project }: { lastRun: SuiteRunDet
       </div>
       <div className="mt-3 grid gap-2">
         {lastRun.suite.results.map((result) => {
-          const testCase = project.testCases.find((candidate) => candidate.id === result.testCaseId);
+          const testCase = findTestCaseVersion(project, { id: result.testCaseId, version: result.testCaseVersion });
           return (
             <div className="border-t border-border pt-2 first:border-t-0 first:pt-0" key={`${result.testCaseId}@${result.testCaseVersion}`}>
               <div className="flex items-center justify-between gap-2">

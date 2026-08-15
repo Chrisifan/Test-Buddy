@@ -287,8 +287,10 @@ export function App() {
   const workflows = selectedProject ? listLatestTestCaseVersions(selectedProject).map(testCaseToWorkflow) : [];
   const isEditingSelectedCase = Boolean(
     caseDraft && caseDraftSourceReference && selectedTestCaseReference &&
+    selectedProject &&
     caseDraftSourceReference.id === selectedTestCaseReference.id &&
-    caseDraftSourceReference.version === selectedTestCaseReference.version,
+    caseDraftSourceReference.version === selectedTestCaseReference.version &&
+    caseDraft.id === caseDraftSourceReference.id,
   );
   const selectedWorkflow = isEditingSelectedCase
     ? testCaseToWorkflow(caseDraft!)
@@ -743,7 +745,9 @@ export function App() {
   }
 
   function handlePublishCase() {
-    if (!selectedProject || !caseDraft || !caseDraftSourceReference) {
+    if (!selectedProject || !caseDraft || !caseDraftSourceReference || !selectedTestCaseReference ||
+      !isEditingSelectedCase || caseDraft.id !== caseDraftSourceReference.id) {
+      handleDiscardCaseDraft();
       return;
     }
     const source = findTestCaseVersion(selectedProject, caseDraftSourceReference);
@@ -1405,6 +1409,7 @@ export function App() {
       ...project,
       testCases: [testCase, ...project.testCases],
     }));
+    handleDiscardCaseDraft();
     setSelectedTestCaseReference({ id: testCase.id, version: testCase.version ?? 1 });
   }
 
@@ -1835,6 +1840,7 @@ export function App() {
       ...project,
       testCases: [testCase, ...project.testCases],
     }));
+    handleDiscardCaseDraft();
     setSelectedGroupId(testCase.groupId);
     setSelectedTestCaseReference({ id: testCase.id, version: testCase.version ?? 1 });
     switchPage('cases');
@@ -2385,6 +2391,7 @@ export function App() {
       ...project,
       testCases: [testCase, ...project.testCases],
     }));
+    handleDiscardCaseDraft();
     setSelectedGroupId(testCase.groupId);
     setSelectedTestCaseReference({ id: testCase.id, version: testCase.version ?? 1 });
     switchPage('cases');
@@ -2795,7 +2802,7 @@ export function App() {
 
           {activePage === 'cases' ? (
             <TestCaseManagementPage
-              draftTestCase={caseDraft}
+              draftTestCase={isEditingSelectedCase ? caseDraft : undefined}
               isRunning={isRunning}
               onCopyStep={handleCopyStep}
               onCreateStep={handleCreateStep}
@@ -2902,7 +2909,11 @@ export function App() {
               onEditAsNewVersion={handleEditCaseVersion}
               onOpenProjects={() => goToPage('projects')}
               onPublish={handlePublishCase}
-              onRunWorkflow={handleRunWorkflow}
+              onRunWorkflow={() => {
+                if (!isEditingSelectedCase && selectedTestCaseReference) {
+                  void handleRunTestCase(selectedTestCaseReference);
+                }
+              }}
               onSelectWorkflow={handleSelectWorkflow}
               onUpdateRuntimeProfile={updateRuntimeProfile}
               onUpdateWorkflow={updateSelectedWorkflow}

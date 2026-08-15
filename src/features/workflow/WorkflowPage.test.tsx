@@ -169,4 +169,40 @@ describe('WorkflowPage', () => {
     expect(screen.getByRole('button', { name: '发布版本' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '放弃草稿' })).toBeInTheDocument();
   });
+
+  it('disables workflow library selection and execution while a Case draft is open', () => {
+    const secondWorkflow = { ...workflow, id: 'workflow-second', name: '第二个流程' };
+
+    render(
+      <I18nProvider locale="zh-CN">
+        <WorkflowPage
+          hasProject
+          isEditable
+          isRunning={false}
+          onAppendStep={vi.fn()}
+          onCreateWorkflow={vi.fn()}
+          onDeleteStep={vi.fn()}
+          onDiscardDraft={vi.fn()}
+          onDuplicateStepType={vi.fn()}
+          onEditAsNewVersion={vi.fn()}
+          onPublish={vi.fn()}
+          onRunWorkflow={vi.fn()}
+          onSelectWorkflow={vi.fn()}
+          onUpdateRuntimeProfile={vi.fn()}
+          onUpdateWorkflow={vi.fn()}
+          runId=""
+          runLogs={[]}
+          runStatus="neutral"
+          runTitle=""
+          runtimeProfile={state.runtimeProfile}
+          selectedWorkflow={workflow}
+          selectedWorkflowId={workflow.id}
+          workflows={[workflow, secondWorkflow]}
+        />
+      </I18nProvider>,
+    );
+
+    expect(screen.getByRole('button', { name: /第二个流程/u })).toBeDisabled();
+    screen.getAllByRole('button', { name: '执行当前流程' }).forEach((button) => expect(button).toBeDisabled());
+  });
 });

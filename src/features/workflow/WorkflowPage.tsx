@@ -132,7 +132,7 @@ export function WorkflowPage({
             </Button>
             <Button
               className="rounded-[4px]"
-              disabled={isRunning || !selectedWorkflow}
+              disabled={isRunning || !selectedWorkflow || isEditable}
               onClick={onRunWorkflow}
               type="button"
             >
@@ -181,7 +181,7 @@ export function WorkflowPage({
                       <Plus className="h-4 w-4" />
                       {t('workflow.action.addStep')}
                     </Button>
-                    <Button disabled={isRunning} onClick={onRunWorkflow} size="sm" type="button">
+                    <Button disabled={isRunning || isEditable} onClick={onRunWorkflow} size="sm" type="button">
                       <PlayCircle className="h-4 w-4" />
                       {isRunning ? t('workflow.action.running') : t('workflow.action.run')}
                     </Button>
@@ -320,6 +320,7 @@ export function WorkflowPage({
                 {latestWorkflows.map((workflow) => (
                   <button
                     className={`workflow-library-item ${workflow.id === selectedWorkflowId ? 'is-active' : ''}`}
+                    disabled={isEditable}
                     key={workflow.id}
                     onClick={() => onSelectWorkflow(workflow.id)}
                     type="button"
