@@ -125,6 +125,13 @@ type MessageKey =
   | 'startup.kicker'
   | 'startup.title'
   | 'startup.description'
+  | 'startup.brand.welcome'
+  | 'startup.brand.description'
+  | 'startup.brand.metric.accuracy'
+  | 'startup.brand.metric.setup'
+  | 'startup.brand.metric.autonomous'
+  | 'startup.capabilities.title'
+  | 'startup.securityNote'
   | 'startup.feature.prd'
   | 'startup.feature.prdDescription'
   | 'startup.feature.nl'
@@ -375,6 +382,13 @@ export const zhCN: Record<string, string> = {
   'startup.kicker': 'TESTBUDDY STARTUP',
   'startup.title': '先把 AI 测试引擎接入工作台',
   'startup.description': 'MidScene 是自然语言测试、录制回放智能分析和流程编排的执行引擎。你可以现在配置，也可以跳过，等后续使用相关功能时再补充。',
+  'startup.brand.welcome': '欢迎来到测试的新未来',
+  'startup.brand.description': '将需求、自然语言和真实操作转为可验证的自动化测试。',
+  'startup.brand.metric.accuracy': '准确率',
+  'startup.brand.metric.setup': '更快配置',
+  'startup.brand.metric.autonomous': '持续运行',
+  'startup.capabilities.title': '已启用的平台能力',
+  'startup.securityNote': 'API Key 仅在本地加密存储。',
   'startup.feature.prd': 'PRD 分析',
   'startup.feature.prdDescription': '从需求文档生成路径',
   'startup.feature.nl': '自然语言测试',
@@ -1420,6 +1434,13 @@ export const enUS: Messages = {
   'startup.kicker': 'TESTBUDDY STARTUP',
   'startup.title': 'Connect the AI testing engine to your workbench',
   'startup.description': 'MidScene powers natural language testing, intelligent replay analysis, and flow orchestration. Configure it now, or skip and return when a related feature needs it.',
+  'startup.brand.welcome': 'Welcome to the future of testing',
+  'startup.brand.description': 'Turn requirements, natural language, and real interactions into verifiable automated tests.',
+  'startup.brand.metric.accuracy': 'Accuracy',
+  'startup.brand.metric.setup': 'Faster setup',
+  'startup.brand.metric.autonomous': 'Always running',
+  'startup.capabilities.title': 'Enabled platform capabilities',
+  'startup.securityNote': 'Your API key is encrypted and stored locally.',
   'startup.feature.prd': 'PRD Analysis',
   'startup.feature.prdDescription': 'Generate paths from requirement docs',
   'startup.feature.nl': 'Natural Language Testing',

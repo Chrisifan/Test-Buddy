@@ -10,7 +10,7 @@ import { StartupPage } from './StartupPage.js';
 const state = createInitialStudioState();
 
 describe('StartupPage', () => {
-  it('renders the supplied TestBuddy brand asset above the startup steps', () => {
+  it('turns the project logo into a central test hub and places untitled capability cards at the bottom', () => {
     const brandLogo = '/assets/testbuddy-hammer-bot.png';
 
     render(
@@ -24,17 +24,35 @@ describe('StartupPage', () => {
       />,
     );
 
-    expect(screen.getByRole('banner', { name: 'TestBuddy' })).toContainElement(
-      screen.getByRole('img', { name: 'TestBuddy' }),
-    );
-    expect(screen.getByRole('banner', { name: 'TestBuddy' }).parentElement).toHaveClass('startup-shell');
-    expect(screen.getByRole('img', { name: 'TestBuddy' })).toHaveAttribute('src', brandLogo);
-    expect(screen.getAllByText('配置 MidScene').length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText('进入工作台')).toBeInTheDocument();
-    expect(screen.getByText('开始测试')).toBeInTheDocument();
+    expect(screen.getByTestId('startup-flow-visual')).toHaveAttribute('aria-hidden', 'true');
+    expect(screen.getByTestId('startup-flow-orbit')).toBeInTheDocument();
+    expect(screen.getByTestId('startup-flow-hub')).toContainElement(screen.getByTestId('startup-flow-logo'));
+    expect(screen.getByTestId('startup-flow-logo')).toHaveAttribute('src', brandLogo);
+    expect(screen.getAllByTestId('startup-flow-trace')).toHaveLength(5);
+    expect(screen.queryByTestId('startup-flow-ring')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('startup-flow-path')).not.toBeInTheDocument();
+    expect(screen.getAllByTestId('startup-flow-node')).toHaveLength(3);
+    expect(screen.getByTestId('startup-flow-success')).toBeInTheDocument();
+    expect(screen.queryByTestId('startup-flow-suite')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('startup-flow-case')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('startup-flow-passed')).not.toBeInTheDocument();
+    expect(screen.getByTestId('startup-flow-visual')).not.toHaveTextContent('登录校验');
+    expect(screen.getByTestId('startup-flow-visual')).not.toHaveTextContent('提交订单');
+    expect(screen.getByTestId('startup-flow-visual')).not.toHaveTextContent('结果断言');
+    expect(screen.getByTestId('startup-flow-visual')).not.toHaveTextContent('3 / 3 测试通过');
+    const flowVisual = screen.getByTestId('startup-flow-visual');
+    const capabilityCards = screen.getAllByTestId('startup-brand-capability');
+    expect(capabilityCards).toHaveLength(3);
+    expect(screen.queryByText('已启用的平台能力')).not.toBeInTheDocument();
+    expect(flowVisual.compareDocumentPosition(capabilityCards[0])).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(screen.queryByRole('heading', { level: 1, name: '欢迎来到测试的新未来' })).not.toBeInTheDocument();
+    expect(screen.queryByText('98%')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('启动步骤')).not.toBeInTheDocument();
+    expect(screen.queryByText('进入工作台')).not.toBeInTheDocument();
+    expect(screen.queryByText('开始测试')).not.toBeInTheDocument();
   });
 
-  it('shows first-run Midscene setup with a skippable stepper', () => {
+  it('shows a single full-height Midscene setup screen with a skip action', () => {
     render(
       <StartupPage
         brandLogo="/assets/testbuddy-hammer-bot.png"
@@ -47,15 +65,14 @@ describe('StartupPage', () => {
     );
 
     expect(screen.getByLabelText('启动屏')).toBeInTheDocument();
-    expect(screen.getByLabelText('启动步骤')).toBeInTheDocument();
-    expect(screen.getAllByText('配置 MidScene').length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText('进入工作台')).toBeInTheDocument();
-    expect(screen.getByText('开始测试')).toBeInTheDocument();
+    expect(screen.queryByLabelText('启动步骤')).not.toBeInTheDocument();
+    expect(screen.queryByText('STEP 01 / 引擎')).not.toBeInTheDocument();
+    expect(screen.getByText('配置 MidScene')).toBeInTheDocument();
     expect(screen.getByLabelText('MidScene 快速配置')).toBeInTheDocument();
     expect(screen.getByText('MIDSCENE_MODEL_BASE_URL')).toBeInTheDocument();
     expect(screen.getByText('MIDSCENE_MODEL_API_KEY')).toBeInTheDocument();
     expect(screen.getByText('必填')).toBeInTheDocument();
-    expect(screen.getByText('启动就绪')).toBeInTheDocument();
+    expect(screen.getByText('API Key 仅在本地加密存储。')).toBeInTheDocument();
     expect(screen.queryByText('Required')).not.toBeInTheDocument();
     expect(screen.queryByText('Startup Ready')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: '保存并进入工作台' })).toBeDisabled();
@@ -81,20 +98,56 @@ describe('StartupPage', () => {
     expect(onSkip).toHaveBeenCalledTimes(1);
   });
 
-  it('defines a full-width top row for the startup header', () => {
+  it('defines the Figma split layout with a mobile single-column fallback', () => {
     const styles = readFileSync(resolve(process.cwd(), 'src/styles/luminous-precision.css'), 'utf8');
     const startupStyles = styles.slice(
       styles.indexOf('/* First-run configuration follows the same shell as the Figma onboarding view. */'),
       styles.indexOf('/* Page-specific structure sourced from the Figma workbench screens. */'),
     );
-    const mobileStartupStyles = startupStyles.slice(startupStyles.indexOf('@media (max-width: 760px)'));
+    expect(startupStyles).toMatch(
+      /\.startup-shell\s*\{[^}]*grid-template-columns:\s*minmax\(360px,\s*45%\)\s*minmax\(0,\s*1fr\);/,
+    );
+    expect(startupStyles).toMatch(/\.startup-workspace\s*\{[^}]*overflow:\s*auto;/);
+    expect(startupStyles).toContain('.startup-midscene-meta {');
+    expect(startupStyles).not.toContain('.startup-header {');
+    expect(startupStyles).toMatch(/\.startup-flow-visual\s*\{[^}]*animation:/);
+    expect(startupStyles).toMatch(/\.startup-shell\s*\{[^}]*grid-template-columns:\s*1fr;/);
+    expect(startupStyles).toMatch(
+      /\.startup-test-orbit-trace,\s*\.startup-test-orbit-node\s*\{[^}]*display:\s*none;/,
+    );
+  });
 
-    expect(startupStyles).toContain('grid-template-columns: minmax(0, 1fr);');
-    expect(startupStyles).toContain('grid-template-rows: 72px minmax(0, 1fr) 32px;');
-    expect(startupStyles).toContain('.startup-header {');
-    expect(startupStyles).toContain('.startup-header .home-start-step {');
-    expect(startupStyles).not.toContain('grid-template-columns: 224px minmax(0, 1fr);');
-    expect(mobileStartupStyles).toMatch(/\.startup-step-list\s*\{[^}]*grid-template-columns:\s*1fr;/);
-    expect(mobileStartupStyles).toMatch(/\.startup-help-link\s*\{[^}]*grid-column:\s*2;[^}]*grid-row:\s*1;/);
+  it('keeps the configuration workspace independently scrollable', () => {
+    const styles = readFileSync(resolve(process.cwd(), 'src/styles/luminous-precision.css'), 'utf8');
+    const startupStyles = styles.slice(
+      styles.indexOf('/* First-run configuration follows the same shell as the Figma onboarding view. */'),
+      styles.indexOf('/* Page-specific structure sourced from the Figma workbench screens. */'),
+    );
+
+    expect(startupStyles).toMatch(/\.startup-workspace\s*\{[^}]*overflow:\s*auto;/);
+    expect(startupStyles).toMatch(/\.startup-workspace-inner\s*\{[^}]*min-height:\s*100%;/);
+    expect(startupStyles).toMatch(
+      /\.startup-workspace \.home-midscene-card\s*\{[^}]*grid-template-rows:\s*auto\s+auto\s+minmax\(0,\s*1fr\);/,
+    );
+    expect(startupStyles).toMatch(
+      /\.startup-workspace \.home-midscene-grid\s*\{[^}]*align-content:\s*start;/,
+    );
+    expect(startupStyles).toContain('.startup-midscene-footer {');
+  });
+
+  it('uses an animated logo hub in the Figma dark panel and preserves the 48px desktop gutter', () => {
+    const styles = readFileSync(resolve(process.cwd(), 'src/styles/luminous-precision.css'), 'utf8');
+    const startupStyles = styles.slice(
+      styles.indexOf('/* First-run configuration follows the same shell as the Figma onboarding view. */'),
+      styles.indexOf('/* Page-specific structure sourced from the Figma workbench screens. */'),
+    );
+
+    expect(startupStyles).toMatch(/\.startup-test-hub\s*\{[^}]*width:\s*112px;/);
+    expect(startupStyles).toMatch(/\.startup-test-hub\s*\{[^}]*animation:\s*startup-test-hub-pulse/);
+    expect(startupStyles).toMatch(
+      /\.startup-brand-panel\s*\{[^}]*grid-template-rows:\s*minmax\(320px,\s*1fr\)\s+auto;/,
+    );
+    expect(startupStyles).toMatch(/\.startup-workspace\s*\{[^}]*padding:\s*32px\s+48px;/);
+    expect(startupStyles).toMatch(/\.startup-workspace-inner\s*\{[^}]*padding-bottom:\s*0;/);
   });
 });

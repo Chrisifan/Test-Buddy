@@ -21,7 +21,11 @@ describe('App shell', () => {
     render(<App />);
 
     expect(await screen.findByLabelText('启动屏')).toBeInTheDocument();
-    expect(screen.getByRole('heading', { level: 1, name: '先把 AI 测试引擎接入工作台' })).toBeInTheDocument();
+    expect(screen.queryByText('已启用的平台能力')).not.toBeInTheDocument();
+    expect(screen.getByText('PRD 分析')).toBeInTheDocument();
+    expect(screen.getByText('自然语言测试')).toBeInTheDocument();
+    expect(screen.getByText('录制回放')).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { level: 1, name: '欢迎来到测试的新未来' })).not.toBeInTheDocument();
   });
 
   it('keeps the workspace read-only when desktop state loading fails', async () => {

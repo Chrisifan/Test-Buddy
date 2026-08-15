@@ -1,6 +1,27 @@
 import type { AgentModelAssignment, AgentPlanStepDraft, AgentRecoveryPlan, AgentReporterSummary, AgentRunResult, AgentStep } from './agent.js';
 
-export type RunTone = 'running' | 'passed' | 'failed' | 'neutral';
+export type RunStatus = 'running' | 'passed' | 'failed' | 'blocked' | 'skipped' | 'cancelled' | 'error';
+/**
+ * Transitional status used only by live renderer and runner APIs that have
+ * not yet completed the lifecycle migration. Persisted records use RunStatus.
+ */
+export type RunTone = RunStatus | 'neutral';
+export type RunReasonCode =
+  | 'assertionFailed'
+  | 'actionFailed'
+  | 'missingAssetVersion'
+  | 'fixturePreflight'
+  | 'credentialUnavailable'
+  | 'dependencyFailed'
+  | 'userCancelled'
+  | 'unsupportedAction'
+  | 'executorError'
+  | 'legacyAmbiguousNeutral';
+
+export interface RunReason {
+  code: RunReasonCode;
+  message: string;
+}
 export type ChatRole = 'system' | 'user' | 'assistant';
 export type CommandMode = 'ai' | 'aiAssert' | 'aiQuery';
 export type StepType = 'ai' | 'aiAssert' | 'aiQuery';
@@ -36,9 +57,10 @@ export type AgentModelProvider = 'reuseMidscene' | 'openaiCompatible';
 export interface RunSummary {
   id: string;
   name: string;
-  status: RunTone;
+  status: RunStatus;
   duration: string;
   summary: string;
+  reason?: RunReason;
   projectId?: string;
   testCaseId?: string;
   documentId?: string;
@@ -151,6 +173,40 @@ export interface VersionedTestAssetReference {
   version: number;
 }
 
+/** Immutable, redacted execution inputs retained with a completed Case run. */
+export interface RunProvenance {
+  schemaVersion: 1;
+  projectId: string;
+  projectRevision: string;
+  source: 'projectDirectory' | 'legacyStudioStore';
+  reproducibility: 'versioned' | 'legacy';
+  testCase: VersionedTestAssetReference;
+  fixtures: VersionedTestAssetReference[];
+  reusableFlows: VersionedTestAssetReference[];
+  baselines: VersionedTestAssetReference[];
+  environment: {
+    id: string;
+    name: string;
+    baseUrl: string;
+    storageStateRef?: string;
+  };
+  browserProfile: {
+    engine: BrowserEngine;
+    headless: boolean;
+  };
+  executor: {
+    appVersion: string;
+    runnerVersion: string;
+  };
+  model: {
+    provider?: string;
+    model?: string;
+    endpointFingerprint?: string;
+    hasKey: boolean;
+  };
+  createdAt: string;
+}
+
 export type SuiteFailurePolicy = 'continue' | 'failFast';
 
 /**
@@ -213,7 +269,7 @@ export interface SuiteCaseResolution {
 export interface SuiteCaseRunResult {
   testCaseId: string;
   testCaseVersion: number;
-  status: Exclude<RunTone, 'running'>;
+  status: Exclude<RunStatus, 'running'>;
   summary: string;
   attempts: number;
   flaky: boolean;
@@ -224,7 +280,7 @@ export interface SuiteRunResult {
   suiteId: string;
   suiteVersion: number;
   environmentId: string;
-  status: Exclude<RunTone, 'running'>;
+  status: Exclude<RunStatus, 'running'>;
   startedAt: string;
   endedAt: string;
   effectiveConcurrency: number;
@@ -1130,7 +1186,7 @@ export interface RunStepLog {
   id: string;
   stepId: string;
   title: string;
-  status: RunTone;
+  status: RunStatus;
   message: string;
   screenshotPath?: string;
 }
@@ -1168,11 +1224,13 @@ export interface RunDetail {
   documentId?: string;
   environmentId: string;
   title: string;
-  status: RunTone;
+  status: RunStatus;
   startedAt: string;
   endedAt?: string;
   duration: string;
   summary: string;
+  reason?: RunReason;
+  provenance?: RunProvenance;
   logs: string[];
   steps: RunStepLog[];
   artifacts: RunArtifact[];
@@ -1197,7 +1255,8 @@ export interface RunCancellation {
   cancelledAt: string;
 }
 
-export type RunCoverageRiskStatus = 'neverExecuted' | 'failed' | 'neutral';
+export type RunProblemStatus = Exclude<RunStatus, 'running' | 'passed'>;
+export type RunCoverageRiskStatus = 'neverExecuted' | RunProblemStatus;
 
 export interface RunCoverageRisk {
   testCaseId: string;
@@ -1219,7 +1278,7 @@ export interface ProjectRunReportProblemRun {
   id: string;
   testCaseName: string;
   environmentName: string;
-  status: Extract<RunTone, 'failed' | 'neutral'>;
+  status: RunProblemStatus;
   startedAt?: string;
   duration: string;
   summary: string;
@@ -1232,13 +1291,13 @@ export interface ProjectRunReportCoverageRisk {
   groupName: string;
   environmentName: string;
   status: RunCoverageRiskStatus;
-  latestStatus?: Extract<RunTone, 'failed' | 'neutral'>;
+  latestStatus?: RunProblemStatus;
 }
 
 export interface ProjectRunReport {
   generatedAt: string;
   projectName: string;
-  runStats: Record<RunTone, number>;
+  runStats: Record<RunStatus, number>;
   coverageRisk: {
     total: number;
     verified: number;
@@ -2281,10 +2340,14 @@ export function hydrateStudioState(
     projects: migratedProjects,
     projectAssetBindings,
     runDetails: Array.isArray(rawState.runDetails)
-      ? rawState.runDetails.filter((run) => run.projectId !== builtInMockProjectId)
+      ? rawState.runDetails
+        .filter((run) => run.projectId !== builtInMockProjectId)
+        .map(migrateLegacyRunDetail)
       : initialState.runDetails,
     recentRuns: Array.isArray(rawState.recentRuns)
-      ? rawState.recentRuns.filter((run) => run.projectId !== builtInMockProjectId)
+      ? rawState.recentRuns
+        .filter((run) => run.projectId !== builtInMockProjectId)
+        .map(migrateLegacyRunSummary)
       : initialState.recentRuns,
     chatEntries: Array.isArray(rawState.chatEntries)
       ? rawState.chatEntries.filter((entry) => !builtInMockChatEntryIds.has(entry.id))
@@ -2314,6 +2377,69 @@ export function hydrateStudioState(
     selectedWorkflowId: selectedTestCaseReference?.id ?? '',
     workflows: selectedProject?.testCases.map(testCaseToWorkflow) ?? initialState.workflows,
   };
+}
+
+function migrateLegacyRunDetail(run: RunDetail): RunDetail {
+  if ((run as { status?: unknown }).status !== 'neutral') {
+    return run;
+  }
+
+  return {
+    ...run,
+    ...classifyLegacyNeutralRun(run.cancellation),
+  };
+}
+
+function migrateLegacyRunSummary(run: RunSummary): RunSummary {
+  if ((run as { status?: unknown }).status !== 'neutral') {
+    return run;
+  }
+
+  return {
+    ...run,
+    ...classifyLegacyNeutralRun(),
+  };
+}
+
+function classifyLegacyNeutralRun(cancellationValue?: unknown): Pick<RunDetail, 'status' | 'reason'> {
+  const cancellation = normalizeLegacyUserCancellation(cancellationValue);
+  if (cancellation) {
+    return {
+      status: 'cancelled',
+      reason: {
+        code: 'userCancelled',
+        message: cancellation.message,
+      },
+    };
+  }
+
+  return {
+    status: 'blocked',
+    reason: {
+      code: 'legacyAmbiguousNeutral',
+      message: 'Legacy neutral run could not be classified from structured evidence.',
+    },
+  };
+}
+
+function normalizeLegacyUserCancellation(value: unknown): RunCancellation | undefined {
+  if (!value || typeof value !== 'object') {
+    return undefined;
+  }
+
+  const cancellation = value as Partial<RunCancellation>;
+  return cancellation.source === 'user' &&
+    cancellation.reason === 'userCancelled' &&
+    typeof cancellation.message === 'string' &&
+    cancellation.message.trim() &&
+    typeof cancellation.cancelledAt === 'string'
+    ? {
+        source: 'user',
+        reason: 'userCancelled',
+        message: cancellation.message,
+        cancelledAt: cancellation.cancelledAt,
+      }
+    : undefined;
 }
 
 /** Drops malformed or stale pointers without reading any external project directory. */
@@ -3432,17 +3558,17 @@ export function deriveRunCoverageRisk(
   project: ProjectDraft,
   runHistory: RunSummary[],
 ): RunCoverageRiskSummary {
-  const latestTerminalByScope = new Map<string, { run: RunSummary; index: number }>();
+  const latestTerminalByScope = new Map<string, {
+    run: RunSummary & { status: Exclude<RunStatus, 'running'> };
+    index: number;
+  }>();
   runHistory.forEach((run, index) => {
-    if (run.projectId !== project.id || !run.testCaseId || !run.environmentId || run.status === 'running') {
-      return;
-    }
-    if (run.status !== 'passed' && run.status !== 'failed' && run.status !== 'neutral') {
+    if (run.projectId !== project.id || !run.testCaseId || !run.environmentId || !isTerminalRunStatus(run.status)) {
       return;
     }
     const key = `${run.testCaseId}::${run.environmentId}`;
     const current = latestTerminalByScope.get(key);
-    const candidate = { run, index };
+    const candidate = { run: run as RunSummary & { status: Exclude<RunStatus, 'running'> }, index };
     if (isNewerTerminalRun(candidate, current)) {
       latestTerminalByScope.set(key, candidate);
     }
@@ -3460,7 +3586,7 @@ export function deriveRunCoverageRisk(
       testCaseId: testCase.id,
       groupId: testCase.groupId,
       environmentId: testCase.environmentId,
-      status: latest?.status === 'failed' ? 'failed' : latest?.status === 'neutral' ? 'neutral' : 'neverExecuted',
+      status: latest ? latest.status : 'neverExecuted',
       ...(latest ? { latestRun: latest } : {}),
     });
   });
@@ -3485,9 +3611,19 @@ export function deriveProjectRunReport(
   const projectRuns = runHistory
     .map((run, index) => ({ run, index }))
     .filter(({ run }) => run.projectId === project.id);
-  const runStats: Record<RunTone, number> = { running: 0, passed: 0, failed: 0, neutral: 0 };
+  const runStats: Record<RunStatus, number> = {
+    running: 0,
+    passed: 0,
+    failed: 0,
+    blocked: 0,
+    skipped: 0,
+    cancelled: 0,
+    error: 0,
+  };
   projectRuns.forEach(({ run }) => {
-    runStats[run.status] += 1;
+    if (isRunStatus(run.status)) {
+      runStats[run.status] += 1;
+    }
   });
 
   const detailsById = new Map(
@@ -3498,8 +3634,8 @@ export function deriveProjectRunReport(
   const groupNames = new Map(project.groups.map((group) => [group.id, group.name]));
   const problemRuns = projectRuns
     .filter(
-      (entry): entry is { run: RunSummary & { status: Extract<RunTone, 'failed' | 'neutral'> }; index: number } =>
-        entry.run.status === 'failed' || entry.run.status === 'neutral',
+      (entry): entry is { run: RunSummary & { status: RunProblemStatus }; index: number } =>
+        isRunProblemStatus(entry.run.status),
     )
     .sort((left, right) => compareRunHistoryEntriesNewest(left, right))
     .slice(0, 20)
@@ -3555,7 +3691,7 @@ export function deriveProjectRunReport(
         groupName: groupNames.get(risk.groupId) ?? risk.groupId,
         environmentName: environmentNames.get(risk.environmentId) ?? risk.environmentId,
         status: risk.status,
-        ...(risk.latestRun?.status === 'failed' || risk.latestRun?.status === 'neutral'
+        ...(risk.latestRun && isRunProblemStatus(risk.latestRun.status)
           ? { latestStatus: risk.latestRun.status }
           : {}),
       })),
@@ -3566,6 +3702,33 @@ export function deriveProjectRunReport(
     },
     problemRuns,
   };
+}
+
+function isRunStatus(value: unknown): value is RunStatus {
+  return value === 'running' ||
+    value === 'passed' ||
+    value === 'failed' ||
+    value === 'blocked' ||
+    value === 'skipped' ||
+    value === 'cancelled' ||
+    value === 'error';
+}
+
+function isTerminalRunStatus(value: unknown): value is Exclude<RunStatus, 'running'> {
+  return value === 'passed' ||
+    value === 'failed' ||
+    value === 'blocked' ||
+    value === 'skipped' ||
+    value === 'cancelled' ||
+    value === 'error';
+}
+
+function isRunProblemStatus(value: unknown): value is RunProblemStatus {
+  return value === 'failed' ||
+    value === 'blocked' ||
+    value === 'skipped' ||
+    value === 'cancelled' ||
+    value === 'error';
 }
 
 function compareRunHistoryEntriesNewest(

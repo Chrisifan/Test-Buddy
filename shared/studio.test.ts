@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, expectTypeOf, it, vi } from 'vitest';
 
 import * as studio from './studio.js';
 import {
@@ -2279,18 +2279,225 @@ describe('studio state hydration', () => {
     expect(project.prdCoverageTriage).toEqual([]);
   });
 
+  it('migrates ambiguous legacy neutral runs to blocked without inventing a failure', () => {
+    const sourceProject = createEmptyProject(1);
+    const project = {
+      ...sourceProject,
+      id: 'project-legacy-run',
+      testCases: [createEmptyTestCase(1, sourceProject.groups[0]!.id, sourceProject.environments[0]!.id)],
+    };
+    const legacyDetail = {
+      id: 'run-legacy-neutral',
+      projectId: project.id,
+      testCaseId: project.testCases[0]!.id,
+      environmentId: project.environments[0]!.id,
+      title: 'Legacy neutral run',
+      status: 'neutral',
+      startedAt: '2026-08-15T00:00:00.000Z',
+      duration: '00:00:01',
+      summary: 'The prior store did not classify this terminal result.',
+      logs: [],
+      steps: [],
+      artifacts: [],
+    };
+    const legacySummary = {
+      id: legacyDetail.id,
+      name: legacyDetail.title,
+      status: 'neutral',
+      duration: legacyDetail.duration,
+      summary: legacyDetail.summary,
+      projectId: project.id,
+      testCaseId: legacyDetail.testCaseId,
+      environmentId: legacyDetail.environmentId,
+    };
+
+    const hydrated = hydrateStudioState({
+      ...createInitialStudioState(),
+      projects: [project],
+      runDetails: [legacyDetail] as unknown as studio.RunDetail[],
+      recentRuns: [legacySummary] as unknown as studio.RunSummary[],
+    });
+
+    expect(hydrated.runDetails[0]).toMatchObject({
+      status: 'blocked',
+      reason: {
+        code: 'legacyAmbiguousNeutral',
+        message: expect.any(String),
+      },
+    });
+    expect(hydrated.recentRuns[0]).toMatchObject({
+      status: 'blocked',
+      reason: {
+        code: 'legacyAmbiguousNeutral',
+        message: expect.any(String),
+      },
+    });
+  });
+
+  it('migrates legacy neutral runs with structured cancellation evidence to cancelled', () => {
+    const sourceProject = createEmptyProject(1);
+    const project = {
+      ...sourceProject,
+      id: 'project-legacy-cancelled-run',
+      testCases: [createEmptyTestCase(1, sourceProject.groups[0]!.id, sourceProject.environments[0]!.id)],
+    };
+    const legacyDetail = {
+      id: 'run-legacy-cancelled',
+      projectId: project.id,
+      testCaseId: project.testCases[0]!.id,
+      environmentId: project.environments[0]!.id,
+      title: 'Legacy cancelled run',
+      status: 'neutral',
+      startedAt: '2026-08-15T00:00:00.000Z',
+      duration: '00:00:01',
+      summary: 'The user cancelled this run.',
+      logs: [],
+      steps: [],
+      artifacts: [],
+      cancellation: {
+        source: 'user',
+        reason: 'userCancelled',
+        message: 'Stopped from the run controls.',
+        cancelledAt: '2026-08-15T00:00:01.000Z',
+      },
+    };
+
+    const hydrated = hydrateStudioState({
+      ...createInitialStudioState(),
+      projects: [project],
+      runDetails: [legacyDetail] as unknown as studio.RunDetail[],
+    });
+
+    expect(hydrated.runDetails[0]).toMatchObject({
+      status: 'cancelled',
+      reason: {
+        code: 'userCancelled',
+        message: legacyDetail.cancellation.message,
+      },
+    });
+  });
+
+  it('excludes neutral from new persisted run contracts', () => {
+    expectTypeOf<'neutral'>().not.toExtend<studio.RunStatus>();
+    expectTypeOf<'neutral'>().not.toExtend<studio.RunSummary['status']>();
+    expectTypeOf<'neutral'>().not.toExtend<studio.RunDetail['status']>();
+  });
+
+  it('allows a RunDetail to retain complete frozen provenance', () => {
+    const provenance: studio.RunProvenance = {
+      schemaVersion: 1,
+      projectId: 'project-frozen',
+      projectRevision: 'revision-123',
+      source: 'projectDirectory',
+      reproducibility: 'versioned',
+      testCase: { id: 'case-checkout', version: 2 },
+      fixtures: [{ id: 'fixture-account', version: 1 }],
+      reusableFlows: [{ id: 'flow-login', version: 3 }],
+      baselines: [{ id: 'baseline-dashboard', version: 4 }],
+      environment: {
+        id: 'env-staging',
+        name: 'Staging',
+        baseUrl: 'https://staging.example.test',
+        storageStateRef: 'storage-state-1',
+      },
+      browserProfile: { engine: 'chromium', headless: true },
+      executor: { appVersion: '1.0.0', runnerVersion: '1.0.0' },
+      model: { provider: 'openaiCompatible', model: 'test-model', endpointFingerprint: 'sha256:abc', hasKey: true },
+      createdAt: '2026-08-15T00:00:00.000Z',
+    };
+    const detail: studio.RunDetail = {
+      id: 'run-frozen',
+      projectId: provenance.projectId,
+      testCaseId: provenance.testCase.id,
+      environmentId: provenance.environment.id,
+      title: 'Frozen run',
+      status: 'blocked',
+      startedAt: provenance.createdAt,
+      duration: '00:00:01',
+      summary: 'Exact asset versions are retained.',
+      logs: [],
+      steps: [],
+      artifacts: [],
+      reason: { code: 'missingAssetVersion', message: 'The original Case version is unavailable.' },
+      provenance,
+    };
+
+    expect(detail.provenance).toEqual(provenance);
+  });
+
+  it('distinguishes every terminal outcome in report and coverage risk', () => {
+    const sourceProject = createEmptyProject(1);
+    const terminalStatuses = ['passed', 'failed', 'error', 'blocked', 'skipped', 'cancelled'] as const;
+    const sourceTestCase = createEmptyTestCase(
+      1,
+      sourceProject.groups[0]!.id,
+      sourceProject.environments[0]!.id,
+    );
+    const testCases = terminalStatuses.map((status, index) => ({
+      ...sourceTestCase,
+      id: `case-${status}`,
+      name: `Case ${status}`,
+      version: index + 1,
+    }));
+    const project = {
+      ...sourceProject,
+      id: 'project-terminal-outcomes',
+      testCases,
+    };
+    const environmentId = project.environments[0]!.id;
+    const history = terminalStatuses.map((status, index) => ({
+      id: `run-${status}`,
+      name: `Run ${status}`,
+      status,
+      duration: '00:00:01',
+      summary: `Run ended as ${status}.`,
+      projectId: project.id,
+      testCaseId: testCases[index]!.id,
+      environmentId,
+      startedAt: `2026-08-15T00:00:0${index}.000Z`,
+    }));
+
+    const coverage = deriveRunCoverageRisk(project, history);
+    const report = deriveProjectRunReport(project, history, [], '2026-08-15T00:00:10.000Z');
+
+    expect(coverage).toMatchObject({ total: 6, verified: 1 });
+    expect(coverage.risks).toEqual(expect.arrayContaining([
+      expect.objectContaining({ testCaseId: 'case-failed', status: 'failed' }),
+      expect.objectContaining({ testCaseId: 'case-error', status: 'error' }),
+      expect.objectContaining({ testCaseId: 'case-blocked', status: 'blocked' }),
+      expect.objectContaining({ testCaseId: 'case-skipped', status: 'skipped' }),
+      expect.objectContaining({ testCaseId: 'case-cancelled', status: 'cancelled' }),
+    ]));
+    expect(report.runStats).toEqual({
+      running: 0,
+      passed: 1,
+      failed: 1,
+      blocked: 1,
+      skipped: 1,
+      cancelled: 1,
+      error: 1,
+    });
+    expect(report.problemRuns.map((run) => run.status)).toEqual([
+      'cancelled',
+      'skipped',
+      'blocked',
+      'error',
+      'failed',
+    ]);
+  });
+
   it('derives cross-run risk from complete project history without allowing running records to replace a terminal result', () => {
     const demoProject = createDemoStudioState().projects[0]!;
     const unrunCase = { ...demoProject.testCases[0]!, id: 'case-never-executed', name: '从未执行用例' };
     const project = { ...demoProject, testCases: [...demoProject.testCases, unrunCase] };
     const [verifiedCase, waitingCase, failedCase] = project.testCases;
     const environmentId = project.environments[0]!.id;
-    const makeRun = (id: string, testCaseId: string, status: 'passed' | 'failed' | 'neutral' | 'running', startedAt?: string) => ({
+    const makeRun = (id: string, testCaseId: string, status: 'passed' | 'failed' | 'blocked' | 'running', startedAt?: string) => ({
       id, name: id, status, duration: '00:00:01', summary: id, projectId: project.id, testCaseId, environmentId,
       ...(startedAt ? { startedAt } : {}),
     });
     const risk = deriveRunCoverageRisk(project, [
-      makeRun('waiting-newest', waitingCase!.id, 'neutral'),
+      makeRun('waiting-newest', waitingCase!.id, 'blocked'),
       makeRun('waiting-old', waitingCase!.id, 'failed'),
       makeRun('failed-terminal', failedCase!.id, 'failed', '2026-08-02T00:00:00.000Z'),
       makeRun('failed-running', failedCase!.id, 'running', '2026-08-03T00:00:00.000Z'),
@@ -2300,7 +2507,7 @@ describe('studio state hydration', () => {
 
     expect(risk).toMatchObject({ total: project.testCases.length, verified: 1 });
     expect(risk.risks).toEqual(expect.arrayContaining([
-      expect.objectContaining({ testCaseId: waitingCase!.id, status: 'neutral' }),
+      expect.objectContaining({ testCaseId: waitingCase!.id, status: 'blocked' }),
       expect.objectContaining({ testCaseId: failedCase!.id, status: 'failed', latestRun: expect.objectContaining({ id: 'failed-terminal' }) }),
       expect.objectContaining({ testCaseId: unrunCase.id, status: 'neverExecuted' }),
     ]));
@@ -2331,7 +2538,7 @@ describe('studio state hydration', () => {
     const history = Array.from({ length: 22 }, (_, index) => ({
       id: `run-report-${index}`,
       name: `历史运行 ${index}`,
-      status: index % 2 ? 'failed' as const : 'neutral' as const,
+      status: index % 2 ? 'failed' as const : 'blocked' as const,
       duration: '00:00:01',
       summary: `摘要 ${index}`,
       projectId: reportProject.id,
@@ -2345,7 +2552,7 @@ describe('studio state hydration', () => {
       testCaseId: testCase.id,
       environmentId,
       title: '历史运行 20',
-      status: 'neutral',
+      status: 'blocked',
       startedAt: '2026-08-21T00:00:00.000Z',
       duration: '00:00:01',
       summary: '摘要 20',
@@ -2357,7 +2564,7 @@ describe('studio state hydration', () => {
 
     expect(report).toMatchObject({
       projectName: reportProject.name,
-      runStats: { failed: 11, neutral: 11 },
+      runStats: { failed: 11, blocked: 11 },
       prdCoverage: { paths: 1, targets: { recording: { deferred: 1 } } },
     });
     expect(report.problemRuns).toHaveLength(20);
