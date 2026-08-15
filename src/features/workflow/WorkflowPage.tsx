@@ -65,10 +65,14 @@ export function WorkflowPage({
   onDeleteStep,
   onDuplicateStepType,
   onUpdateRuntimeProfile,
+  isEditable,
+  onEditAsNewVersion,
+  onPublish,
+  onDiscardDraft,
   hasProject,
   onOpenProjects,
 }: {
-  workflows: WorkflowDraft[];
+  workflows: (WorkflowDraft & { version?: number })[];
   selectedWorkflow?: WorkflowDraft;
   selectedWorkflowId: string;
   isRunning: boolean;
@@ -85,10 +89,21 @@ export function WorkflowPage({
   onDeleteStep: (stepId: string) => void;
   onDuplicateStepType: (type: WorkflowStepDraft['type']) => void;
   onUpdateRuntimeProfile: (patch: Partial<RuntimeProfile>) => void;
+  isEditable?: boolean;
+  onEditAsNewVersion?: () => void;
+  onPublish?: () => void;
+  onDiscardDraft?: () => void;
   hasProject: boolean;
   onOpenProjects?: () => void;
 }) {
   const { t } = useI18n();
+  const latestWorkflows = [...workflows.reduce((latest, workflow) => {
+    const current = latest.get(workflow.id);
+    if (!current || (workflow.version ?? 1) > (current.version ?? 1)) {
+      latest.set(workflow.id, workflow);
+    }
+    return latest;
+  }, new Map<string, WorkflowDraft & { version?: number }>()).values()];
 
   if (!hasProject) {
     return (
@@ -148,7 +163,21 @@ export function WorkflowPage({
                     <p>{selectedWorkflow.notes || t('workflow.detail.defaultDescription')}</p>
                   </div>
                   <div className="flex flex-wrap gap-2">
-                    <Button onClick={() => onAppendStep('ai')} size="sm" type="button" variant="outline">
+                    {isEditable ? (
+                      <>
+                        <Button onClick={onPublish} size="sm" type="button">
+                          {t('cases.action.publishVersion')}
+                        </Button>
+                        <Button onClick={onDiscardDraft} size="sm" type="button" variant="outline">
+                          {t('cases.action.discardDraft')}
+                        </Button>
+                      </>
+                    ) : (
+                      <Button onClick={onEditAsNewVersion} size="sm" type="button" variant="outline">
+                        {t('cases.action.editVersion')}
+                      </Button>
+                    )}
+                    <Button disabled={!isEditable} onClick={() => onAppendStep('ai')} size="sm" type="button" variant="outline">
                       <Plus className="h-4 w-4" />
                       {t('workflow.action.addStep')}
                     </Button>
@@ -168,6 +197,7 @@ export function WorkflowPage({
                     <div className="form-field">
                       <Label>{t('workflow.form.name')}</Label>
                       <Input
+                        disabled={!isEditable}
                         onChange={(event) => onUpdateWorkflow((workflow) => ({ ...workflow, name: event.target.value }))}
                         value={selectedWorkflow.name}
                       />
@@ -175,6 +205,7 @@ export function WorkflowPage({
                     <div className="form-field">
                       <Label>{t('workflow.form.category')}</Label>
                       <Input
+                        disabled={!isEditable}
                         onChange={(event) => onUpdateWorkflow((workflow) => ({ ...workflow, category: event.target.value }))}
                         value={selectedWorkflow.category}
                       />
@@ -182,6 +213,7 @@ export function WorkflowPage({
                     <div className="form-field">
                       <Label>{t('workflow.form.targetUrl')}</Label>
                       <Input
+                        disabled={!isEditable}
                         onChange={(event) => onUpdateWorkflow((workflow) => ({ ...workflow, url: event.target.value }))}
                         value={selectedWorkflow.url}
                       />
@@ -189,6 +221,7 @@ export function WorkflowPage({
                     <div className="form-field">
                       <Label>{t('workflow.form.notes')}</Label>
                       <Textarea
+                        disabled={!isEditable}
                         className="min-h-[72px]"
                         onChange={(event) => onUpdateWorkflow((workflow) => ({ ...workflow, notes: event.target.value }))}
                         value={selectedWorkflow.notes}
@@ -208,6 +241,7 @@ export function WorkflowPage({
                             <Input
                               aria-label={t('workflow.form.stepTitle')}
                               className="workflow-step-title"
+                              disabled={!isEditable}
                               onChange={(event) =>
                                 onUpdateWorkflow((workflow) => ({
                                   ...workflow,
@@ -219,6 +253,7 @@ export function WorkflowPage({
                           </div>
                           <div className="flex shrink-0 items-center gap-1">
                             <Select
+                              disabled={!isEditable}
                               onValueChange={(value) =>
                                 onUpdateWorkflow((workflow) => ({
                                   ...workflow,
@@ -236,13 +271,14 @@ export function WorkflowPage({
                                 <SelectItem value="aiQuery">{t('cases.step.query')}</SelectItem>
                               </SelectContent>
                             </Select>
-                            <Button aria-label={t('workflow.action.delete')} onClick={() => onDeleteStep(step.id)} size="icon" type="button" variant="ghost">
+                            <Button aria-label={t('workflow.action.delete')} disabled={!isEditable} onClick={() => onDeleteStep(step.id)} size="icon" type="button" variant="ghost">
                               <Trash2 className="h-4 w-4" />
                             </Button>
                           </div>
                         </div>
                         <Textarea
                           className="workflow-step-body"
+                          disabled={!isEditable}
                           onChange={(event) =>
                             onUpdateWorkflow((workflow) => ({
                               ...workflow,
@@ -252,13 +288,13 @@ export function WorkflowPage({
                           rows={2}
                           value={step.body}
                         />
-                        <Button onClick={() => onDuplicateStepType(step.type)} size="sm" type="button" variant="ghost">
+                        <Button disabled={!isEditable} onClick={() => onDuplicateStepType(step.type)} size="sm" type="button" variant="ghost">
                           {t('workflow.action.duplicateType')}
                         </Button>
                       </div>
                     </article>
                   ))}
-                  <Button className="workflow-add-step" onClick={() => onAppendStep('ai')} size="sm" type="button" variant="outline">
+                  <Button className="workflow-add-step" disabled={!isEditable} onClick={() => onAppendStep('ai')} size="sm" type="button" variant="outline">
                     <Plus className="h-4 w-4" />
                     {t('workflow.action.addStep')}
                   </Button>
@@ -281,7 +317,7 @@ export function WorkflowPage({
                 </Button>
               </div>
               <div className="workflow-library-list">
-                {workflows.map((workflow) => (
+                {latestWorkflows.map((workflow) => (
                   <button
                     className={`workflow-library-item ${workflow.id === selectedWorkflowId ? 'is-active' : ''}`}
                     key={workflow.id}

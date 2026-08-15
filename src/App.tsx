@@ -199,6 +199,7 @@ export function App() {
     () => initialState.selectedTestCaseReference ?? latestTestCaseReference(initialState.projects[0], initialState.selectedTestCaseId),
   );
   const [caseDraft, setCaseDraft] = useState<TestCaseDraft>();
+  const [caseDraftSourceReference, setCaseDraftSourceReference] = useState<VersionedTestAssetReference>();
   const [selectedRecordingId, setSelectedRecordingId] = useState(initialState.selectedRecordingId);
   const [selectedSuiteReference, setSelectedSuiteReference] = useState<VersionedTestAssetReference | undefined>(
     () => latestSuiteReference(initialState.projects[0]),
@@ -283,8 +284,15 @@ export function App() {
   const selectedRecording =
     selectedProject?.recordings.find((recording) => recording.id === selectedRecordingId) ??
     selectedProject?.recordings[0];
-  const workflows = selectedProject?.testCases.map(testCaseToWorkflow) ?? [];
-  const selectedWorkflow = selectedTestCase ? testCaseToWorkflow(selectedTestCase) : workflows[0];
+  const workflows = selectedProject ? listLatestTestCaseVersions(selectedProject).map(testCaseToWorkflow) : [];
+  const isEditingSelectedCase = Boolean(
+    caseDraft && caseDraftSourceReference && selectedTestCaseReference &&
+    caseDraftSourceReference.id === selectedTestCaseReference.id &&
+    caseDraftSourceReference.version === selectedTestCaseReference.version,
+  );
+  const selectedWorkflow = isEditingSelectedCase
+    ? testCaseToWorkflow(caseDraft!)
+    : selectedTestCase ? testCaseToWorkflow(selectedTestCase) : workflows[0];
   const recentChatEntries = chatEntries.slice(-6);
   const latestNaturalLanguageAgentRun = runDetails.find(
     (detail) =>
@@ -367,6 +375,7 @@ export function App() {
           ),
         );
         setCaseDraft(undefined);
+        setCaseDraftSourceReference(undefined);
         setSelectedRecordingId(state.selectedRecordingId);
         const hydratedProject = state.projects.find((project) => project.id === state.selectedProjectId);
         setSelectedSuiteReference(latestSuiteReference(hydratedProject));
@@ -721,22 +730,29 @@ export function App() {
   }
 
   function handleEditCaseVersion() {
-    if (!selectedTestCase) {
+    if (!selectedTestCase || !selectedTestCaseReference) {
       return;
     }
     setCaseDraft(structuredClone(selectedTestCase));
+    setCaseDraftSourceReference({ ...selectedTestCaseReference });
   }
 
   function handleDiscardCaseDraft() {
     setCaseDraft(undefined);
+    setCaseDraftSourceReference(undefined);
   }
 
   function handlePublishCase() {
-    if (!selectedProject || !selectedTestCase || !caseDraft) {
+    if (!selectedProject || !caseDraft || !caseDraftSourceReference) {
+      return;
+    }
+    const source = findTestCaseVersion(selectedProject, caseDraftSourceReference);
+    if (!source) {
+      handleDiscardCaseDraft();
       return;
     }
     const { id: _id, version: _version, ...patch } = caseDraft;
-    const nextCase = createNextTestCaseVersion(selectedProject, selectedTestCase, {
+    const nextCase = createNextTestCaseVersion(selectedProject, source, {
       ...patch,
       lastEdited: t('app.runtime.justNow'),
     });
@@ -746,7 +762,7 @@ export function App() {
     }), 'immediate');
     setSelectedTestCaseReference({ id: nextCase.id, version: nextCase.version ?? 1 });
     setSelectedGroupId(nextCase.groupId);
-    setCaseDraft(undefined);
+    handleDiscardCaseDraft();
   }
 
   function updateSelectedWorkflow(updater: (workflow: WorkflowDraft) => WorkflowDraft) {
@@ -772,7 +788,7 @@ export function App() {
     setSelectedProjectId(project?.id ?? '');
     setSelectedGroupId(project?.groups[0]?.id ?? '');
     setSelectedTestCaseReference(latestTestCaseReference(project));
-    setCaseDraft(undefined);
+    handleDiscardCaseDraft();
     setSelectedRecordingId(project?.recordings[0]?.id ?? '');
     setSelectedSuiteReference(latestSuiteReference(project));
     setSelectedDocumentId(project?.documents[0]?.id ?? '');
@@ -1320,6 +1336,7 @@ export function App() {
     if (!group) {
       return;
     }
+    handleDiscardCaseDraft();
 
     const remainingGroups = selectedProject.groups.filter((item) => item.id !== groupId);
     const fallbackGroup =
@@ -1909,6 +1926,7 @@ export function App() {
     if (!target) {
       return;
     }
+    handleDiscardCaseDraft();
 
     const nextRecordings = selectedProject.recordings.filter((item) => item.id !== recordingId);
     const latestSelectedReference = selectedTestCase
@@ -2018,6 +2036,13 @@ export function App() {
 
     setSelectedGroupId(testCase.groupId);
     setSelectedTestCaseReference(reference);
+  }
+
+  function handleSelectWorkflow(workflowId: string) {
+    const reference = latestTestCaseReference(selectedProject, workflowId);
+    if (reference) {
+      handleSelectTestCase(reference);
+    }
   }
 
   function handlePublishSuite(suite: SuiteAsset) {
@@ -2508,7 +2533,7 @@ export function App() {
   }
 
   function handleRerunTestCase(run: RunDetail) {
-    if (!selectedProject) {
+    if (!selectedProject || caseDraft) {
       return;
     }
 
@@ -2862,6 +2887,7 @@ export function App() {
           {activePage === 'workflow' ? (
             <WorkflowPage
               hasProject={Boolean(selectedProject)}
+              isEditable={isEditingSelectedCase}
               isRunning={isRunning}
               onAppendStep={(type) => handleAppendStep(type)}
               onCreateWorkflow={handleCreateTestCase}
@@ -2871,10 +2897,13 @@ export function App() {
                   steps: workflow.steps.filter((item) => item.id !== stepId),
                 }))
               }
+              onDiscardDraft={handleDiscardCaseDraft}
               onDuplicateStepType={(type) => handleAppendStep(type)}
+              onEditAsNewVersion={handleEditCaseVersion}
               onOpenProjects={() => goToPage('projects')}
+              onPublish={handlePublishCase}
               onRunWorkflow={handleRunWorkflow}
-              onSelectWorkflow={(id) => setSelectedTestCaseReference(latestTestCaseReference(selectedProject, id))}
+              onSelectWorkflow={handleSelectWorkflow}
               onUpdateRuntimeProfile={updateRuntimeProfile}
               onUpdateWorkflow={updateSelectedWorkflow}
               runId={runId}

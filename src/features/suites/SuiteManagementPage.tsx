@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Check, CircleAlert, Link2, PencilLine, Play, Plus, RotateCcw, Unlink, X } from 'lucide-react';
 
 import type { ProjectDraft, SuiteAsset, SuiteRunDetail, VersionedTestAssetReference } from '../../../shared/studio.js';
-import { createEmptySuiteAsset, findSuiteAsset, resolveSuiteTestCases } from '../../../shared/studio.js';
+import { createEmptySuiteAsset, findSuiteAsset, listLatestTestCaseVersions, resolveSuiteTestCases } from '../../../shared/studio.js';
 import { StatusPill } from '../../components/StatusPill.js';
 import { Badge } from '../../components/ui/badge.js';
 import { Button } from '../../components/ui/button.js';
@@ -110,8 +110,10 @@ export function SuiteManagementPage({
     setDraft(updater(current));
   }
 
-  function addCase(testCaseId: string) {
-    const testCase = project!.testCases.find((candidate) => candidate.id === testCaseId);
+  function addCase(reference: VersionedTestAssetReference) {
+    const testCase = listLatestTestCaseVersions(project!).find((candidate) => (
+      candidate.id === reference.id && (candidate.version ?? 1) === reference.version
+    ));
     if (!testCase || !editorSuite || editorSuite.caseReferences.some((reference) => reference.id === testCase.id)) {
       return;
     }
@@ -323,8 +325,8 @@ export function SuiteManagementPage({
                   </div>
                   {draft ? (
                     <div className="mt-3 grid gap-1.5">
-                      {project.testCases.filter((testCase) => !selectedReferences.has(testCase.id)).map((testCase) => (
-                        <Button aria-label={t('suite.members.add', { name: testCase.name })} className="justify-start" key={testCase.id} onClick={() => addCase(testCase.id)} type="button" variant="ghost">
+                      {listLatestTestCaseVersions(project).filter((testCase) => !selectedReferences.has(testCase.id)).map((testCase) => (
+                        <Button aria-label={t('suite.members.add', { name: testCase.name })} className="justify-start" key={referenceKey({ id: testCase.id, version: testCase.version ?? 1 })} onClick={() => addCase({ id: testCase.id, version: testCase.version ?? 1 })} type="button" variant="ghost">
                           <Plus className="size-4 text-primary" />
                           <span className="truncate">{testCase.name}</span>
                           <span className="ml-auto text-xs text-muted-foreground">v{testCase.version ?? 1}</span>

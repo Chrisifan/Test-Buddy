@@ -70,6 +70,24 @@ function renderPage({
 }
 
 describe('SuiteManagementPage', () => {
+  it('offers each logical Case once and pins its latest revision in a new Suite', () => {
+    const project = createProject();
+    const catalogV1 = { ...project.testCases[0]!, version: 1, name: '商品目录检查 v1' };
+    const catalogV2 = { ...catalogV1, version: 2, name: '商品目录检查 v2' };
+    project.testCases = [catalogV1, catalogV2];
+    const { onPublishSuite } = renderPage({ project });
+
+    fireEvent.click(screen.getByRole('button', { name: '新建 Suite' }));
+    expect(screen.getAllByRole('button', { name: '添加用例 商品目录检查 v2' })).toHaveLength(1);
+    expect(screen.queryByRole('button', { name: '添加用例 商品目录检查 v1' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '添加用例 商品目录检查 v2' }));
+    fireEvent.click(screen.getByRole('button', { name: '发布版本' }));
+
+    expect(onPublishSuite).toHaveBeenCalledWith(expect.objectContaining({
+      caseReferences: [{ id: 'case-catalog', version: 2, dependsOn: [] }],
+    }));
+  });
+
   it('creates a Suite draft and publishes exact current Case versions', () => {
     const { onPublishSuite } = renderPage();
 

@@ -92,4 +92,81 @@ describe('WorkflowPage', () => {
     expect(screen.getByText('Business Tag')).toBeInTheDocument();
     expect(screen.getAllByLabelText('Step Title').length).toBeGreaterThan(0);
   });
+
+  it('shows one latest workflow revision and keeps published controls read-only until explicit editing', () => {
+    const older = { ...workflow, name: '旧版流程', version: 1 };
+    const latest = { ...workflow, name: '最新版流程', version: 2 };
+    const onEditAsNewVersion = vi.fn();
+    const onPublish = vi.fn();
+    const onDiscard = vi.fn();
+
+    const { rerender } = render(
+      <I18nProvider locale="zh-CN">
+        <WorkflowPage
+          hasProject
+          isEditable={false}
+          isRunning={false}
+          onAppendStep={vi.fn()}
+          onCreateWorkflow={vi.fn()}
+          onDeleteStep={vi.fn()}
+          onDiscardDraft={onDiscard}
+          onDuplicateStepType={vi.fn()}
+          onEditAsNewVersion={onEditAsNewVersion}
+          onPublish={onPublish}
+          onRunWorkflow={vi.fn()}
+          onSelectWorkflow={vi.fn()}
+          onUpdateRuntimeProfile={vi.fn()}
+          onUpdateWorkflow={vi.fn()}
+          runId=""
+          runLogs={[]}
+          runStatus="neutral"
+          runTitle=""
+          runtimeProfile={state.runtimeProfile}
+          selectedWorkflow={latest}
+          selectedWorkflowId={latest.id}
+          workflows={[older, latest]}
+        />
+      </I18nProvider>,
+    );
+
+    expect(screen.getAllByText('最新版流程')).toHaveLength(2);
+    expect(screen.queryByText('旧版流程')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '编辑为新版本' })).toBeInTheDocument();
+    screen.getAllByLabelText('步骤标题').forEach((input) => expect(input).toBeDisabled());
+    fireEvent.click(screen.getByRole('button', { name: '编辑为新版本' }));
+    expect(onEditAsNewVersion).toHaveBeenCalledOnce();
+
+    rerender(
+      <I18nProvider locale="zh-CN">
+        <WorkflowPage
+          hasProject
+          isEditable
+          isRunning={false}
+          onAppendStep={vi.fn()}
+          onCreateWorkflow={vi.fn()}
+          onDeleteStep={vi.fn()}
+          onDiscardDraft={onDiscard}
+          onDuplicateStepType={vi.fn()}
+          onEditAsNewVersion={onEditAsNewVersion}
+          onPublish={onPublish}
+          onRunWorkflow={vi.fn()}
+          onSelectWorkflow={vi.fn()}
+          onUpdateRuntimeProfile={vi.fn()}
+          onUpdateWorkflow={vi.fn()}
+          runId=""
+          runLogs={[]}
+          runStatus="neutral"
+          runTitle=""
+          runtimeProfile={state.runtimeProfile}
+          selectedWorkflow={latest}
+          selectedWorkflowId={latest.id}
+          workflows={[older, latest]}
+        />
+      </I18nProvider>,
+    );
+
+    screen.getAllByLabelText('步骤标题').forEach((input) => expect(input).toBeEnabled());
+    expect(screen.getByRole('button', { name: '发布版本' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '放弃草稿' })).toBeInTheDocument();
+  });
 });

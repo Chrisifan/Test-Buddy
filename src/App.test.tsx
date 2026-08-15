@@ -68,6 +68,62 @@ describe('App shell', () => {
     expect(container.querySelector('.app-runtimebar')).toBeInTheDocument();
   });
 
+  it('keeps an edited Case draft bound to its immutable source when workflow selection changes', async () => {
+    const project = createEmptyProject(1);
+    const environment = project.environments[0]!;
+    const caseA = {
+      ...createEmptyTestCase(1, project.groups[0]!.id, environment.id),
+      id: 'case-a',
+      version: 1,
+      name: 'Case A',
+    };
+    const caseB = {
+      ...createEmptyTestCase(2, project.groups[0]!.id, environment.id),
+      id: 'case-b',
+      version: 1,
+      name: 'Case B',
+    };
+    const state = createInitialStudioState();
+    state.projects = [{ ...project, testCases: [caseA, caseB] }];
+    state.selectedProjectId = project.id;
+    state.selectedGroupId = project.groups[0]!.id;
+    state.selectedTestCaseReference = { id: caseA.id, version: 1 };
+    state.selectedTestCaseId = caseA.id;
+    state.selectedRecordingId = '';
+    state.startupGuide.completed = true;
+    state.appearance.localeMode = 'en-US';
+    state.midsceneConfig = {
+      ...state.midsceneConfig,
+      modelBaseUrl: 'https://models.example.test/v1',
+      modelApiKey: 'test-key',
+      modelName: 'ui-agent',
+      modelFamily: 'openai',
+    };
+    window.localStorage.setItem('midscene-studio-state-v2', JSON.stringify(state));
+
+    render(<App />);
+
+    const navigation = await screen.findByRole('navigation', { name: 'Main Navigation' });
+    fireEvent.click(within(navigation).getByRole('button', { name: 'Cases' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit as New Version' }));
+    fireEvent.change(screen.getAllByLabelText('Step Title')[0]!, { target: { value: 'Case A draft step' } });
+
+    fireEvent.click(within(navigation).getByRole('button', { name: 'Workflow' }));
+    fireEvent.click(await screen.findByRole('button', { name: /Case B/u }));
+    fireEvent.click(within(navigation).getByRole('button', { name: 'Cases' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Publish Version' }));
+
+    await waitFor(() => {
+      const persisted = JSON.parse(window.localStorage.getItem('midscene-studio-state-v2') ?? '{}');
+      expect(persisted.projects[0].testCases).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: 'case-a', version: 2, steps: expect.arrayContaining([expect.objectContaining({ title: 'Case A draft step' })]) }),
+      ]));
+      expect(persisted.projects[0].testCases).not.toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: 'case-b', version: 2, steps: expect.arrayContaining([expect.objectContaining({ title: 'Case A draft step' })]) }),
+      ]));
+    });
+  });
+
   it('opens application settings as a modal over the current workbench', async () => {
     const { container } = render(<App />);
 
