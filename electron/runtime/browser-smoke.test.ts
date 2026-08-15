@@ -72,11 +72,17 @@ describe('local browser runtime smoke', () => {
         },
       ],
     };
+    const runtimeProject = { ...project, environments: [environment], testCases: [testCase] };
 
     try {
       const response = await bundle.runTestCase({
         runId: 'browser-smoke-run',
-        project: { ...project, environments: [environment], testCases: [testCase] },
+        projectSnapshot: {
+          project: runtimeProject,
+          revision: 'a'.repeat(64),
+          source: 'legacyStudioStore',
+          reproducibility: 'legacy',
+        },
         environment,
         testCase,
       });
@@ -137,13 +143,20 @@ describe('local browser runtime smoke', () => {
       controller.abort();
       return session;
     };
+    const runtimeProject = { ...project, environments: [environment], testCases: [first, second], suites: [suite] };
 
     try {
       const response = await bundle.runSuite({
         runId: 'suite-browser-cancel-run',
         cancellationSignal: controller.signal,
-        project: { ...project, environments: [environment], testCases: [first, second], suites: [suite] },
-        suite: { id: suite.id, version: suite.version },
+        projectSnapshot: {
+          project: runtimeProject,
+          revision: 'b'.repeat(64),
+          source: 'legacyStudioStore',
+          reproducibility: 'legacy',
+        },
+        suite,
+        environment,
       });
 
       expect(starts).toBe(1);

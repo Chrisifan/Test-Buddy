@@ -116,4 +116,23 @@ describe('desktop preload runtime IPC contract', () => {
       expectedProjectRevision: 'a'.repeat(64),
     });
   });
+
+  it('restores serialized missing exact asset errors with their code', async () => {
+    loadPreloadWithElectronMock();
+    const desktopApi = exposeInMainWorld.mock.calls[0]![1] as Record<string, (...args: unknown[]) => Promise<unknown>>;
+    invoke.mockResolvedValueOnce({
+      type: 'testBuddy.runtimeError',
+      code: 'missingAssetVersion',
+      message: 'Case revision is unavailable.',
+    });
+
+    await expect(desktopApi.runTestCase({
+      projectId: 'project-1',
+      testCase: { id: 'case-1', version: 1 },
+      expectedProjectRevision: 'a'.repeat(64),
+    })).rejects.toMatchObject({
+      code: 'missingAssetVersion',
+      message: 'Case revision is unavailable.',
+    });
+  });
 });

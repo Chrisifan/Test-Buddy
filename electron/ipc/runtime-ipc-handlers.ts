@@ -10,7 +10,7 @@ import type {
 import type {
   FixtureScriptTrustRecord,
   ProjectEnvironment,
-  ProjectRevisionIpcErrorResponse,
+  RunIntentIpcErrorResponse,
   RunDetail,
   RunSuiteResponse,
   RunSuiteIntent,
@@ -83,7 +83,7 @@ export class RunIntentResolutionError extends Error {
 export function registerRuntimeIpcHandlers(dependencies: RuntimeIpcDependencies): void {
   dependencies.handle(runtimeIpcChannels.getInfo, async () => dependencies.getRuntimeInfo());
 
-  dependencies.handle(runtimeIpcChannels.runTestCase, (_event, request) => serializeProjectRevisionError(async () => {
+  dependencies.handle(runtimeIpcChannels.runTestCase, (_event, request) => serializeRunIntentError(async () => {
     const projectSnapshot = await loadProjectSnapshot(dependencies.projectRepository, request.projectId, request.expectedProjectRevision);
     const testCase = findTestCaseVersion(projectSnapshot.project, request.testCase);
     if (!testCase) {
@@ -118,7 +118,7 @@ export function registerRuntimeIpcHandlers(dependencies: RuntimeIpcDependencies)
     return result;
   }));
 
-  dependencies.handle(runtimeIpcChannels.runSuite, (_event, request) => serializeProjectRevisionError(async () => {
+  dependencies.handle(runtimeIpcChannels.runSuite, (_event, request) => serializeRunIntentError(async () => {
     const projectSnapshot = await loadProjectSnapshot(dependencies.projectRepository, request.projectId, request.expectedProjectRevision);
     const suite = findSuiteAsset(projectSnapshot.project, request.suite);
     if (!suite) {
@@ -207,11 +207,11 @@ export function registerRuntimeIpcHandlers(dependencies: RuntimeIpcDependencies)
   });
 }
 
-async function serializeProjectRevisionError<T>(operation: () => Promise<T>): Promise<T | ProjectRevisionIpcErrorResponse> {
+async function serializeRunIntentError<T>(operation: () => Promise<T>): Promise<T | RunIntentIpcErrorResponse> {
   try {
     return await operation();
   } catch (error) {
-    if (!isProjectRevisionError(error)) {
+    if (!isRunIntentError(error)) {
       throw error;
     }
     return {
@@ -222,14 +222,16 @@ async function serializeProjectRevisionError<T>(operation: () => Promise<T>): Pr
   }
 }
 
-function isProjectRevisionError(
+function isRunIntentError(
   error: unknown,
-): error is Error & { code: ProjectRevisionIpcErrorResponse['code'] } {
+): error is Error & { code: RunIntentIpcErrorResponse['code'] } {
   return error instanceof Error &&
     typeof error === 'object' &&
     error !== null &&
     'code' in error &&
-    (error.code === 'staleProjectRevision' || error.code === 'projectRevisionChanged');
+    (error.code === 'staleProjectRevision' ||
+      error.code === 'projectRevisionChanged' ||
+      error.code === 'missingAssetVersion');
 }
 
 async function loadProjectSnapshot(

@@ -1411,10 +1411,10 @@ export interface RunSuiteIntent {
   expectedProjectRevision?: string;
 }
 
-/** Explicit main-to-renderer transport for revision errors that Electron cannot serialize as Error properties. */
-export interface ProjectRevisionIpcErrorResponse {
+/** Explicit main-to-renderer transport for exact run-intent errors that Electron cannot serialize as Error properties. */
+export interface RunIntentIpcErrorResponse {
   type: 'testBuddy.runtimeError';
-  code: 'staleProjectRevision' | 'projectRevisionChanged';
+  code: 'staleProjectRevision' | 'projectRevisionChanged' | 'missingAssetVersion';
   message: string;
 }
 

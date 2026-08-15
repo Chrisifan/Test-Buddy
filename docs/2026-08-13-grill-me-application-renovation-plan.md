@@ -251,12 +251,14 @@ TestBuddy 已具备本地工作台、受控浏览器、确定性步骤、Fixture
 
 **目的：** 让所有长期引用真正指向可读取的不可变资产。
 
-- 设计 Case version collection、manifest v2 和旧目录审阅迁移。
-- ProjectRepository 解析绑定目录，并生成 revision-pinned snapshot。
-- Desktop/CLI/Runtime 统一从 exact Case reference 运行；Suite resolver 支持历史 Case。
-- 增加不可变编辑/发布 UI，保留兼容 legacy current-case 模式。
+**本地实施状态（2026-08-15）：** 已完成并完成本地验证。Case 已作为不可变版本集合保存到 manifest v2，旧 Case 目录迁移需要预览、确认、冲突检查和备份；`ProjectRepository` 对已绑定项目从目录加载 revision-pinned snapshot，未绑定项目明确保留为 legacy/non-reproducible。Desktop IPC、preload 与 CLI 均只接受 exact `id@version` 意图；缺失版本会以 `missingAssetVersion` 穿过 IPC/preload 而不启动 runner。Case UI 以草稿发布新版本，Suite 保留精确历史 Case 引用。
 
-**完成判定：** v1/v2 Case 并存并分别可运行；Suite v1 仍能执行 Case v1；desktop/CLI 对同一 project revision 一致。
+- 跨边界回归使用同一临时绑定目录中的 Case v1/v2 与 Suite@v1：IPC 运行 Case@v1、CLI 运行 Suite@v1，二者都解析目录中的 v1；陈旧 revision 与缺失 v1 在 runner 前被拒绝。
+- Wave 1 定向验证：`shared/studio.test.ts`、资产存储、仓库、IPC/preload、CLI、runtime 与 Case/Project/Run UI 共 10 个文件、239 条测试通过。
+- `pnpm check`：48 个测试文件、543 条测试通过；renderer/Electron TypeScript、Vite renderer build、Electron build 和 `git diff --check` 通过。
+- `pnpm test:browser-smoke`：1 个文件、2 条测试通过，覆盖真实本地页面 PNG 与 Suite 父级取消后不启动第二个浏览器会话。
+
+**完成判定：** 已在本地满足：v1/v2 Case 可并存并分别运行；Suite v1 仍执行 Case v1；desktop/CLI 对同一 project revision 一致。GitHub 托管 CI 仍未验证，必须等首次 GitHub Actions 运行成功后才能声明托管 CI 已绿。
 
 ### Wave 2：终态、运行 provenance 与真实 rerun
 

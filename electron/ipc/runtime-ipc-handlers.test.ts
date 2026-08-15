@@ -1,4 +1,6 @@
 import fs from 'node:fs';
+import fsPromises from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 
 import ts from 'typescript';
@@ -13,7 +15,11 @@ import {
   type ProjectDraft,
   type RunTestCaseResponse,
 } from '../../shared/studio.js';
-import { ProjectRepositoryError } from '../projectRepository.js';
+import { executeCliCommand } from '../cli.js';
+import { ProjectAssetStore } from '../projectAssetStore.js';
+import { ProjectRepository, ProjectRepositoryError } from '../projectRepository.js';
+import * as runtimeBundle from '../runtime/runtime-bundle.js';
+import { StudioStore } from '../studioStore.js';
 
 const { registerRuntimeIpcHandlers, runtimeIpcChannels } = loadRuntimeIpcHandlers();
 
@@ -22,10 +28,7 @@ type RuntimeIpcDependencies = {
   loadState: ReturnType<typeof vi.fn>;
   saveState: ReturnType<typeof vi.fn>;
   getRuntimeBundle: ReturnType<typeof vi.fn>;
-  projectRepository: {
-    load: ReturnType<typeof vi.fn>;
-    loadBound: ReturnType<typeof vi.fn>;
-  };
+  projectRepository: Pick<ProjectRepository, 'load' | 'loadBound'>;
   getFixtureScriptTrustContext: ReturnType<typeof vi.fn>;
   openPath: ReturnType<typeof vi.fn>;
   showSaveDialog: ReturnType<typeof vi.fn>;
@@ -35,6 +38,151 @@ type RuntimeIpcDependencies = {
 };
 
 describe('registerRuntimeIpcHandlers', () => {
+  it('runs a bound v1 through IPC and CLI while rejecting stale or missing versions before a runner starts', async () => {
+    const dataDirectory = await fsPromises.mkdtemp(path.join(os.tmpdir(), 'testbuddy-wave-one-boundary-'));
+    try {
+      const project = createEmptyProject(1);
+      project.id = 'project-bound-history';
+      const environment = project.environments[0]!;
+      const caseV1 = {
+        ...createTestCase(project, 'case/checkout', environment.id),
+        version: 1,
+        name: 'Checkout v1',
+      };
+      const caseV2 = {
+        ...caseV1,
+        version: 2,
+        name: 'Checkout v2',
+      };
+      project.testCases = [caseV1, caseV2];
+      project.suites = [{
+        ...createEmptySuiteAsset(project, 1),
+        id: 'suite/checkout',
+        version: 1,
+        name: 'Checkout history',
+        environmentId: environment.id,
+        caseReferences: [{ id: caseV1.id, version: caseV1.version, dependsOn: [] }],
+      }];
+      const projectDirectory = path.join(dataDirectory, 'project-assets');
+      const assetStore = new ProjectAssetStore(projectDirectory);
+      await assetStore.saveInitial(project);
+      const boundSnapshot = await assetStore.loadWithRevision();
+
+      const missingProject = {
+        ...structuredClone(project),
+        id: 'project-missing-history',
+        testCases: [{ ...caseV2, id: 'case/missing-history' }],
+        suites: [],
+      };
+      const missingProjectDirectory = path.join(dataDirectory, 'missing-project-assets');
+      const missingAssetStore = new ProjectAssetStore(missingProjectDirectory);
+      await missingAssetStore.saveInitial(missingProject);
+      const missingSnapshot = await missingAssetStore.loadWithRevision();
+
+      const studioProject = structuredClone(project);
+      studioProject.testCases = [caseV2];
+      const state = createInitialStudioState();
+      state.projects = [studioProject, structuredClone(missingProject)];
+      state.projectAssetBindings = [
+        {
+          projectId: project.id,
+          projectDirectory,
+          revision: boundSnapshot.revision,
+          boundAt: '2026-08-15T00:00:00.000Z',
+        },
+        {
+          projectId: missingProject.id,
+          projectDirectory: missingProjectDirectory,
+          revision: missingSnapshot.revision,
+          boundAt: '2026-08-15T00:00:00.000Z',
+        },
+      ];
+      const studioStore = new StudioStore(dataDirectory);
+      await studioStore.save(state);
+      const repository = new ProjectRepository({ studioStore });
+
+      const mainRunTestCase = vi.fn().mockResolvedValue(runTestCaseResponse(project.id, caseV1.id, environment.id));
+      const dependencies = createDependencies({
+        projectRepository: repository,
+        getRuntimeBundle: vi.fn().mockReturnValue({
+          artifactManager: { isManagedArtifactPath: () => true, exportArtifact: vi.fn(), importManualEvidence: vi.fn() },
+          browserRuntime: { getState: () => ({ status: 'idle' }) },
+          runTestCase: mainRunTestCase,
+          runSuite: vi.fn(),
+          cancelRun: vi.fn(),
+        }),
+      });
+      const handlers = registerHandlers(dependencies);
+
+      await expect(handlers.get(runtimeIpcChannels.runTestCase)!({}, {
+        projectId: project.id,
+        testCase: { id: caseV1.id, version: caseV1.version },
+        expectedProjectRevision: boundSnapshot.revision,
+      })).resolves.toMatchObject({ runId: 'run-1' });
+      expect(mainRunTestCase).toHaveBeenCalledWith(expect.objectContaining({
+        projectSnapshot: expect.objectContaining({
+          revision: boundSnapshot.revision,
+          reproducibility: 'versioned',
+          project: expect.objectContaining({ testCases: expect.arrayContaining([
+            expect.objectContaining({ id: caseV1.id, version: 1, name: 'Checkout v1' }),
+            expect.objectContaining({ id: caseV2.id, version: 2, name: 'Checkout v2' }),
+          ]) }),
+        }),
+        testCase: expect.objectContaining({ id: caseV1.id, version: 1, name: 'Checkout v1' }),
+      }));
+
+      const cliRunTestCase = vi.fn().mockResolvedValue(runTestCaseResponse(project.id, caseV1.id, environment.id));
+      const createRuntimeBundle = vi.spyOn(runtimeBundle, 'createRuntimeBundle').mockReturnValue({
+        ensureReady: vi.fn(),
+        runTestCase: cliRunTestCase,
+        browserRuntime: { getState: vi.fn(() => state.browserSession) },
+        close: vi.fn(),
+      } as never);
+      const cliSummary = await executeCliCommand({
+        kind: 'run',
+        dataDir: dataDirectory,
+        projectId: project.id,
+        caseReferences: [],
+        suiteReference: { id: 'suite/checkout', version: 1 },
+      });
+
+      expect(cliSummary.results).toEqual([expect.objectContaining({ testCaseId: caseV1.id })]);
+      expect(cliRunTestCase).toHaveBeenCalledWith(expect.objectContaining({
+        projectSnapshot: expect.objectContaining({
+          revision: boundSnapshot.revision,
+          reproducibility: 'versioned',
+        }),
+        testCase: expect.objectContaining({ id: caseV1.id, version: 1, name: 'Checkout v1' }),
+      }));
+
+      const mainRunCount = mainRunTestCase.mock.calls.length;
+      await expect(handlers.get(runtimeIpcChannels.runTestCase)!({}, {
+        projectId: project.id,
+        testCase: { id: caseV1.id, version: caseV1.version },
+        expectedProjectRevision: 'f'.repeat(64),
+      })).resolves.toMatchObject({ type: 'testBuddy.runtimeError', code: 'staleProjectRevision' });
+      expect(mainRunTestCase).toHaveBeenCalledTimes(mainRunCount);
+
+      await expect(handlers.get(runtimeIpcChannels.runTestCase)!({}, {
+        projectId: missingProject.id,
+        testCase: { id: 'case/missing-history', version: 1 },
+        expectedProjectRevision: missingSnapshot.revision,
+      })).resolves.toMatchObject({ type: 'testBuddy.runtimeError', code: 'missingAssetVersion' });
+      await expect(executeCliCommand({
+        kind: 'run',
+        dataDir: dataDirectory,
+        projectId: missingProject.id,
+        caseReferences: [{ id: 'case/missing-history', version: 1 }],
+      })).rejects.toThrow('未找到 Case：case/missing-history@1');
+      expect(mainRunTestCase).toHaveBeenCalledTimes(mainRunCount);
+      expect(cliRunTestCase).toHaveBeenCalledTimes(1);
+      expect(createRuntimeBundle).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.restoreAllMocks();
+      await fsPromises.rm(dataDirectory, { recursive: true, force: true });
+    }
+  });
+
   it('registers the complete runtime IPC boundary', () => {
     const handlers = registerHandlers(createDependencies());
 
@@ -436,7 +584,7 @@ describe('registerRuntimeIpcHandlers', () => {
     await expect(handlers.get(runtimeIpcChannels.runTestCase)!({}, {
       projectId: project.id,
       testCase: { id: 'case/missing', version: 1 },
-    })).rejects.toMatchObject({ code: 'missingAssetVersion' });
+    })).resolves.toMatchObject({ type: 'testBuddy.runtimeError', code: 'missingAssetVersion' });
 
     expect(runTestCase).not.toHaveBeenCalled();
   });

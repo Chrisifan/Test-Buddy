@@ -1,5 +1,5 @@
 import type {
-  ProjectRevisionIpcErrorResponse,
+  RunIntentIpcErrorResponse,
   RunSuiteIntent,
   RunSuiteResponse,
   RunTestCaseIntent,
@@ -11,20 +11,22 @@ const { runtimeIpcChannels } = require('./ipc/runtime-ipc-channels.cjs');
 
 function invokeRunIntent<T>(channel: string, request: RunSuiteIntent | RunTestCaseIntent): Promise<T> {
   return ipcRenderer.invoke(channel, request).then((response: unknown) => {
-    if (isProjectRevisionIpcError(response)) {
+    if (isRunIntentIpcError(response)) {
       throw Object.assign(new Error(response.message), { code: response.code });
     }
     return response as T;
   });
 }
 
-function isProjectRevisionIpcError(response: unknown): response is ProjectRevisionIpcErrorResponse {
+function isRunIntentIpcError(response: unknown): response is RunIntentIpcErrorResponse {
   return typeof response === 'object' &&
     response !== null &&
     'type' in response &&
     response.type === 'testBuddy.runtimeError' &&
     'code' in response &&
-    (response.code === 'staleProjectRevision' || response.code === 'projectRevisionChanged') &&
+    (response.code === 'staleProjectRevision' ||
+      response.code === 'projectRevisionChanged' ||
+      response.code === 'missingAssetVersion') &&
     'message' in response &&
     typeof response.message === 'string';
 }
