@@ -52,6 +52,31 @@ describe('ProjectManagementPage', () => {
     expect(screen.queryByText('Test Projects')).not.toBeInTheDocument();
   });
 
+  it('labels an unbound project as legacy and not reproducible', () => {
+    const state = createDemoStudioState();
+    const project = state.projects[0]!;
+
+    render(
+      <I18nProvider locale="en-US">
+        <ProjectManagementPage
+          onCreateGroup={vi.fn()}
+          onCreateProject={vi.fn()}
+          onDeleteGroup={vi.fn()}
+          onDeleteProject={vi.fn()}
+          onSaveCredential={vi.fn()}
+          onSelectGroup={vi.fn()}
+          onSelectProject={vi.fn()}
+          onUpdateProject={vi.fn()}
+          projects={[project]}
+          selectedGroupId={project.groups[0]!.id}
+          selectedProject={project}
+        />
+      </I18nProvider>,
+    );
+
+    expect(screen.getByText('Legacy - not reproducible')).toBeInTheDocument();
+  });
+
   it('translates project forms and environment controls to English', () => {
     const state = createDemoStudioState();
     const project = state.projects[0];

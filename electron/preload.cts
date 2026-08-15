@@ -1,7 +1,33 @@
-import type { RunSuiteIntent, RunTestCaseIntent } from '../shared/studio.js';
+import type {
+  ProjectRevisionIpcErrorResponse,
+  RunSuiteIntent,
+  RunSuiteResponse,
+  RunTestCaseIntent,
+  RunTestCaseResponse,
+} from '../shared/studio.js';
 
 const { contextBridge, ipcRenderer } = require('electron');
 const { runtimeIpcChannels } = require('./ipc/runtime-ipc-channels.cjs');
+
+function invokeRunIntent<T>(channel: string, request: RunSuiteIntent | RunTestCaseIntent): Promise<T> {
+  return ipcRenderer.invoke(channel, request).then((response: unknown) => {
+    if (isProjectRevisionIpcError(response)) {
+      throw Object.assign(new Error(response.message), { code: response.code });
+    }
+    return response as T;
+  });
+}
+
+function isProjectRevisionIpcError(response: unknown): response is ProjectRevisionIpcErrorResponse {
+  return typeof response === 'object' &&
+    response !== null &&
+    'type' in response &&
+    response.type === 'testBuddy.runtimeError' &&
+    'code' in response &&
+    (response.code === 'staleProjectRevision' || response.code === 'projectRevisionChanged') &&
+    'message' in response &&
+    typeof response.message === 'string';
+}
 
 contextBridge.exposeInMainWorld('desktopApi', {
   loadStudioState: () => ipcRenderer.invoke('studio:load-state'),
@@ -29,8 +55,8 @@ contextBridge.exposeInMainWorld('desktopApi', {
   navigateBrowserSession: (request: unknown) =>
     ipcRenderer.invoke('runtime:navigate-browser-session', request),
   captureBrowserSnapshot: () => ipcRenderer.invoke('runtime:capture-browser-snapshot'),
-  runTestCase: (request: RunTestCaseIntent) => ipcRenderer.invoke(runtimeIpcChannels.runTestCase, request),
-  runSuite: (request: RunSuiteIntent) => ipcRenderer.invoke(runtimeIpcChannels.runSuite, request),
+  runTestCase: (request: RunTestCaseIntent) => invokeRunIntent<RunTestCaseResponse>(runtimeIpcChannels.runTestCase, request),
+  runSuite: (request: RunSuiteIntent) => invokeRunIntent<RunSuiteResponse>(runtimeIpcChannels.runSuite, request),
   runRecording: (request: unknown) => ipcRenderer.invoke('runtime:run-recording', request),
   cancelRun: (runId: string) => ipcRenderer.invoke(runtimeIpcChannels.cancelRun, runId),
   exportProjectReport: (request: unknown) => ipcRenderer.invoke('runtime:export-project-report', request),

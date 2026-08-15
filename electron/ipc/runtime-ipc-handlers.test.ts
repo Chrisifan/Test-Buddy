@@ -302,7 +302,9 @@ describe('registerRuntimeIpcHandlers', () => {
     }));
   });
 
-  it('rejects a stale bound revision before RuntimeBundle execution', async () => {
+  it.each(['staleProjectRevision', 'projectRevisionChanged'] as const)(
+    'serializes %s before RuntimeBundle execution',
+    async (code) => {
     const project = createEmptyProject(1);
     const runTestCase = vi.fn();
     const dependencies = createDependencies({
@@ -315,7 +317,7 @@ describe('registerRuntimeIpcHandlers', () => {
       }),
       projectRepository: {
         load: vi.fn(),
-        loadBound: vi.fn().mockRejectedValue(Object.assign(new Error('stale'), { code: 'staleProjectRevision' })),
+        loadBound: vi.fn().mockRejectedValue(Object.assign(new Error('revision changed'), { code })),
       },
     });
     const handlers = registerHandlers(dependencies);
@@ -325,11 +327,16 @@ describe('registerRuntimeIpcHandlers', () => {
       testCase: { id: 'case/checkout', version: 1 },
       expectedProjectRevision: '0'.repeat(64),
       project: { ...project, id: 'forged-project' },
-    } as unknown)).rejects.toMatchObject({ code: 'staleProjectRevision' });
+    } as unknown)).resolves.toEqual({
+      type: 'testBuddy.runtimeError',
+      code,
+      message: 'revision changed',
+    });
 
     expect(runTestCase).not.toHaveBeenCalled();
     expect(dependencies.getFixtureScriptTrustContext).not.toHaveBeenCalled();
-  });
+    },
+  );
 
   it('does not fall back to legacy loading when a bound asset source is unavailable', async () => {
     const project = createEmptyProject(1);
@@ -360,7 +367,7 @@ describe('registerRuntimeIpcHandlers', () => {
     expect(runTestCase).not.toHaveBeenCalled();
   });
 
-  it('rejects a changed snapshot revision after an unbound fallback before RuntimeBundle execution', async () => {
+  it('rejects a bound request when its binding disappears even if the legacy revision matches', async () => {
     const project = createEmptyProject(1);
     const environment = project.environments[0]!;
     const testCase = {
@@ -379,6 +386,7 @@ describe('registerRuntimeIpcHandlers', () => {
     };
     project.testCases = [testCase];
     const runTestCase = vi.fn().mockResolvedValue(runTestCaseResponse(project.id, testCase.id, environment.id));
+    const load = vi.fn().mockResolvedValue(projectSnapshot(project, '7'.repeat(64), 'legacyStudioStore'));
     const dependencies = createDependencies({
       getRuntimeBundle: vi.fn().mockReturnValue({
         artifactManager: { isManagedArtifactPath: () => true, exportArtifact: vi.fn(), importManualEvidence: vi.fn() },
@@ -388,7 +396,7 @@ describe('registerRuntimeIpcHandlers', () => {
         cancelRun: vi.fn(),
       }),
       projectRepository: {
-        load: vi.fn().mockResolvedValue(projectSnapshot(project, '7'.repeat(64), 'projectDirectory')),
+        load,
         loadBound: vi.fn().mockRejectedValue(Object.assign(new Error('unbound'), { code: 'projectUnbound' })),
       },
     });
@@ -397,9 +405,13 @@ describe('registerRuntimeIpcHandlers', () => {
     await expect(handlers.get(runtimeIpcChannels.runTestCase)!({}, {
       projectId: project.id,
       testCase: { id: testCase.id, version: testCase.version },
-      expectedProjectRevision: '6'.repeat(64),
-    })).rejects.toMatchObject({ code: 'staleProjectRevision' });
+      expectedProjectRevision: '7'.repeat(64),
+    })).resolves.toMatchObject({
+      type: 'testBuddy.runtimeError',
+      code: 'projectRevisionChanged',
+    });
 
+    expect(load).not.toHaveBeenCalled();
     expect(runTestCase).not.toHaveBeenCalled();
   });
 

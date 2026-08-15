@@ -209,7 +209,7 @@ describe('RunRecordsPage', () => {
     expect(screen.getByText('失败率上升 · +100%')).toBeInTheDocument();
   });
 
-  it('reruns a completed record through its original test case', () => {
+  it('labels unbound run history as legacy and starts a new current-Case run', () => {
     const state = createDemoStudioState();
     const project = state.projects[0]!;
     const detail: RunDetail = {
@@ -230,26 +230,31 @@ describe('RunRecordsPage', () => {
     const onRerunTestCase = vi.fn();
 
     render(
-      <RunRecordsPage
-        onRerunTestCase={onRerunTestCase}
-        onSelectRun={vi.fn()}
-        project={project}
-        recentRuns={[{
-          id: detail.id,
-          name: detail.title,
-          status: detail.status,
-          duration: detail.duration,
-          summary: detail.summary,
-          projectId: detail.projectId,
-          testCaseId: detail.testCaseId,
-          environmentId: detail.environmentId,
-        }]}
-        runDetails={[detail]}
-        selectedRunId={detail.id}
-      />,
+      <I18nProvider locale="en-US">
+        <RunRecordsPage
+          onRerunTestCase={onRerunTestCase}
+          onSelectRun={vi.fn()}
+          project={project}
+          recentRuns={[{
+            id: detail.id,
+            name: detail.title,
+            status: detail.status,
+            duration: detail.duration,
+            summary: detail.summary,
+            projectId: detail.projectId,
+            testCaseId: detail.testCaseId,
+            environmentId: detail.environmentId,
+          }]}
+          runDetails={[detail]}
+          selectedRunId={detail.id}
+        />
+      </I18nProvider>,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: '复跑用例' }));
+    expect(screen.getByText('Legacy - not reproducible')).toBeInTheDocument();
+    expect(screen.getByText('Historical replay is unavailable without run provenance.')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Run current Case (legacy)' }));
 
     expect(onRerunTestCase).toHaveBeenCalledWith(detail);
   });

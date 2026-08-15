@@ -421,4 +421,126 @@ describe('App shell', () => {
       expect(persisted.runDetails.some((detail: { id: string }) => /^suite-run-\d+$/u.test(detail.id))).toBe(false);
     });
   });
+
+  it('pins a bound Case run to its observed project revision and directs stale snapshots to reload', async () => {
+    const originalDesktopApi = window.desktopApi;
+    const project = createEmptyProject(1);
+    const environment = project.environments[0]!;
+    const testCase = {
+      ...createEmptyTestCase(1, project.groups[0]!.id, environment.id),
+      id: 'case-bound-revision',
+      version: 1,
+    };
+    const state = createInitialStudioState();
+    state.projects = [{ ...project, testCases: [testCase] }];
+    state.selectedProjectId = project.id;
+    state.selectedGroupId = project.groups[0]!.id;
+    state.selectedTestCaseId = testCase.id;
+    const revision = 'a'.repeat(64);
+    state.selectedTestCaseReference = { id: testCase.id, version: testCase.version ?? 1 };
+    state.startupGuide.completed = true;
+    state.appearance.localeMode = 'en-US';
+    state.projectAssetBindings = [{
+      projectId: project.id,
+      projectDirectory: '/tmp/bound-case-run',
+      revision,
+      boundAt: '2026-08-15T00:00:00.000Z',
+    }];
+    const desktopApi = {
+      getRuntimeInfo: vi.fn().mockResolvedValue({ platform: 'desktop', persistence: 'file' }),
+      loadStudioState: vi.fn().mockResolvedValue(state),
+      onRecordingEvent: vi.fn().mockReturnValue(() => undefined),
+      onRunEvent: vi.fn().mockReturnValue(() => undefined),
+      runTestCase: vi.fn().mockRejectedValue(Object.assign(new Error('snapshot changed'), { code: 'staleProjectRevision' })),
+      saveStudioState: vi.fn().mockResolvedValue(undefined),
+    } as unknown as DesktopApi;
+    window.desktopApi = desktopApi;
+
+    try {
+      render(<App />);
+
+      const navigation = await screen.findByRole('navigation', { name: 'Main Navigation' });
+      fireEvent.click(within(navigation).getByRole('button', { name: 'Cases' }));
+      await screen.findByRole('heading', { name: 'Case Workbench' });
+      fireEvent.click(await screen.findByRole('button', { name: 'Run Test' }));
+
+      await waitFor(() => expect(desktopApi.runTestCase).toHaveBeenCalledWith({
+        projectId: project.id,
+        testCase: { id: testCase.id, version: testCase.version ?? 1 },
+        expectedProjectRevision: revision,
+      }));
+      expect(desktopApi.runTestCase).toHaveBeenCalledTimes(1);
+      expect(await screen.findByRole('alert')).toHaveTextContent('Project snapshot changed. Reload project assets before running again.');
+      fireEvent.click(screen.getByRole('button', { name: 'Open project assets' }));
+      expect(await screen.findByRole('dialog')).toHaveTextContent('Project Asset Snapshot');
+    } finally {
+      window.desktopApi = originalDesktopApi;
+    }
+  });
+
+  it('opens the failed project assets after the user selects another project while a Case run is pending', async () => {
+    const originalDesktopApi = window.desktopApi;
+    const projectA = createEmptyProject(1);
+    projectA.id = 'project-a';
+    projectA.name = 'Project A';
+    const environment = projectA.environments[0]!;
+    const testCase = {
+      ...createEmptyTestCase(1, projectA.groups[0]!.id, environment.id),
+      id: 'case-project-a',
+      version: 1,
+    };
+    projectA.testCases = [testCase];
+    const projectB = createEmptyProject(2);
+    projectB.id = 'project-b';
+    projectB.name = 'Project B';
+    const state = createInitialStudioState();
+    state.projects = [projectA, projectB];
+    state.selectedProjectId = projectA.id;
+    state.selectedGroupId = projectA.groups[0]!.id;
+    state.selectedTestCaseId = testCase.id;
+    state.selectedTestCaseReference = { id: testCase.id, version: testCase.version ?? 1 };
+    state.startupGuide.completed = true;
+    state.appearance.localeMode = 'en-US';
+    state.projectAssetBindings = [{
+      projectId: projectA.id,
+      projectDirectory: '/tmp/project-a-assets',
+      revision: 'a'.repeat(64),
+      boundAt: '2026-08-15T00:00:00.000Z',
+    }];
+    let rejectRun: (error: unknown) => void = () => undefined;
+    const pendingRun = new Promise<never>((_resolve, reject) => {
+      rejectRun = reject;
+    });
+    const desktopApi = {
+      getRuntimeInfo: vi.fn().mockResolvedValue({ platform: 'desktop', persistence: 'file' }),
+      loadStudioState: vi.fn().mockResolvedValue(state),
+      onRecordingEvent: vi.fn().mockReturnValue(() => undefined),
+      onRunEvent: vi.fn().mockReturnValue(() => undefined),
+      runTestCase: vi.fn().mockImplementation(() => pendingRun),
+      saveStudioState: vi.fn().mockResolvedValue(undefined),
+    } as unknown as DesktopApi;
+    window.desktopApi = desktopApi;
+
+    try {
+      render(<App />);
+
+      const navigation = await screen.findByRole('navigation', { name: 'Main Navigation' });
+      fireEvent.click(within(navigation).getByRole('button', { name: 'Cases' }));
+      fireEvent.click(await screen.findByRole('button', { name: 'Run Test' }));
+      await waitFor(() => expect(desktopApi.runTestCase).toHaveBeenCalledOnce());
+
+      fireEvent.click(within(navigation).getByRole('button', { name: 'Projects' }));
+      const projectBHeading = await screen.findByRole('heading', { level: 2, name: 'Project B' });
+      fireEvent.click(projectBHeading.closest('article')!);
+      await waitFor(() => expect(screen.getByRole('heading', { level: 2, name: 'Project B' }).closest('article')).toHaveClass('is-active'));
+      rejectRun(Object.assign(new Error('snapshot changed'), { code: 'staleProjectRevision' }));
+
+      expect(await screen.findByRole('alert')).toHaveTextContent('Project snapshot changed. Reload project assets before running again.');
+      fireEvent.click(screen.getByRole('button', { name: 'Open project assets' }));
+      expect(within(await screen.findByRole('dialog')).getByRole('heading', { level: 2, name: 'Project A' })).toBeInTheDocument();
+    } finally {
+      window.desktopApi = originalDesktopApi;
+    }
+  });
+
 });

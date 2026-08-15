@@ -57,6 +57,7 @@ describe('desktop preload runtime IPC contract', () => {
     const { runtimeIpcChannels } = loadRuntimeIpcChannels();
     const source = loadPreloadWithElectronMock();
     const desktopApi = exposeInMainWorld.mock.calls[0]![1] as Record<string, (...args: unknown[]) => unknown>;
+    invoke.mockResolvedValue(undefined);
 
     desktopApi.getRuntimeInfo();
     desktopApi.runSuite({ projectId: 'project-1', suite: { id: 'suite-1', version: 3 }, expectedProjectRevision: 'a'.repeat(64) });
@@ -88,5 +89,31 @@ describe('desktop preload runtime IPC contract', () => {
     for (const channel of Object.values(runtimeIpcChannels)) {
       expect(source).not.toContain(`'${channel}'`);
     }
+  });
+
+  it('restores serialized project revision errors with their code', async () => {
+    const { runtimeIpcChannels } = loadRuntimeIpcChannels();
+    loadPreloadWithElectronMock();
+    const desktopApi = exposeInMainWorld.mock.calls[0]![1] as Record<string, (...args: unknown[]) => Promise<unknown>>;
+    invoke.mockResolvedValueOnce({
+      type: 'testBuddy.runtimeError',
+      code: 'projectRevisionChanged',
+      message: 'Project snapshot changed.',
+    });
+
+    await expect(desktopApi.runTestCase({
+      projectId: 'project-1',
+      testCase: { id: 'case-1', version: 2 },
+      expectedProjectRevision: 'a'.repeat(64),
+    })).rejects.toMatchObject({
+      code: 'projectRevisionChanged',
+      message: 'Project snapshot changed.',
+    });
+
+    expect(invoke).toHaveBeenCalledWith(runtimeIpcChannels.runTestCase, {
+      projectId: 'project-1',
+      testCase: { id: 'case-1', version: 2 },
+      expectedProjectRevision: 'a'.repeat(64),
+    });
   });
 });

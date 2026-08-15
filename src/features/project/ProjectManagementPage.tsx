@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from 'react';
+import { useEffect, useId, useMemo, useState } from 'react';
 import type {
   CredentialRef,
   FixtureAsset,
@@ -89,6 +89,8 @@ export function ProjectManagementPage({
   onUpdateProject,
   onSaveCredential,
   projectAssetBindings = [],
+  openProjectConfigurationFor,
+  onProjectConfigurationOpened,
 }: {
   projects: ProjectDraft[];
   selectedProject?: ProjectDraft;
@@ -103,6 +105,8 @@ export function ProjectManagementPage({
   onProjectAssetBound?: (binding: ProjectAssetBinding) => void;
   onProjectAssetReloaded?: (result: ProjectAssetReloadResult) => void;
   projectAssetBindings?: ProjectAssetBinding[];
+  openProjectConfigurationFor?: string;
+  onProjectConfigurationOpened?: () => void;
   onSaveCredential: (payload: {
     label: string;
     username: string;
@@ -123,11 +127,27 @@ export function ProjectManagementPage({
     (total, project) => total + project.documents.length + project.recordings.length,
     0,
   );
+  const projectAssetBindingsByProjectId = useMemo(
+    () => new Map(projectAssetBindings.map((binding) => [binding.projectId, binding])),
+    [projectAssetBindings],
+  );
 
   const openProjectEditor = (project: ProjectDraft) => {
     onSelectProject(project.id);
     setEditingProjectId(project.id);
   };
+
+  useEffect(() => {
+    if (!openProjectConfigurationFor) {
+      return;
+    }
+    const project = projects.find((candidate) => candidate.id === openProjectConfigurationFor);
+    if (!project) {
+      return;
+    }
+    openProjectEditor(project);
+    onProjectConfigurationOpened?.();
+  }, [onProjectConfigurationOpened, openProjectConfigurationFor, projects]);
 
   return (
     <PageShell className="figma-project-page">
@@ -157,6 +177,7 @@ export function ProjectManagementPage({
                 onDelete={() => onDeleteProject(project.id)}
                 onEdit={() => openProjectEditor(project)}
                 onSelect={() => onSelectProject(project.id)}
+                isBound={projectAssetBindingsByProjectId.has(project.id)}
                 project={project}
                 t={t}
               />
@@ -226,6 +247,7 @@ function ProjectCard({
   onDelete,
   onEdit,
   onSelect,
+  isBound,
   project,
   t,
 }: {
@@ -233,6 +255,7 @@ function ProjectCard({
   onDelete: () => void;
   onEdit: () => void;
   onSelect: () => void;
+  isBound: boolean;
   project: ProjectDraft;
   t: (key: string, replacements?: Record<string, string | number>) => string;
 }) {
@@ -245,6 +268,7 @@ function ProjectCard({
         <Badge className={`project-card-status ${active ? 'is-active' : ''}`} variant="outline">
           {active ? t('project.card.selected') : project.environments.length ? t('project.card.configured') : t('project.card.draft')}
         </Badge>
+        {!isBound ? <Badge className="project-card-status" variant="outline">{t('project.assets.legacy')}</Badge> : null}
       </div>
       <div className="project-card-copy">
         <h2>{project.name}</h2>

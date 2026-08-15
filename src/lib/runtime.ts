@@ -622,6 +622,7 @@ export async function runTestCase(request: RunTestCaseRequest): Promise<RunTestC
       ...(request.runId ? { runId: request.runId } : {}),
       projectId: request.project.id,
       testCase: { id: request.testCase.id, version: request.testCase.version ?? 1 },
+      ...(request.expectedProjectRevision ? { expectedProjectRevision: request.expectedProjectRevision } : {}),
     });
   }
 
@@ -758,6 +759,7 @@ export async function runSuite(request: RunSuiteRequest): Promise<RunSuiteRespon
       ...(request.runId ? { runId: request.runId } : {}),
       projectId: request.project.id,
       suite: { id: request.suite.id, version: request.suite.version },
+      ...(request.expectedProjectRevision ? { expectedProjectRevision: request.expectedProjectRevision } : {}),
     });
   }
 

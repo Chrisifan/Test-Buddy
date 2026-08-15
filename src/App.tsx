@@ -183,6 +183,15 @@ function isGatedFeaturePage(page: AppPage): page is 'nl' | 'workflow' | 'recordi
   return page === 'nl' || page === 'workflow' || page === 'recording';
 }
 
+function isStaleProjectRevisionError(error: unknown): boolean {
+  if (!error || typeof error !== 'object' || !('code' in error)) {
+    return false;
+  }
+
+  const code = error.code;
+  return code === 'staleProjectRevision' || code === 'projectRevisionChanged';
+}
+
 export function App() {
   const [activePage, setActivePage] = useState<AppPage>('home');
   const [isPageExiting, setIsPageExiting] = useState(false);
@@ -246,6 +255,8 @@ export function App() {
   const [runLogs, setRunLogs] = useState(initialRunLog);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
   const [storageLoadError, setStorageLoadError] = useState(false);
+  const [projectRevisionErrorProjectId, setProjectRevisionErrorProjectId] = useState<string>();
+  const [projectConfigurationTargetId, setProjectConfigurationTargetId] = useState<string>();
   const pageTransitionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const selectedRecordingIdRef = useRef(selectedRecordingId);
   const pendingTestCaseRunContextRef = useRef<{
@@ -264,6 +275,9 @@ export function App() {
   const nextSaveModeRef = useRef<SaveMode>('debounced');
 
   const selectedProject = projects.find((project) => project.id === selectedProjectId) ?? projects[0];
+  const selectedProjectAssetBinding = selectedProject
+    ? projectAssetBindings.find((binding) => binding.projectId === selectedProject.id)
+    : undefined;
   const selectedEnvironment =
     selectedProject?.environments.find((environment) => environment.id === selectedProject.selectedEnvironmentId) ??
     selectedProject?.environments[0];
@@ -2091,6 +2105,7 @@ export function App() {
     activeSuiteRunIdRef.current = suiteRunId;
     setActiveSuiteRunId(suiteRunId);
     setIsRunning(true);
+    setProjectRevisionErrorProjectId(undefined);
     setRunId(suiteRunId);
     setRunTitle(suite.name);
     setRunStatus('running');
@@ -2105,6 +2120,7 @@ export function App() {
         runId: suiteRunId,
         project: selectedProject,
         suite: reference,
+        ...(selectedProjectAssetBinding ? { expectedProjectRevision: selectedProjectAssetBinding.revision } : {}),
         runtimeProfile,
         midsceneConfig,
         agentModelConfig,
@@ -2140,8 +2156,13 @@ export function App() {
         setSelectedRunId(firstDetail.id);
         switchPage('runs');
       }
-    } catch {
+    } catch (error) {
       setRunStatus('failed');
+      if (isStaleProjectRevisionError(error)) {
+        setProjectRevisionErrorProjectId(selectedProject.id);
+        appendSystemMessage(t('app.runtime.projectRevisionChanged'));
+        return;
+      }
       appendSystemMessage(t('app.runtime.suiteFailed'));
     } finally {
       activeSuiteRunIdRef.current = undefined;
@@ -2494,6 +2515,7 @@ export function App() {
 
     const documentId = getTestCasePrdPath(testCaseToRun)?.documentId;
     setIsRunning(true);
+    setProjectRevisionErrorProjectId(undefined);
     pendingTestCaseRunContextRef.current = {
       projectId: selectedProject.id,
       testCaseId: testCaseToRun.id,
@@ -2512,6 +2534,7 @@ export function App() {
       const result = await runTestCase({
         project: selectedProject,
         testCase: testCaseToRun,
+        ...(selectedProjectAssetBinding ? { expectedProjectRevision: selectedProjectAssetBinding.revision } : {}),
         environment: environmentToRun,
         runtimeProfile,
         midsceneConfig,
@@ -2547,10 +2570,15 @@ export function App() {
       }));
       pendingTestCaseRunContextRef.current = null;
       switchPage('runs');
-    } catch {
+    } catch (error) {
       pendingTestCaseRunContextRef.current = null;
       setIsRunning(false);
       setRunStatus('failed');
+      if (isStaleProjectRevisionError(error)) {
+        setProjectRevisionErrorProjectId(selectedProject.id);
+        appendSystemMessage(t('app.runtime.projectRevisionChanged'));
+        return;
+      }
       appendSystemMessage(t('app.runtime.caseFailed'));
     }
   }
@@ -2760,6 +2788,19 @@ export function App() {
             isPageExiting ? 'is-page-exiting' : ''
           }`}
         >
+          {projectRevisionErrorProjectId ? (
+            <section aria-live="assertive" className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-[4px] border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive" role="alert">
+              <span>{t('app.runtime.projectRevisionChanged')}</span>
+              <Button onClick={() => {
+                setProjectConfigurationTargetId(projectRevisionErrorProjectId);
+                setProjectRevisionErrorProjectId(undefined);
+                goToPage('projects');
+              }} size="sm" type="button" variant="outline">
+                <FolderKanban className="size-4" />
+                {t('app.runtime.openProjectAssets')}
+              </Button>
+            </section>
+          ) : null}
           <Suspense fallback={<RouteLoadingPlaceholder />}>
           {activePage === 'home' ? (
             <HomePage
@@ -2780,10 +2821,12 @@ export function App() {
                 onDeleteProject={handleDeleteProject}
                 onProjectAssetBound={handleProjectAssetBound}
                 onProjectAssetReloaded={handleProjectAssetReloaded}
+                onProjectConfigurationOpened={() => setProjectConfigurationTargetId(undefined)}
                 onSaveCredential={handleSaveCredential}
                 onSelectGroup={setSelectedGroupId}
                 onSelectProject={handleSelectProject}
                 onUpdateProject={updateSelectedProject}
+                openProjectConfigurationFor={projectConfigurationTargetId}
                 projectAssetBindings={projectAssetBindings}
                 projects={projects}
               selectedGroupId={selectedGroupId}
@@ -2874,6 +2917,7 @@ export function App() {
               onRerunTestCase={handleRerunTestCase}
               onSelectRun={setSelectedRunId}
               project={selectedProject}
+              projectAssetBinding={selectedProjectAssetBinding}
               recentRuns={recentRuns}
               runDetails={runDetails}
               selectedRunId={selectedRunId}

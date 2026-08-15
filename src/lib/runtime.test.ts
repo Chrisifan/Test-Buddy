@@ -98,6 +98,7 @@ describe('browser fallback agent runtime', () => {
     const project = createEmptyProject(1);
     const request = {
       project,
+      expectedProjectRevision: 'a'.repeat(64),
       suite: {
         ...createEmptySuiteAsset(project, 1),
         id: 'suite-release',
@@ -116,6 +117,7 @@ describe('browser fallback agent runtime', () => {
       expect(desktopApi.runSuite).toHaveBeenCalledWith({
         projectId: project.id,
         suite: { id: 'suite-release', version: 2 },
+        expectedProjectRevision: 'a'.repeat(64),
       });
     } finally {
       window.desktopApi = originalDesktopApi;
@@ -137,11 +139,18 @@ describe('browser fallback agent runtime', () => {
     window.desktopApi = desktopApi;
 
     try {
-      await expect(runTestCase({ project, environment, testCase, runId: 'run-login' })).resolves.toBe(response);
+      await expect(runTestCase({
+        project,
+        environment,
+        testCase,
+        runId: 'run-login',
+        expectedProjectRevision: 'a'.repeat(64),
+      })).resolves.toBe(response);
       expect(desktopApi.runTestCase).toHaveBeenCalledWith({
         projectId: project.id,
         testCase: { id: 'case-login', version: 2 },
         runId: 'run-login',
+        expectedProjectRevision: 'a'.repeat(64),
       });
     } finally {
       window.desktopApi = originalDesktopApi;

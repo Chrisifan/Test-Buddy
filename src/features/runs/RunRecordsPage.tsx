@@ -2,6 +2,7 @@ import { useMemo, useState, type ReactNode } from 'react';
 import {
   canCreateReporterFixDraft,
   deriveRunCoverageRisk,
+  type ProjectAssetBinding,
   type ProjectDraft,
   type RunArtifact,
   type RunDetail,
@@ -287,6 +288,7 @@ function getEvidencePreviewPath(event: AgentRunEvent, artifacts: AgentArtifact[]
 
 export function RunRecordsPage({
   project,
+  projectAssetBinding,
   recentRuns,
   runDetails,
   selectedRunId,
@@ -301,6 +303,7 @@ export function RunRecordsPage({
   onConfirmManualStep = () => {},
 }: {
   project?: ProjectDraft;
+  projectAssetBinding?: ProjectAssetBinding;
   recentRuns: RunSummary[];
   runDetails: RunDetail[];
   selectedRunId: string;
@@ -322,6 +325,7 @@ export function RunRecordsPage({
   ) => void;
 }) {
   const { t } = useI18n();
+  const isProjectBound = Boolean(project && projectAssetBinding?.projectId === project.id);
   const [statusFilter, setStatusFilter] = useState<'all' | 'running' | 'passed' | 'failed' | 'neutral'>('all');
   const [environmentFilter, setEnvironmentFilter] = useState<string>('all');
   const [groupFilter, setGroupFilter] = useState<string>('all');
@@ -527,16 +531,16 @@ export function RunRecordsPage({
               ) : null}
               {selectedRun && onRerunTestCase && isSelectedRunRerunnable ? (
                 <button
-              aria-label={t('runs.rerun')}
-              className="inline-flex h-8 items-center gap-1.5 rounded-[4px] border border-border px-2.5 text-xs font-medium text-foreground transition-colors hover:bg-accent disabled:pointer-events-none disabled:opacity-45"
-              disabled={isRunning || selectedRun.status === 'running'}
-              onClick={() => onRerunTestCase(selectedRun)}
-              title={t('runs.rerun')}
-              type="button"
-            >
-              <RefreshCcw className="h-3.5 w-3.5" />
-              {t('runs.rerun')}
-            </button>
+                  aria-label={t('runs.rerun.currentCaseLegacy')}
+                  className="inline-flex h-8 items-center gap-1.5 rounded-[4px] border border-border px-2.5 text-xs font-medium text-foreground transition-colors hover:bg-accent disabled:pointer-events-none disabled:opacity-45"
+                  disabled={isRunning || selectedRun.status === 'running'}
+                  onClick={() => onRerunTestCase(selectedRun)}
+                  title={t('runs.rerun.currentCaseLegacy')}
+                  type="button"
+                >
+                  <RefreshCcw className="h-3.5 w-3.5" />
+                  {t('runs.rerun.currentCaseLegacy')}
+                </button>
               ) : null}
             </div>
           ) : undefined
@@ -546,6 +550,7 @@ export function RunRecordsPage({
           t('runs.meta.passed', { count: runStats.passed }),
           t('runs.meta.failed', { count: runStats.failed }),
           t('runs.meta.running', { count: runStats.running }),
+          ...(project && !isProjectBound ? [t('project.assets.legacy')] : []),
         ].map((item) => (
           <Badge className="page-header-meta" key={item} variant="outline">
             {item}
@@ -555,6 +560,11 @@ export function RunRecordsPage({
       />
 
       <PageBody>
+      {selectedRun && onRerunTestCase ? (
+        <p className="mb-3 text-sm text-muted-foreground">
+          {t('runs.rerun.legacyUnavailable')}
+        </p>
+      ) : null}
       <section className="designer-split run-workbench" aria-label={t('runs.aria.workbench')}>
         <aside className="designer-panel">
           <div className="designer-panel-header grid gap-3">

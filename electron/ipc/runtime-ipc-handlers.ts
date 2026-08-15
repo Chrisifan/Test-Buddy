@@ -10,6 +10,7 @@ import type {
 import type {
   FixtureScriptTrustRecord,
   ProjectEnvironment,
+  ProjectRevisionIpcErrorResponse,
   RunDetail,
   RunSuiteResponse,
   RunSuiteIntent,
@@ -82,7 +83,7 @@ export class RunIntentResolutionError extends Error {
 export function registerRuntimeIpcHandlers(dependencies: RuntimeIpcDependencies): void {
   dependencies.handle(runtimeIpcChannels.getInfo, async () => dependencies.getRuntimeInfo());
 
-  dependencies.handle(runtimeIpcChannels.runTestCase, async (_event, request) => {
+  dependencies.handle(runtimeIpcChannels.runTestCase, (_event, request) => serializeProjectRevisionError(async () => {
     const projectSnapshot = await loadProjectSnapshot(dependencies.projectRepository, request.projectId, request.expectedProjectRevision);
     const testCase = findTestCaseVersion(projectSnapshot.project, request.testCase);
     if (!testCase) {
@@ -115,9 +116,9 @@ export function registerRuntimeIpcHandlers(dependencies: RuntimeIpcDependencies)
       ),
     );
     return result;
-  });
+  }));
 
-  dependencies.handle(runtimeIpcChannels.runSuite, async (_event, request) => {
+  dependencies.handle(runtimeIpcChannels.runSuite, (_event, request) => serializeProjectRevisionError(async () => {
     const projectSnapshot = await loadProjectSnapshot(dependencies.projectRepository, request.projectId, request.expectedProjectRevision);
     const suite = findSuiteAsset(projectSnapshot.project, request.suite);
     if (!suite) {
@@ -153,7 +154,7 @@ export function registerRuntimeIpcHandlers(dependencies: RuntimeIpcDependencies)
     }, latestState);
     await dependencies.saveState(nextState);
     return result;
-  });
+  }));
 
   dependencies.handle(runtimeIpcChannels.cancelRun, async (_event, runId): Promise<boolean> => {
     if (typeof runId !== 'string' || !runId.trim()) {
@@ -206,6 +207,31 @@ export function registerRuntimeIpcHandlers(dependencies: RuntimeIpcDependencies)
   });
 }
 
+async function serializeProjectRevisionError<T>(operation: () => Promise<T>): Promise<T | ProjectRevisionIpcErrorResponse> {
+  try {
+    return await operation();
+  } catch (error) {
+    if (!isProjectRevisionError(error)) {
+      throw error;
+    }
+    return {
+      type: 'testBuddy.runtimeError',
+      code: error.code,
+      message: error.message,
+    };
+  }
+}
+
+function isProjectRevisionError(
+  error: unknown,
+): error is Error & { code: ProjectRevisionIpcErrorResponse['code'] } {
+  return error instanceof Error &&
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    (error.code === 'staleProjectRevision' || error.code === 'projectRevisionChanged');
+}
+
 async function loadProjectSnapshot(
   projectRepository: Pick<ProjectRepository, 'load' | 'loadBound'>,
   projectId: string,
@@ -215,14 +241,13 @@ async function loadProjectSnapshot(
     return await projectRepository.loadBound(projectId, expectedProjectRevision);
   } catch (error) {
     if (isProjectUnboundError(error)) {
-      const projectSnapshot = await projectRepository.load(projectId);
-      if (expectedProjectRevision !== undefined && projectSnapshot.revision !== expectedProjectRevision) {
+      if (expectedProjectRevision !== undefined) {
         throw new ProjectRepositoryError(
-          'staleProjectRevision',
-          `项目 ${projectId} 的请求 revision 已过期。`,
+          'projectRevisionChanged',
+          `项目 ${projectId} 的资产绑定已变化。`,
         );
       }
-      return projectSnapshot;
+      return projectRepository.load(projectId);
     }
     throw error;
   }
