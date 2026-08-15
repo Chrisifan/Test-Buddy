@@ -7,6 +7,7 @@ import {
   createEmptySuiteAsset,
   createEmptyTestCase,
   createInitialStudioState,
+  createPrdDocumentAsset,
   type DesktopApi,
 } from '../shared/studio.js';
 import { App } from './App.js';
@@ -157,6 +158,59 @@ describe('App shell', () => {
       const persisted = JSON.parse(window.localStorage.getItem('midscene-studio-state-v2') ?? '{}');
       expect(persisted.projects[0].testCases).not.toEqual(expect.arrayContaining([
         expect.objectContaining({ id: 'case-a', version: 2, steps: expect.arrayContaining([expect.objectContaining({ title: 'stale A draft' })]) }),
+      ]));
+    });
+  });
+
+  it('discards an open Case draft before creating a Case from a PRD path', async () => {
+    const project = createEmptyProject(1);
+    const environment = project.environments[0]!;
+    const caseA = { ...createEmptyTestCase(1, project.groups[0]!.id, environment.id), id: 'case-a', version: 1, name: 'Case A' };
+    const document = createPrdDocumentAsset({
+      name: 'dashboard-prd.md',
+      kind: 'markdown',
+      size: 120,
+      sourceText: 'Dashboard users can filter charts. The result table supports sorting and pagination.',
+    });
+    const generatedPath = document.generatedPaths[0]!;
+    const state = createInitialStudioState();
+    state.projects = [{ ...project, documents: [document], testCases: [caseA] }];
+    state.selectedProjectId = project.id;
+    state.selectedGroupId = project.groups[0]!.id;
+    state.selectedTestCaseReference = { id: caseA.id, version: 1 };
+    state.selectedTestCaseId = caseA.id;
+    state.selectedRecordingId = '';
+    state.startupGuide.completed = true;
+    state.appearance.localeMode = 'en-US';
+    state.midsceneConfig = { ...state.midsceneConfig, modelBaseUrl: 'https://models.example.test/v1', modelApiKey: 'test-key', modelName: 'ui-agent', modelFamily: 'openai' };
+    window.localStorage.setItem('midscene-studio-state-v2', JSON.stringify(state));
+
+    render(<App />);
+
+    const navigation = await screen.findByRole('navigation', { name: 'Main Navigation' });
+    fireEvent.click(within(navigation).getByRole('button', { name: 'Cases' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit as New Version' }));
+    fireEvent.change(screen.getAllByLabelText('Step Title')[0]!, { target: { value: 'stale A draft' } });
+
+    fireEvent.click(within(navigation).getByRole('button', { name: 'Requirements' }));
+    fireEvent.click((await screen.findAllByRole('button', { name: 'Create Case' }))[0]!);
+
+    expect(await screen.findByRole('button', { name: 'Edit as New Version' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Publish Version' })).not.toBeInTheDocument();
+
+    const selectCase = screen.getByRole('button', { name: 'Select a Case' });
+    fireEvent.pointerDown(selectCase, { button: 0 });
+    fireEvent.click(await screen.findByRole('menuitem', { name: /Case A/u }));
+    expect(within(screen.getByRole('button', { name: 'Select a Case' })).getByText('Case A')).toBeInTheDocument();
+
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Select a Case' }), { button: 0 });
+    fireEvent.click(await screen.findByRole('menuitem', { name: new RegExp(generatedPath.title, 'u') }));
+    expect(within(screen.getByRole('button', { name: 'Select a Case' })).getByText(generatedPath.title)).toBeInTheDocument();
+
+    await waitFor(() => {
+      const persisted = JSON.parse(window.localStorage.getItem('midscene-studio-state-v2') ?? '{}');
+      expect(persisted.projects[0].testCases).not.toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: caseA.id, version: 2, steps: expect.arrayContaining([expect.objectContaining({ title: 'stale A draft' })]) }),
       ]));
     });
   });

@@ -744,6 +744,17 @@ export function App() {
     setCaseDraftSourceReference(undefined);
   }
 
+  function transitionSelectedTestCase(
+    reference: VersionedTestAssetReference | undefined,
+    groupId?: string,
+  ) {
+    handleDiscardCaseDraft();
+    if (groupId !== undefined) {
+      setSelectedGroupId(groupId);
+    }
+    setSelectedTestCaseReference(reference);
+  }
+
   function handlePublishCase() {
     if (!selectedProject || !caseDraft || !caseDraftSourceReference || !selectedTestCaseReference ||
       !isEditingSelectedCase || caseDraft.id !== caseDraftSourceReference.id) {
@@ -920,7 +931,7 @@ export function App() {
     setSelectedProjectId(nextProject?.id ?? '');
     setSelectedGroupId(nextSelectedGroupId);
     setSelectedTestCaseReference(nextSelectedTestCaseReference);
-    setCaseDraft(undefined);
+    handleDiscardCaseDraft();
     setSelectedRecordingId(nextSelectedRecordingId);
     setSelectedSuiteReference(nextSelectedSuiteReference);
     setSelectedDocumentId(nextSelectedDocumentId);
@@ -1040,8 +1051,7 @@ export function App() {
       groups: generatedGroup ? [...project.groups, generatedGroup] : project.groups,
       testCases: [testCase, ...project.testCases],
     }));
-    setSelectedGroupId(groupId);
-    setSelectedTestCaseReference({ id: testCase.id, version: testCase.version ?? 1 });
+    transitionSelectedTestCase({ id: testCase.id, version: testCase.version ?? 1 }, groupId);
     switchPage('cases');
   }
 
@@ -1147,8 +1157,11 @@ export function App() {
       groups: [...project.groups, ...generatedGroups],
       testCases: [...nextCases, ...project.testCases],
     }));
-    setSelectedGroupId(nextCases[0]?.groupId ?? selectedProject.groups[0]?.id ?? '');
-    setSelectedTestCaseReference(nextCases[0] ? { id: nextCases[0].id, version: nextCases[0].version ?? 1 } : selectedTestCaseReference);
+    const firstCase = nextCases[0]!;
+    transitionSelectedTestCase(
+      { id: firstCase.id, version: firstCase.version ?? 1 },
+      firstCase.groupId ?? selectedProject.groups[0]?.id ?? '',
+    );
     switchPage('cases');
   }
 
@@ -1201,8 +1214,11 @@ export function App() {
       groups: [...project.groups, ...generatedGroups],
       testCases: [...nextCases, ...project.testCases],
     }));
-    setSelectedGroupId(nextCases[0]?.groupId ?? selectedProject.groups[0]?.id ?? '');
-    setSelectedTestCaseReference(nextCases[0] ? { id: nextCases[0].id, version: nextCases[0].version ?? 1 } : selectedTestCaseReference);
+    const firstCase = nextCases[0]!;
+    transitionSelectedTestCase(
+      { id: firstCase.id, version: firstCase.version ?? 1 },
+      firstCase.groupId ?? selectedProject.groups[0]?.id ?? '',
+    );
     switchPage('cases');
   }
 
@@ -2597,8 +2613,7 @@ export function App() {
       ...project,
       testCases: [draft, ...project.testCases],
     }), 'immediate');
-    setSelectedGroupId(draft.groupId);
-    setSelectedTestCaseReference({ id: draft.id, version: draft.version ?? 1 });
+    transitionSelectedTestCase({ id: draft.id, version: draft.version ?? 1 }, draft.groupId);
     switchPage('cases');
   }
 
