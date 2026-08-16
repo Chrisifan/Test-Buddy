@@ -8,6 +8,8 @@ import type {
   RunDetail,
   RunArtifact,
   RunEventPayload,
+  RunReason,
+  RunStatus,
   RunRecordingRequest,
   RunRecordingResponse,
 } from '../../shared/studio.js';
@@ -140,6 +142,7 @@ export class RecordingRunner {
     const tracedAgentRun = traceArtifact ? appendTraceArtifact(preflightAgentRun, traceArtifact) : preflightAgentRun;
     const cancellation = cancelledAt ? createUserRunCancellation(cancelledAt) : undefined;
     const agentRun = cancellation ? markAgentRunCancelled(tracedAgentRun, cancellation) : tracedAgentRun;
+    const outcome = terminalRecordingOutcome(agentRun, cancellation, preflightReason);
     const detail: RunDetail = {
       id: runId,
       projectId: request.project.id,
@@ -147,7 +150,7 @@ export class RecordingRunner {
       ...(documentId ? { documentId } : {}),
       environmentId: request.environment.id,
       title,
-      status: agentRun.status,
+      status: outcome.status,
       startedAt: agentRun.startedAt,
       endedAt: agentRun.endedAt,
       duration: formatDuration(endedAt.getTime() - startedAt.getTime()),
@@ -159,13 +162,16 @@ export class RecordingRunner {
           id: `${runId}-step-${index}`,
           stepId: step.id,
           title: step.title,
-          status: result?.status ?? 'neutral',
-          message: result?.message ?? '该录制节点因前序失败尚未执行。',
+          status: outcome.status === 'cancelled'
+            ? 'cancelled'
+            : result?.status ?? (outcome.status === 'blocked' ? 'blocked' : 'skipped'),
+          message: result?.message ?? outcome.reason?.message ?? '该录制节点因前序失败尚未执行。',
           ...(result?.screenshotPath ? { screenshotPath: result.screenshotPath } : {}),
         };
       }),
       artifacts: agentRun.artifacts,
       agentRun,
+      ...(outcome.reason ? { reason: outcome.reason } : {}),
       ...(agentRun.failureReason ? { failureReason: agentRun.failureReason } : {}),
       ...(cancellation ? { cancellation } : {}),
     };
@@ -175,7 +181,7 @@ export class RecordingRunner {
         runId,
         title,
         type: 'complete',
-        status: agentRun.status,
+        status: detail.status,
         duration: detail.duration,
         summary: detail.summary,
         detail,
@@ -254,6 +260,45 @@ function markAgentRunPreflightBlocked(agentRun: AgentRunResult, reason: string):
       },
     ],
   };
+}
+
+interface TerminalRecordingOutcome {
+  status: Exclude<RunStatus, 'running'>;
+  reason?: RunReason;
+}
+
+function terminalRecordingOutcome(
+  agentRun: AgentRunResult,
+  cancellation: RunDetail['cancellation'],
+  preflightReason: string | undefined,
+): TerminalRecordingOutcome {
+  if (cancellation) {
+    return { status: 'cancelled', reason: runReason('userCancelled', cancellation.message) };
+  }
+  if (preflightReason) {
+    return {
+      status: 'blocked',
+      reason: runReason(isCredentialUnavailable(preflightReason) ? 'credentialUnavailable' : 'unsupportedAction', preflightReason),
+    };
+  }
+  if (agentRun.status === 'passed') {
+    return { status: 'passed' };
+  }
+  if (agentRun.status === 'failed') {
+    return { status: 'failed', reason: runReason('actionFailed', agentRun.failureReason ?? agentRun.summary) };
+  }
+  if (agentRun.status === 'neutral') {
+    return { status: 'blocked', reason: runReason('unsupportedAction', agentRun.summary) };
+  }
+  return { status: 'error', reason: runReason('executorError', 'Recording executor did not produce a terminal result.') };
+}
+
+function runReason(code: RunReason['code'], message: string): RunReason {
+  return { code, message };
+}
+
+function isCredentialUnavailable(message: string): boolean {
+  return /认证|凭据|credential|storage state/i.test(message);
 }
 
 function appendTraceArtifact(agentRun: AgentRunResult, trace: RunArtifact): AgentRunResult {

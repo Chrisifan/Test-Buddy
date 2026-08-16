@@ -20,6 +20,8 @@ import {
   type RunEventPayload,
   type RunDetail,
   type RunArtifact,
+  type RunReason,
+  type RunStatus,
   type RunWorkflowRequest,
   type RunWorkflowResponse,
   type RuntimeProfile,
@@ -300,6 +302,7 @@ function createWorkflowRunDetail(
   agentRun: AgentRunResult,
 ): RunDetail {
   const elapsedMs = Math.max(0, Date.parse(agentRun.endedAt ?? agentRun.startedAt) - Date.parse(agentRun.startedAt));
+  const outcome = terminalAgentRunOutcome(agentRun, runReason('unsupportedAction', agentRun.summary));
   return {
     id: agentRun.runId,
     projectId: request.project?.id ?? '',
@@ -307,7 +310,7 @@ function createWorkflowRunDetail(
     ...(request.documentId ? { documentId: request.documentId } : {}),
     environmentId: request.environment?.id ?? request.targetEnvironment,
     title: request.workflow.name,
-    status: agentRun.status,
+    status: outcome.status,
     startedAt: agentRun.startedAt,
     ...(agentRun.endedAt ? { endedAt: agentRun.endedAt } : {}),
     duration: formatDuration(agentRun.metrics?.durationMs ?? elapsedMs),
@@ -326,11 +329,18 @@ function createWorkflowRunDetail(
       const wasExecuted = agentRun.events.some(
         (event) => event.stepId === step.id && event.type !== 'agent:step-started',
       );
+      const status = outcome.status === 'cancelled'
+        ? 'cancelled'
+        : failedEvent
+          ? 'failed'
+          : wasExecuted
+            ? terminalAgentStatus(assertionEvent?.status ?? agentRun.status)
+            : 'skipped';
       return {
         id: `${agentRun.runId}-step-${index}`,
         stepId: step.id,
         title: step.title,
-        status: failedEvent ? 'failed' : wasExecuted ? assertionEvent?.status ?? 'passed' : 'neutral',
+        status,
         message:
           failedEvent?.message ??
           assertionEvent?.message ??
@@ -343,6 +353,7 @@ function createWorkflowRunDetail(
     }),
     artifacts: agentRun.artifacts,
     agentRun,
+    ...(outcome.reason ? { reason: outcome.reason } : {}),
     ...(agentRun.failureReason ? { failureReason: agentRun.failureReason } : {}),
   };
 }
@@ -396,6 +407,14 @@ function createDeterministicRunDetail(
   const observationEvent = agentRun.events.find(
     (event) => event.type === 'agent:observation-created' && event.stepId === sourceStepId,
   );
+  const outcome = terminalAgentRunOutcome(agentRun, deterministicFallbackReason(request, agentRun.summary));
+  const stepStatus = outcome.status === 'cancelled'
+    ? 'cancelled'
+    : failedEvent
+      ? 'failed'
+      : assertionEvent
+        ? terminalAgentStatus(assertionEvent.status)
+        : outcome.status;
   return {
     id: agentRun.runId,
     projectId: request.project?.id ?? '',
@@ -403,7 +422,7 @@ function createDeterministicRunDetail(
     ...(request.documentId ? { documentId: request.documentId } : {}),
     environmentId: request.environment?.id ?? request.targetEnvironment,
     title: request.sourceStep.title,
-    status: agentRun.status,
+    status: outcome.status,
     startedAt: agentRun.startedAt,
     ...(agentRun.endedAt ? { endedAt: agentRun.endedAt } : {}),
     duration: formatDuration(agentRun.metrics?.durationMs ?? elapsedMs),
@@ -414,7 +433,7 @@ function createDeterministicRunDetail(
         id: `${agentRun.runId}-step-0`,
         stepId: request.sourceStep.id,
         title: request.sourceStep.title,
-        status: failedEvent ? 'failed' : assertionEvent?.status ?? agentRun.status,
+        status: stepStatus,
         message: failedEvent?.message ?? assertionEvent?.message ?? agentRun.summary,
         ...(observationEvent?.observation?.screenshotPath
           ? { screenshotPath: observationEvent.observation.screenshotPath }
@@ -423,8 +442,62 @@ function createDeterministicRunDetail(
     ],
     artifacts: agentRun.artifacts,
     agentRun,
+    ...(outcome.reason ? { reason: outcome.reason } : {}),
     ...(agentRun.failureReason ? { failureReason: agentRun.failureReason } : {}),
   };
+}
+
+interface TerminalAgentOutcome {
+  status: Exclude<RunStatus, 'running'>;
+  reason?: RunReason;
+}
+
+function terminalAgentRunOutcome(agentRun: AgentRunResult, fallback: RunReason): TerminalAgentOutcome {
+  if (agentRun.cancellation) {
+    return { status: 'cancelled', reason: runReason('userCancelled', agentRun.cancellation.message) };
+  }
+  if (agentRun.status === 'passed') {
+    return { status: 'passed' };
+  }
+  if (agentRun.status === 'failed') {
+    const isAssertionFailure = agentRun.events.some((event) => (
+      event.type === 'agent:assertion-result' && event.verification?.status === 'failed'
+    ));
+    return {
+      status: 'failed',
+      reason: runReason(isAssertionFailure ? 'assertionFailed' : 'actionFailed', agentRun.failureReason ?? agentRun.summary),
+    };
+  }
+  if (agentRun.status === 'neutral') {
+    return { status: 'blocked', reason: fallback };
+  }
+  return { status: 'error', reason: runReason('executorError', 'Agent runtime did not produce a terminal result.') };
+}
+
+function terminalAgentStatus(status: AgentRunStatus): Exclude<RunStatus, 'running'> {
+  if (status === 'passed') {
+    return 'passed';
+  }
+  if (status === 'failed') {
+    return 'failed';
+  }
+  if (status === 'neutral') {
+    return 'blocked';
+  }
+  return 'error';
+}
+
+function deterministicFallbackReason(request: RunDeterministicStepRequest, message: string): RunReason {
+  const code = request.inputBinding?.kind === 'credential'
+    ? 'credentialUnavailable'
+    : request.inputBinding?.kind === 'fixtureOutput'
+      ? 'fixturePreflight'
+      : 'unsupportedAction';
+  return runReason(code, message);
+}
+
+function runReason(code: RunReason['code'], message: string): RunReason {
+  return { code, message };
 }
 
 function appendTraceArtifact(agentRun: AgentRunResult, trace: RunArtifact): AgentRunResult {
@@ -4033,7 +4106,7 @@ export class StudioRuntime {
         runId,
         title,
         type: 'complete',
-        status: 'neutral',
+        status: detail.status,
         duration: detail.duration,
         summary: detail.summary,
         detail,
@@ -4158,7 +4231,7 @@ export class StudioRuntime {
       runId,
       title,
       type: 'complete',
-      status: agentRun.status,
+      status: detail.status,
       duration: detail.duration,
       summary: agentRun.summary,
       detail,

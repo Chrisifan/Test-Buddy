@@ -116,7 +116,7 @@ describe('TestRunner recording replay', () => {
     ]);
   });
 
-  it('blocks unresolved fixture execution before opening a browser session', async () => {
+  it('records unresolved fixture execution as blocked fixture preflight before opening a browser session', async () => {
     const project = createProjectWithRecording();
     const environment = project.environments[0]!;
     const fixture = {
@@ -152,9 +152,10 @@ describe('TestRunner recording replay', () => {
 
     const response = await runner.run({ project: { ...project, fixtures: [fixture] }, testCase, environment });
 
-    expect(response.detail.status).toBe('neutral');
+    expect(response.detail.status).toBe('blocked');
+    expect(response.detail.reason).toMatchObject({ code: 'fixturePreflight' });
     expect(response.detail.summary).toContain('HTTP 请求配置不完整');
-    expect(response.detail.steps.every((step) => step.status === 'neutral')).toBe(true);
+    expect(response.detail.steps.every((step) => step.status === 'blocked')).toBe(true);
     expect(start).not.toHaveBeenCalled();
     expect(artifacts.createSnapshot).not.toHaveBeenCalled();
     expect(workflowRunner.runWorkflow).not.toHaveBeenCalled();
@@ -212,7 +213,8 @@ describe('TestRunner recording replay', () => {
       }],
     });
 
-    expect(response.detail.status).toBe('neutral');
+    expect(response.detail.status).toBe('blocked');
+    expect(response.detail.reason).toMatchObject({ code: 'fixturePreflight' });
     expect(response.detail.summary).toContain('脚本执行器不可用');
     expect(start).not.toHaveBeenCalled();
   });
@@ -420,7 +422,7 @@ describe('TestRunner recording replay', () => {
     expect(JSON.stringify(response.detail)).not.toContain('script-order-456');
   });
 
-  it('records an unavailable authentication state as neutral before creating run artifacts or executing steps', async () => {
+  it('records an unavailable authentication state as blocked before creating run artifacts or executing steps', async () => {
     const project = createProjectWithRecording();
     const environment = { ...project.environments[0]!, storageStateId: 'state-missing' };
     const start = vi.fn().mockResolvedValue({
@@ -439,9 +441,10 @@ describe('TestRunner recording replay', () => {
     const response = await runner.run({ project, testCase: project.testCases[0]!, environment });
 
     expect(start).toHaveBeenCalledWith({ project, environment, record: false });
-    expect(response.detail.status).toBe('neutral');
+    expect(response.detail.status).toBe('blocked');
+    expect(response.detail.reason).toMatchObject({ code: 'credentialUnavailable' });
     expect(response.detail.summary).toContain('认证状态引用不存在');
-    expect(response.detail.steps.every((step) => step.status === 'neutral')).toBe(true);
+    expect(response.detail.steps.every((step) => step.status === 'blocked')).toBe(true);
     expect(artifacts.createSnapshot).not.toHaveBeenCalled();
   });
 
@@ -500,7 +503,7 @@ describe('TestRunner recording replay', () => {
     );
   });
 
-  it('composes recording evidence into a mixed test case and stops after a neutral replay', async () => {
+  it('composes recording evidence into a mixed test case and stops after a blocked replay', async () => {
     const project = createProjectWithRecording();
     const environment = project.environments[0];
     const testCase = {
@@ -544,7 +547,7 @@ describe('TestRunner recording replay', () => {
           testCaseId: testCase.id,
           environmentId: environment.id,
           title: '登录冒烟 回放',
-          status: 'neutral',
+          status: 'blocked',
           startedAt: new Date(0).toISOString(),
           endedAt: new Date(0).toISOString(),
           duration: '00:00:01',
@@ -555,7 +558,7 @@ describe('TestRunner recording replay', () => {
               id: 'child-step',
               stepId: project.recordings[0].steps[0].id,
               title: '打开首页',
-              status: 'neutral',
+              status: 'blocked',
               message: '缺少可比较的视觉基线。',
               screenshotPath: '/tmp/replay.png',
             },
@@ -585,11 +588,12 @@ describe('TestRunner recording replay', () => {
     expect(recordingRunner.run).toHaveBeenCalledWith(
       expect.objectContaining({ testCaseId: testCase.id, parentRunId: response.runId }),
     );
-    expect(response.detail.status).toBe('neutral');
+    expect(response.detail.status).toBe('blocked');
+    expect(response.detail.reason).toMatchObject({ code: 'unsupportedAction' });
     expect(response.detail.artifacts).toEqual(expect.arrayContaining([expect.objectContaining({ path: '/tmp/replay.png' })]));
     expect(response.detail.steps).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ stepId: 'case-step-ai', status: 'neutral', message: expect.stringContaining('前序步骤') }),
+        expect.objectContaining({ stepId: 'case-step-ai', status: 'skipped', message: expect.stringContaining('前序步骤') }),
       ]),
     );
     expect(emitRunEvent).not.toHaveBeenCalledWith(
@@ -835,7 +839,7 @@ describe('TestRunner recording replay', () => {
       expect.objectContaining({ stepId: 'step-confirmed-navigate', status: 'passed' }),
       expect.objectContaining({ stepId: 'case-step-replay', status: 'passed' }),
       expect.objectContaining({ stepId: 'step-legacy-ai', status: 'passed' }),
-      expect.objectContaining({ stepId: 'step-manual', status: 'neutral' }),
+      expect.objectContaining({ stepId: 'step-manual', status: 'blocked' }),
     ]);
     expect(response.detail.agentRuns).toHaveLength(3);
     expect(response.detail.agentRuns?.[0]).toBe(deterministicAgentRun);
@@ -940,7 +944,7 @@ describe('TestRunner recording replay', () => {
     expect(response.detail.status).toBe('passed');
   });
 
-  it('keeps unsupported confirmed V2 actions neutral instead of sending them to the workflow runtime', async () => {
+  it('blocks unsupported confirmed V2 actions instead of sending them to the workflow runtime', async () => {
     const project = createProjectWithRecording();
     const environment = project.environments[0]!;
     const testCase = {
@@ -970,9 +974,10 @@ describe('TestRunner recording replay', () => {
 
     const response = await runner.run({ project, testCase, environment });
 
-    expect(response.detail.status).toBe('neutral');
+    expect(response.detail.status).toBe('blocked');
+    expect(response.detail.reason).toMatchObject({ code: 'unsupportedAction' });
     expect(response.detail.steps[0]).toEqual(
-      expect.objectContaining({ status: 'neutral', message: expect.stringContaining('确认的结构化动作') }),
+      expect.objectContaining({ status: 'blocked', message: expect.stringContaining('确认的结构化动作') }),
     );
     expect(deterministicRunner.runDeterministicStep).not.toHaveBeenCalled();
     expect(workflowRunner.runWorkflow).not.toHaveBeenCalled();
@@ -1076,11 +1081,48 @@ describe('TestRunner recording replay', () => {
     const response = await runner.run({ project, testCase, environment });
 
     expect(response.detail.status).toBe('failed');
+    expect(response.detail.reason).toMatchObject({ code: 'actionFailed' });
     expect(response.detail.steps).toEqual([
       expect.objectContaining({ stepId: 'step-confirmed-navigate', status: 'failed' }),
-      expect.objectContaining({ stepId: 'step-legacy-ai', status: 'neutral', message: expect.stringContaining('前序步骤') }),
+      expect.objectContaining({ stepId: 'step-legacy-ai', status: 'skipped', message: expect.stringContaining('前序步骤') }),
     ]);
     expect(workflowRunner.runWorkflow).not.toHaveBeenCalled();
+  });
+
+  it('labels a failed deterministic assertion with assertion-failed evidence', async () => {
+    const project = createProjectWithRecording();
+    const environment = project.environments[0]!;
+    const testCase = {
+      ...project.testCases[0],
+      steps: [{
+        id: 'step-assert-login', type: 'aiAssert' as const, title: '确认已登录', body: '确认页面显示欢迎语',
+        execution: {
+          schemaVersion: 2 as const, intent: '确认已登录', reviewStatus: 'confirmed' as const, actionRisk: 'low' as const,
+          assertion: { id: 'assert-login', version: 1 as const, kind: 'pageContains' as const, expected: '欢迎回来' },
+        },
+      }],
+    };
+    const browserRuntime = {
+      start: vi.fn().mockResolvedValue({ id: 'session-test', status: 'ready', currentUrl: environment.url, pageTitle: project.name, message: 'ready', updatedAt: new Date(0).toISOString() }),
+    };
+    const artifacts = { createSnapshot: vi.fn().mockResolvedValue({ id: 'artifact-start', type: 'snapshot', label: '运行起始快照', path: '/tmp/start.svg' }) };
+    const deterministicRunner = {
+      runDeterministicStep: vi.fn().mockResolvedValue({
+        runId: 'assertion-failed',
+        title: '确认已登录',
+        detail: {
+          id: 'assertion-failed', projectId: project.id, testCaseId: testCase.id, environmentId: environment.id,
+          title: '确认已登录', status: 'failed', startedAt: new Date(0).toISOString(), endedAt: new Date(0).toISOString(), duration: '00:00:01', summary: '欢迎语未出现', logs: [],
+          steps: [{ id: 'assertion-step', stepId: 'step-assert-login', title: '确认已登录', status: 'failed', message: '欢迎语未出现' }], artifacts: [],
+        },
+      }),
+    };
+    const runner = new TestRunner(artifacts as never, browserRuntime as never, vi.fn(), undefined, undefined, deterministicRunner as never);
+
+    const response = await runner.run({ project, testCase, environment });
+
+    expect(response.detail).toMatchObject({ status: 'failed', reason: { code: 'assertionFailed' } });
+    expect(response.detail.steps).toEqual([expect.objectContaining({ stepId: 'step-assert-login', status: 'failed' })]);
   });
 });
 
@@ -1137,7 +1179,8 @@ describe('TestRunner HTTP fixture lifecycle', () => {
 
     expect(order).toEqual(['setup:fixture-first', 'setup:fixture-second', 'cleanup:fixture-first']);
     expect(start).not.toHaveBeenCalled();
-    expect(response.detail.status).toBe('neutral');
+    expect(response.detail.status).toBe('blocked');
+    expect(response.detail.reason).toMatchObject({ code: 'fixturePreflight' });
     expect(response.detail.fixtureLifecycles).toEqual(expect.arrayContaining([
       expect.objectContaining({ fixtureId: second.id, lifecycle: 'setup', outcome: 'failed' }),
       expect.objectContaining({ fixtureId: first.id, lifecycle: 'cleanup', outcome: 'passed' }),
@@ -1214,7 +1257,8 @@ describe('TestRunner HTTP fixture lifecycle', () => {
     const response = await runner.run({ project: { ...project, fixtures: [fixture] }, testCase, environment, cancellationSignal: controller.signal });
 
     expect(start).not.toHaveBeenCalled();
-    expect(response.detail.status).toBe('neutral');
+    expect(response.detail.status).toBe('cancelled');
+    expect(response.detail.reason).toMatchObject({ code: 'userCancelled' });
     expect(response.detail.cancellation).toEqual(expect.objectContaining({ reason: 'userCancelled' }));
     expect(response.detail.fixtureLifecycles).toEqual([
       expect.objectContaining({ lifecycle: 'setup', outcome: 'passed' }),
@@ -1366,7 +1410,8 @@ describe('TestRunner HTTP fixture lifecycle', () => {
 
     const response = await runner.run({ project: { ...project, fixtures: [fixture] }, testCase, environment });
 
-    expect(response.detail.status).toBe('neutral');
+    expect(response.detail.status).toBe('blocked');
+    expect(response.detail.reason).toMatchObject({ code: 'fixturePreflight' });
     expect(response.detail.summary).toContain('未在当前准备请求中生成');
     expect(start).not.toHaveBeenCalled();
     expect(deterministicRunner.runDeterministicStep).not.toHaveBeenCalled();

@@ -5862,7 +5862,7 @@ describe('StudioRuntime agent observation', () => {
     );
   });
 
-  it('keeps unsupported workflow actions neutral instead of reporting a fake pass', async () => {
+  it('projects unsupported workflow actions to a blocked persisted result', async () => {
     const currentState: BrowserSessionState = {
       id: 'session-ready',
       status: 'ready',
@@ -5912,9 +5912,10 @@ describe('StudioRuntime agent observation', () => {
 
     expect(semanticAssert).not.toHaveBeenCalled();
     expect(response.agentRun.status).toBe('neutral');
-    expect(response.detail.status).toBe('neutral');
-    expect(response.detail.steps[0]?.status).toBe('neutral');
-    expect(response.detail.steps[1]?.status).toBe('neutral');
+    expect(response.detail.status).toBe('blocked');
+    expect(response.detail.reason).toMatchObject({ code: 'unsupportedAction' });
+    expect(response.detail.steps[0]?.status).toBe('blocked');
+    expect(response.detail.steps[1]?.status).toBe('skipped');
   });
 
   it('cancels a workflow during selector readiness without running later steps', async () => {
@@ -5983,18 +5984,20 @@ describe('StudioRuntime agent observation', () => {
     expect(start).not.toHaveBeenCalled();
     expect(navigate).not.toHaveBeenCalled();
     expect(response.agentRun.status).toBe('neutral');
+    expect(response.detail.status).toBe('cancelled');
+    expect(response.detail.reason).toMatchObject({ code: 'userCancelled' });
     expect(response.agentRun.cancellation).toEqual(expect.objectContaining({ source: 'user', reason: 'userCancelled' }));
     expect(response.detail.steps).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ stepId: 'step-wait', status: 'neutral' }),
-        expect.objectContaining({ stepId: 'step-click', status: 'neutral' }),
+        expect.objectContaining({ stepId: 'step-wait', status: 'cancelled' }),
+        expect.objectContaining({ stepId: 'step-click', status: 'cancelled' }),
       ]),
     );
     expect(response.agentRun.events).toContainEqual(
       expect.objectContaining({ type: 'agent:run-cancelled', status: 'neutral' }),
     );
     expect(emitRunEvent).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'complete', status: 'neutral', detail: response.detail }),
+      expect.objectContaining({ type: 'complete', status: 'cancelled', detail: response.detail }),
     );
   });
 
@@ -6078,8 +6081,8 @@ describe('StudioRuntime agent observation', () => {
     expect(response.agentRun.status).toBe('neutral');
     expect(response.detail.steps).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ stepId: 'step-plan', status: 'neutral' }),
-        expect.objectContaining({ stepId: 'step-later', status: 'neutral' }),
+        expect.objectContaining({ stepId: 'step-plan', status: 'cancelled' }),
+        expect.objectContaining({ stepId: 'step-later', status: 'cancelled' }),
       ]),
     );
   });
@@ -6359,7 +6362,7 @@ describe('StudioRuntime agent observation', () => {
     );
   });
 
-  it('keeps a deterministic step neutral without a real Playwright page and never invokes the Planner', async () => {
+  it('projects a deterministic step without a real Playwright page to blocked evidence', async () => {
     const currentState: BrowserSessionState = {
       id: 'session-stub',
       status: 'ready',
@@ -6422,8 +6425,10 @@ describe('StudioRuntime agent observation', () => {
     });
 
     expect(response.agentRun.status).toBe('neutral');
+    expect(response.detail.status).toBe('blocked');
+    expect(response.detail.reason).toMatchObject({ code: 'unsupportedAction' });
     expect(response.detail.steps).toEqual([
-      expect.objectContaining({ stepId: 'step-open-orders', status: 'neutral' }),
+      expect.objectContaining({ stepId: 'step-open-orders', status: 'blocked' }),
     ]);
     expect(navigate).not.toHaveBeenCalled();
     expect(click).not.toHaveBeenCalled();
@@ -6656,7 +6661,7 @@ describe('StudioRuntime agent observation', () => {
     expect(JSON.stringify({ agentRun: response.agentRun, detail: response.detail })).not.toContain('caller-supplied-value-must-not-persist');
   });
 
-  it('keeps an input step neutral when its credential binding cannot be resolved', async () => {
+  it('projects an unresolved credential input to blocked credential evidence', async () => {
     const project = { ...createEmptyProject(1), id: 'project-orders' };
     const currentState: BrowserSessionState = {
       id: 'session-real',
@@ -6715,8 +6720,10 @@ describe('StudioRuntime agent observation', () => {
     });
 
     expect(response.agentRun.status).toBe('neutral');
+    expect(response.detail.status).toBe('blocked');
+    expect(response.detail.reason).toMatchObject({ code: 'credentialUnavailable' });
     expect(response.detail.steps).toEqual([
-      expect.objectContaining({ stepId: 'step-fill-email', status: 'neutral' }),
+      expect.objectContaining({ stepId: 'step-fill-email', status: 'blocked' }),
     ]);
     expect(input).not.toHaveBeenCalled();
   });
@@ -6842,6 +6849,8 @@ describe('StudioRuntime agent observation', () => {
     expect(response.agentRun.status).toBe('neutral');
     expect(response.agentRun.cancellation).toEqual(expect.objectContaining({ source: 'user', reason: 'userCancelled' }));
     expect(response.detail.cancellation).toEqual(expect.objectContaining({ source: 'user', reason: 'userCancelled' }));
+    expect(response.detail.status).toBe('cancelled');
+    expect(response.detail.reason).toMatchObject({ code: 'userCancelled' });
     expect(createPlan).not.toHaveBeenCalled();
   });
 });

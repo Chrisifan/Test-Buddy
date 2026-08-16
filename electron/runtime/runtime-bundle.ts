@@ -7,6 +7,8 @@ import type {
   ProjectEnvironment,
   RecordingCapturedEvent,
   RunEventPayload,
+  RunDetail,
+  RunReason,
   RunRecordingRequest,
   RunRecordingResponse,
   RunSuiteResponse,
@@ -38,6 +40,8 @@ import { DefaultFixtureLifecycleExecutor } from './default-fixture-lifecycle-exe
 import { SuiteRunner } from './suite-runner.js';
 import { PixelVisualDiffService, type VisualDiffImageAdapter } from './visual-diff.js';
 import { StudioRuntime, type DeterministicInputBindingResolver } from '../studioRuntime.js';
+import { createStubAgentRun } from '../../shared/agentStub.js';
+import { isRunCancelled } from './run-cancellation.js';
 
 export interface RuntimeBundle {
   artifactManager: ArtifactManager;
@@ -248,6 +252,67 @@ export function createRuntimeBundle(options: RuntimeBundleOptions): RuntimeBundl
     });
   };
 
+  const executorErrorDetail = (
+    runId: string,
+    projectId: string,
+    testCaseId: string,
+    environment: Pick<ProjectEnvironment, 'id' | 'name'>,
+    title: string,
+    error: unknown,
+  ): RunDetail => {
+    const message = executorErrorMessage(error);
+    const now = new Date().toISOString();
+    const reason: RunReason = { code: 'executorError', message };
+    const detail: RunDetail = {
+      id: runId,
+      projectId,
+      testCaseId,
+      environmentId: environment.id,
+      title,
+      status: 'error',
+      startedAt: now,
+      endedAt: now,
+      duration: '00:00:00',
+      summary: message,
+      reason,
+      logs: [message],
+      steps: [{
+        id: `${runId}-executor-error`,
+        stepId: testCaseId,
+        title,
+        status: 'error',
+        message,
+      }],
+      artifacts: [],
+    };
+    emitRunEvent({ runId, title, type: 'complete', status: detail.status, duration: detail.duration, summary: detail.summary, detail });
+    return detail;
+  };
+
+  const executorErrorAgentRun = (
+    runId: string,
+    projectId: string,
+    testCaseId: string,
+    environment: Pick<ProjectEnvironment, 'id' | 'name'>,
+    title: string,
+    error: unknown,
+  ) => {
+    const message = executorErrorMessage(error);
+    const agentRun = createStubAgentRun({
+      mode: 'ai',
+      prompt: title,
+      runtimeDescription: 'RuntimeBundle executor boundary',
+      targetEnvironment: environment.name,
+      projectId,
+      environmentId: environment.id,
+      testCaseId,
+      verificationStatus: 'failed',
+      verificationSummary: message,
+      verificationFailureReason: message,
+    });
+    return { agentRun, detail: executorErrorDetail(runId, projectId, testCaseId, environment, title, error) };
+  };
+
   return {
     artifactManager,
     browserRuntime,
@@ -257,11 +322,30 @@ export function createRuntimeBundle(options: RuntimeBundleOptions): RuntimeBundl
     ensureReady: () => artifactManager.ensureReady(),
     runTestCase: async (request) => {
       const runId = request.runId ?? `run-${Date.now()}`;
-      return withActiveRun(runId, (cancellationSignal) => executeTestCase(request, runId, cancellationSignal));
+      try {
+        return await withActiveRun(runId, (cancellationSignal) => executeTestCase(request, runId, cancellationSignal));
+      } catch (error) {
+        if (isRunCancelled(error)) {
+          throw error;
+        }
+        return {
+          runId,
+          title: request.testCase.name,
+          detail: executorErrorDetail(
+            runId,
+            request.projectSnapshot.project.id,
+            request.testCase.id,
+            request.environment,
+            request.testCase.name,
+            error,
+          ),
+        };
+      }
     },
     runSuite: async (request) => {
       const runId = request.runId ?? `suite-run-${Date.now()}`;
-      return withActiveRun(runId, async (cancellationSignal) => {
+      try {
+        return await withActiveRun(runId, async (cancellationSignal) => {
         const { suite } = request;
         const caseDetails: RunTestCaseResponse['detail'][] = [];
         const suiteResult = await new SuiteRunner({
@@ -281,8 +365,11 @@ export function createRuntimeBundle(options: RuntimeBundleOptions): RuntimeBundl
             }, `${runId}-${testCase.id}-attempt-${attempt}`, cancellationSignal);
             caseDetails.push(response.detail);
             return {
-              status: response.detail.status === 'running' ? 'neutral' : response.detail.status,
+              status: response.detail.status === 'running' ? 'error' : response.detail.status,
               summary: response.detail.summary,
+              ...(response.detail.status === 'running'
+                ? { reason: { code: 'executorError' as const, message: 'Case executor returned a running result.' } }
+                : response.detail.reason ? { reason: response.detail.reason } : {}),
               runId: response.runId,
             };
           },
@@ -295,19 +382,79 @@ export function createRuntimeBundle(options: RuntimeBundleOptions): RuntimeBundl
             caseDetails,
           },
         };
-      }, request.cancellationSignal);
+        }, request.cancellationSignal);
+      } catch (error) {
+        if (isRunCancelled(error)) {
+          throw error;
+        }
+        const message = executorErrorMessage(error);
+        const now = new Date().toISOString();
+        return {
+          runId,
+          title: request.suite.name,
+          detail: {
+            suite: {
+              suiteId: request.suite.id,
+              suiteVersion: request.suite.version,
+              environmentId: request.suite.environmentId,
+              status: 'error',
+              reason: { code: 'executorError', message },
+              startedAt: now,
+              endedAt: now,
+              effectiveConcurrency: 1,
+              results: [],
+              issues: [message],
+            },
+            caseDetails: [],
+          },
+        };
+      }
     },
     runRecording: async (request) => {
       const runId = request.runId ?? `agent-run-recording-${Date.now()}`;
-      return withActiveRun(runId, (cancellationSignal) =>
-        recordingRunner.run({ ...request, runId, cancellationSignal }),
-      );
+      try {
+        return await withActiveRun(runId, (cancellationSignal) =>
+          recordingRunner.run({ ...request, runId, cancellationSignal }),
+        );
+      } catch (error) {
+        if (isRunCancelled(error)) {
+          throw error;
+        }
+        const response = executorErrorAgentRun(
+          runId,
+          request.project.id,
+          request.testCaseId ?? request.recording.id,
+          request.environment,
+          `${request.recording.name} 回放`,
+          error,
+        );
+        return { runId, title: `${request.recording.name} 回放`, ...response };
+      }
     },
     runWorkflow: async (request) => {
       const runId = request.runId ?? `agent-run-workflow-${Date.now()}`;
-      return withActiveRun(runId, (cancellationSignal) =>
-        studioRuntime.runWorkflow({ ...request, runId, cancellationSignal }),
-      );
+      try {
+        return await withActiveRun(runId, (cancellationSignal) =>
+          studioRuntime.runWorkflow({ ...request, runId, cancellationSignal }),
+        );
+      } catch (error) {
+        if (isRunCancelled(error)) {
+          throw error;
+        }
+        const environment = request.environment ?? {
+          id: request.targetEnvironment,
+          name: request.targetEnvironment,
+        };
+        const response = executorErrorAgentRun(
+          runId,
+          request.project?.id ?? '',
+          request.workflow.id,
+          environment,
+          request.workflow.name,
+          error,
+        );
+        return { runId, title: request.workflow.name, ...response };
+      }
     },
     cancelRun: (runId) => {
       const controller = activeRuns.get(runId);
@@ -332,4 +479,10 @@ function resolveRuntimeProfile(
     locale: environment.locale,
     headless: environment.headless,
   };
+}
+
+function executorErrorMessage(error: unknown): string {
+  return error instanceof Error && error.message
+    ? `Runtime executor failed: ${error.message}`
+    : 'Runtime executor failed before producing a result.';
 }

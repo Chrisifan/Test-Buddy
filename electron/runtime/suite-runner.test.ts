@@ -114,7 +114,7 @@ describe('SuiteRunner', () => {
     expect(failFastCalls).toHaveLength(1);
     expect(stopped.results).toEqual(expect.arrayContaining([
       expect.objectContaining({ status: 'failed', attempts: 1 }),
-      expect.objectContaining({ status: 'neutral', attempts: 0 }),
+      expect.objectContaining({ status: 'skipped', attempts: 0, reason: expect.objectContaining({ code: 'dependencyFailed' }) }),
     ]));
   });
 
@@ -127,9 +127,10 @@ describe('SuiteRunner', () => {
 
     const result = await runner.run(project, suite, controller.signal);
 
-    expect(result.status).toBe('neutral');
+    expect(result.status).toBe('cancelled');
+    expect(result.reason).toMatchObject({ code: 'userCancelled' });
     expect(result.results).toEqual(expect.arrayContaining([
-      expect.objectContaining({ status: 'neutral', attempts: 0 }),
+      expect.objectContaining({ status: 'cancelled', attempts: 0, reason: expect.objectContaining({ code: 'userCancelled' }) }),
     ]));
   });
 
@@ -154,12 +155,86 @@ describe('SuiteRunner', () => {
     finish.resolve();
     const result = await running;
 
-    expect(result.status).toBe('neutral');
+    expect(result.status).toBe('cancelled');
+    expect(result.reason).toMatchObject({ code: 'userCancelled' });
     expect(calls).toHaveLength(1);
     expect(result.results).toEqual(expect.arrayContaining([
-      expect.objectContaining({ testCaseId: project.testCases[0]!.id, status: 'neutral', runId: `run-${project.testCases[0]!.id}` }),
-      expect.objectContaining({ testCaseId: project.testCases[1]!.id, status: 'neutral', attempts: 0 }),
+      expect.objectContaining({ testCaseId: project.testCases[0]!.id, status: 'cancelled', runId: `run-${project.testCases[0]!.id}`, reason: expect.objectContaining({ code: 'userCancelled' }) }),
+      expect.objectContaining({ testCaseId: project.testCases[1]!.id, status: 'cancelled', attempts: 0, reason: expect.objectContaining({ code: 'userCancelled' }) }),
     ]));
+  });
+
+  it('adds action-failed evidence to an external failed Case result without a reason', async () => {
+    const { project, suite } = createSuiteProject({ concurrency: 1 });
+    const runner = new SuiteRunner({
+      execute: async () => ({ status: 'failed', summary: 'external executor failed' }),
+    });
+
+    const result = await runner.run(project, suite);
+
+    expect(result.results[0]).toMatchObject({
+      status: 'failed',
+      reason: { code: 'actionFailed' },
+    });
+  });
+
+  it('preserves an external cancelled Case result as cancelled evidence without a parent signal', async () => {
+    const { project, suite } = createSuiteProject({ concurrency: 1 });
+    const runner = new SuiteRunner({
+      execute: async () => ({ status: 'cancelled', summary: 'external executor cancelled' }),
+    });
+
+    const result = await runner.run(project, suite);
+
+    expect(result.results[0]).toMatchObject({
+      status: 'cancelled',
+      reason: { code: 'userCancelled' },
+    });
+    expect(result).toMatchObject({
+      status: 'cancelled',
+      reason: { code: 'userCancelled' },
+    });
+  });
+
+  it('retains an external cancellation when a dependent Case is skipped', async () => {
+    const { project, suite } = createSuiteProject({ concurrency: 1 });
+    const [checkout, invoice] = project.testCases;
+    project.testCases = [checkout!, invoice!];
+    suite.caseReferences = [
+      { id: checkout!.id, version: checkout!.version!, dependsOn: [] },
+      { id: invoice!.id, version: invoice!.version!, dependsOn: [{ id: checkout!.id, version: checkout!.version! }] },
+    ];
+    const calls: string[] = [];
+    const runner = new SuiteRunner({
+      execute: async ({ testCase }) => {
+        calls.push(testCase.id);
+        return { status: 'cancelled', summary: 'external executor cancelled' };
+      },
+    });
+
+    const result = await runner.run(project, suite);
+
+    expect(calls).toEqual([checkout!.id]);
+    expect(result.results).toMatchObject([
+      { testCaseId: checkout!.id, status: 'cancelled', reason: { code: 'userCancelled' } },
+      { testCaseId: invoice!.id, status: 'skipped', reason: { code: 'dependencyFailed' } },
+    ]);
+    expect(result).toMatchObject({ status: 'cancelled', reason: { code: 'userCancelled' } });
+  });
+
+  it.each([
+    ['blocked', 'unsupportedAction'],
+    ['skipped', 'dependencyFailed'],
+    ['error', 'executorError'],
+  ] as const)('adds %s evidence to an external %s Case result without a reason', async (status, reasonCode) => {
+    const { project, suite } = createSuiteProject({ concurrency: 1 });
+    const runner = new SuiteRunner({
+      execute: async () => ({ status, summary: `external ${status}` }),
+    });
+
+    const result = await runner.run(project, suite);
+
+    expect(result.results[0]).toMatchObject({ status, reason: { code: reasonCode } });
   });
 });
 

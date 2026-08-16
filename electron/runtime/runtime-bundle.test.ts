@@ -70,6 +70,38 @@ describe('RuntimeBundle cancellation', () => {
 });
 
 describe('RuntimeBundle test case routing', () => {
+  it('converts an unclassified Case executor exception into persisted executor-error evidence', async () => {
+    const emitRunEvent = vi.fn();
+    const bundle = createRuntimeBundle({
+      rootDir: '/tmp/testbuddy-runtime-bundle-executor-error',
+      visualDiffImageAdapter: { read: vi.fn(), write: vi.fn() },
+      emitRunEvent,
+    });
+    const project = createEmptyProject(1);
+    const environment = project.environments[0]!;
+    const testCase = {
+      ...createEmptyTestCase(1, project.groups[0]!.id, environment.id),
+      id: 'case-executor-error',
+      steps: [{ id: 'step-executor-error', type: 'manual' as const, title: 'Manual boundary', body: 'manual' }],
+    };
+    vi.spyOn(bundle.testRunner, 'run').mockRejectedValue(new Error('browser process exited'));
+
+    const response = await bundle.runTestCase({
+      runId: 'run-executor-error',
+      projectSnapshot: projectSnapshot({ ...project, testCases: [testCase] }),
+      environment,
+      testCase,
+    });
+
+    expect(response.detail).toMatchObject({
+      status: 'error',
+      reason: { code: 'executorError' },
+      steps: expect.arrayContaining([expect.objectContaining({ status: 'error' })]),
+    });
+    expect(emitRunEvent).toHaveBeenCalledWith(expect.objectContaining({ type: 'complete', status: 'error', detail: response.detail }));
+    await bundle.close();
+  });
+
   it('runs a legacy pure AI case through StudioRuntime workflow', async () => {
     const bundle = createRuntimeBundle({
       rootDir: '/tmp/testbuddy-runtime-bundle-legacy-ai',
@@ -487,9 +519,9 @@ describe('RuntimeBundle desktop Suite adapter', () => {
     });
 
     expect(caseRun).not.toHaveBeenCalled();
-    expect(response.detail.suite).toMatchObject({ status: 'neutral', effectiveConcurrency: 1 });
+    expect(response.detail.suite).toMatchObject({ status: 'cancelled', reason: { code: 'userCancelled' }, effectiveConcurrency: 1 });
     expect(response.detail.suite.results).toEqual([
-      expect.objectContaining({ testCaseId: testCase.id, status: 'neutral', attempts: 0 }),
+      expect.objectContaining({ testCaseId: testCase.id, status: 'cancelled', attempts: 0, reason: expect.objectContaining({ code: 'userCancelled' }) }),
     ]);
     expect(bundle.cancelRun('suite-cancelled-run')).toBe(false);
     await bundle.close();

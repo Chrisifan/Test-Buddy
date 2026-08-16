@@ -271,6 +271,7 @@ export interface SuiteCaseRunResult {
   testCaseVersion: number;
   status: Exclude<RunStatus, 'running'>;
   summary: string;
+  reason?: RunReason;
   attempts: number;
   flaky: boolean;
   runId?: string;
@@ -281,6 +282,7 @@ export interface SuiteRunResult {
   suiteVersion: number;
   environmentId: string;
   status: Exclude<RunStatus, 'running'>;
+  reason?: RunReason;
   startedAt: string;
   endedAt: string;
   effectiveConcurrency: number;

@@ -2,6 +2,8 @@ import type {
   RunDetail,
   RunArtifact,
   RunEventPayload,
+  RunReason,
+  RunStatus,
   RunStepLog,
   FixtureAsset,
   FixtureHttpJsonValue,
@@ -219,6 +221,7 @@ export class TestRunner {
           logs,
           `浏览器会话未启动：${session.message}`,
           fixtureEvidence,
+          isCredentialUnavailable(session.message) ? 'credentialUnavailable' : 'fixturePreflight',
         );
       }
       const browserArtifact = await awaitWithRunCancellation(
@@ -248,16 +251,19 @@ export class TestRunner {
     const agentRuns: AgentRunResult[] = [];
     const agentStepRuns: Array<AgentRunResult | undefined> = Array.from({ length: request.testCase.steps.length });
 
-    let hasFailure = false;
-    let hasNeutral = false;
     let failureReason = '';
     let cancellation: RunDetail['cancellation'];
+    const terminal: { status: Exclude<RunStatus, 'running'>; reason?: RunReason } = { status: 'passed' };
+    const stop = (status: Exclude<RunStatus, 'running'>, reason: RunReason) => {
+      terminal.status = status;
+      terminal.reason = reason;
+    };
 
     for (const [index, step] of request.testCase.steps.entries()) {
       if (request.cancellationSignal?.aborted) {
         cancellation = createUserCancellation();
-        hasNeutral = true;
-        appendUnexecutedSteps(steps, request, index, runId, artifact.path, cancellation.message);
+        stop('cancelled', runReason('userCancelled', cancellation.message));
+        appendUnexecutedSteps(steps, request, index, runId, artifact.path, cancellation.message, 'cancelled');
         break;
       }
       const replayStep = step.type === 'recordingReplay';
@@ -265,13 +271,13 @@ export class TestRunner {
       if (replayStep) {
         const recording = findRecording(request, step.recordingId);
         if (!recording) {
-          hasFailure = true;
           failureReason = `未找到录制资产：${step.recordingId ?? step.title}`;
+          stop('blocked', runReason('unsupportedAction', failureReason));
           steps.push({
             id: `run-step-${runId}-${index}`,
             stepId: step.id,
             title: step.title,
-            status: 'failed',
+            status: 'blocked',
             message: failureReason,
             screenshotPath: artifact.path,
           });
@@ -304,28 +310,33 @@ export class TestRunner {
           });
           artifacts.push(...replay.detail.artifacts);
 
+          const replayOutcome = terminalOutcome(replay.detail.status, replay.detail.reason, replay.detail.cancellation, step);
           const screenshotPath = replay.detail.steps.at(-1)?.screenshotPath ?? artifact.path;
           const message = `步骤 ${index + 1} ${replay.detail.summary}`;
           steps.push({
             id: `run-step-${runId}-${index}`,
             stepId: step.id,
             title: step.title,
-            status: replay.detail.status,
+            status: replayOutcome.status,
             message,
             screenshotPath,
           });
 
-          if (replay.detail.status !== 'passed') {
+          if (replayOutcome.status !== 'passed') {
             if (replay.detail.cancellation) {
               cancellation = replay.detail.cancellation;
             }
-            if (replay.detail.status === 'failed') {
-              hasFailure = true;
-              failureReason = replay.detail.failureReason ?? replay.detail.summary;
-            } else {
-              hasNeutral = true;
-            }
-            appendUnexecutedSteps(steps, request, index + 1, runId, screenshotPath, message);
+            failureReason = replay.detail.failureReason ?? replay.detail.summary;
+            stop(replayOutcome.status, replayOutcome.reason);
+            appendUnexecutedSteps(
+              steps,
+              request,
+              index + 1,
+              runId,
+              screenshotPath,
+              message,
+              replayOutcome.status === 'cancelled' ? 'cancelled' : 'skipped',
+            );
             break;
           }
           continue;
@@ -347,16 +358,16 @@ export class TestRunner {
             throw error;
           }
           cancellation = createUserCancellation();
-          hasNeutral = true;
+          stop('cancelled', runReason('userCancelled', cancellation.message));
           steps.push({
             id: `run-step-${runId}-${index}`,
             stepId: step.id,
             title: step.title,
-            status: 'neutral',
+            status: 'cancelled',
             message: cancellation.message,
             screenshotPath: artifact.path,
           });
-          appendUnexecutedSteps(steps, request, index + 1, runId, artifact.path, cancellation.message);
+          appendUnexecutedSteps(steps, request, index + 1, runId, artifact.path, cancellation.message, 'cancelled');
           break;
         }
         replayResults.forEach((result, replayIndex) => {
@@ -375,8 +386,8 @@ export class TestRunner {
 
         const failed = replayResults.find((result) => result.status === 'failed');
         if (failed) {
-          hasFailure = true;
           failureReason = failed.message;
+          stop('failed', runReason('actionFailed', failureReason));
         }
 
         const screenshotPath = replayResults.at(-1)?.screenshotPath ?? artifact.path;
@@ -405,8 +416,8 @@ export class TestRunner {
       const deterministicStep = deterministicAction ?? (deterministicAssertion ? toDeterministicAssertionPlanStep(step) : undefined);
       if (deterministicStep) {
         if (!this.deterministicRunner) {
-          hasNeutral = true;
           const message = `步骤 ${index + 1} 已确认的结构化${deterministicAssertion ? '断言' : '动作'}等待确定性运行器接入。`;
+          stop('blocked', runReason('unsupportedAction', message));
           const line = `[${timeLabel(new Date())}] ${message}`;
           logs.push(line);
           this.emitRunEvent({ runId, title, type: 'log', line });
@@ -414,7 +425,7 @@ export class TestRunner {
             id: `run-step-${runId}-${index}`,
             stepId: step.id,
             title: step.title,
-            status: 'neutral',
+            status: 'blocked',
             message,
             screenshotPath: artifact.path,
           });
@@ -455,6 +466,12 @@ export class TestRunner {
         });
         artifacts.push(...deterministic.detail.artifacts);
 
+        const deterministicOutcome = terminalOutcome(
+          deterministic.detail.status,
+          deterministic.detail.reason,
+          deterministic.detail.cancellation,
+          step,
+        );
         const deterministicRunStep = deterministic.detail.steps[0];
         const screenshotPath = deterministicRunStep?.screenshotPath ?? artifact.path;
         const message = `步骤 ${index + 1} ${deterministicRunStep?.message ?? deterministic.detail.summary}`;
@@ -462,29 +479,33 @@ export class TestRunner {
           id: `run-step-${runId}-${index}`,
           stepId: step.id,
           title: step.title,
-          status: deterministic.detail.status,
+          status: deterministicOutcome.status,
           message,
           screenshotPath,
         });
-        if (deterministic.detail.status !== 'passed') {
+        if (deterministicOutcome.status !== 'passed') {
           if (deterministic.detail.cancellation) {
             cancellation = deterministic.detail.cancellation;
           }
-          if (deterministic.detail.status === 'failed') {
-            hasFailure = true;
-            failureReason = deterministic.detail.failureReason ?? deterministic.detail.summary;
-          } else {
-            hasNeutral = true;
-          }
-          appendUnexecutedSteps(steps, request, index + 1, runId, screenshotPath, message);
+          failureReason = deterministic.detail.failureReason ?? deterministic.detail.summary;
+          stop(deterministicOutcome.status, deterministicOutcome.reason);
+          appendUnexecutedSteps(
+            steps,
+            request,
+            index + 1,
+            runId,
+            screenshotPath,
+            message,
+            deterministicOutcome.status === 'cancelled' ? 'cancelled' : 'skipped',
+          );
           break;
         }
         continue;
       }
 
       if ((step.type === 'ai' || step.type === 'aiAssert') && step.execution?.reviewStatus === 'confirmed') {
-        hasNeutral = true;
         const message = `步骤 ${index + 1} 已确认的结构化${step.type === 'aiAssert' ? '断言' : '动作'}不在当前确定性执行范围内，未调用模型。`;
+        stop('blocked', runReason('unsupportedAction', message));
         const line = `[${timeLabel(new Date())}] ${message}`;
         logs.push(line);
         this.emitRunEvent({ runId, title, type: 'log', line });
@@ -492,7 +513,7 @@ export class TestRunner {
           id: `run-step-${runId}-${index}`,
           stepId: step.id,
           title: step.title,
-          status: 'neutral',
+          status: 'blocked',
           message,
           screenshotPath: artifact.path,
         });
@@ -541,6 +562,7 @@ export class TestRunner {
         });
         artifacts.push(...workflow.detail.artifacts);
 
+        const workflowOutcome = terminalOutcome(workflow.detail.status, workflow.detail.reason, workflow.detail.cancellation, step);
         const workflowStep = workflow.detail.steps[0];
         const screenshotPath = workflowStep?.screenshotPath ?? artifact.path;
         const message = `步骤 ${index + 1} ${workflowStep?.message ?? workflow.detail.summary}`;
@@ -548,33 +570,37 @@ export class TestRunner {
           id: `run-step-${runId}-${index}`,
           stepId: step.id,
           title: step.title,
-          status: workflow.detail.status,
+          status: workflowOutcome.status,
           message,
           screenshotPath,
         });
 
-        if (workflow.detail.status !== 'passed') {
+        if (workflowOutcome.status !== 'passed') {
           if (workflow.detail.cancellation) {
             cancellation = workflow.detail.cancellation;
           }
-          if (workflow.detail.status === 'failed') {
-            hasFailure = true;
-            failureReason = workflow.detail.failureReason ?? workflow.detail.summary;
-          } else {
-            hasNeutral = true;
-          }
-          appendUnexecutedSteps(steps, request, index + 1, runId, screenshotPath, message);
+          failureReason = workflow.detail.failureReason ?? workflow.detail.summary;
+          stop(workflowOutcome.status, workflowOutcome.reason);
+          appendUnexecutedSteps(
+            steps,
+            request,
+            index + 1,
+            runId,
+            screenshotPath,
+            message,
+            workflowOutcome.status === 'cancelled' ? 'cancelled' : 'skipped',
+          );
           break;
         }
         continue;
       }
 
       const screenshotPath = artifact.path;
-      hasNeutral = true;
       const message =
         step.type === 'manual'
           ? `步骤 ${index + 1} 需要人工检查：${step.body}`
           : `步骤 ${index + 1} 等待 Agent Runtime 执行：${step.body}`;
+      stop('blocked', runReason('unsupportedAction', message));
 
       const line = `[${timeLabel(new Date())}] ${message}`;
       logs.push(line);
@@ -583,7 +609,7 @@ export class TestRunner {
         id: `run-step-${runId}-${index}`,
         stepId: step.id,
         title: step.title,
-        status: 'neutral',
+        status: 'blocked',
         message,
         screenshotPath,
       });
@@ -609,24 +635,29 @@ export class TestRunner {
       ...(documentId ? { documentId } : {}),
       environmentId: request.environment.id,
       title,
-      status: cancellation ? 'neutral' : hasFailure ? 'failed' : hasNeutral ? 'neutral' : 'passed',
+      status: terminal.status,
       startedAt: startedAt.toISOString(),
       endedAt: endedAt.toISOString(),
       duration: `00:00:${String(Math.max(1, request.testCase.steps.length * 2)).padStart(2, '0')}`,
-      summary: cancellation
-        ? cancellation.message
-        : hasFailure
-        ? `执行失败：${failureReason}`
-        : hasNeutral
-          ? `已完成录制回放并保留 ${request.testCase.steps.length} 个步骤，其中部分步骤等待 Agent Runtime 或人工检查。`
-          : `已完成 ${request.testCase.steps.length} 个步骤，生成 ${artifacts.length} 份截图/快照与步骤日志。`,
+      summary: terminal.status === 'cancelled'
+        ? cancellation?.message ?? terminal.reason?.message ?? '用户已取消运行。'
+        : terminal.status === 'failed'
+          ? `执行失败：${failureReason || terminal.reason?.message || '步骤执行失败。'}`
+          : terminal.status === 'blocked'
+            ? terminal.reason?.message ?? '当前步骤不具备可执行条件。'
+            : terminal.status === 'error'
+              ? terminal.reason?.message ?? '执行器发生未分类异常。'
+              : terminal.status === 'skipped'
+                ? terminal.reason?.message ?? '前序步骤未通过。'
+                : `已完成 ${request.testCase.steps.length} 个步骤，生成 ${artifacts.length} 份截图/快照与步骤日志。`,
       logs,
       steps,
       artifacts,
       ...(fixtureEvidence.length ? { fixtureLifecycles: fixtureEvidence } : {}),
       ...(agentRun ? { agentRun } : {}),
       ...(agentRuns.length ? { agentRuns } : {}),
-      ...(hasFailure && !cancellation ? { failureReason } : {}),
+      ...(terminal.reason ? { reason: terminal.reason } : {}),
+      ...(terminal.status === 'failed' ? { failureReason } : {}),
       ...(cancellation ? { cancellation } : {}),
     };
 
@@ -653,41 +684,13 @@ export class TestRunner {
     fixtureLifecycles: FixtureLifecycleEvidence[] = [],
   ): RunTestCaseResponse {
     const cancellation = createUserCancellation();
-    const documentId = getTestCasePrdPath(request.testCase)?.documentId;
-    const detail: RunDetail = {
-      id: runId,
-      projectId: request.project.id,
-      testCaseId: request.testCase.id,
-      ...(documentId ? { documentId } : {}),
-      environmentId: request.environment.id,
-      title,
-      status: 'neutral',
-      startedAt: startedAt.toISOString(),
-      endedAt: cancellation.cancelledAt,
-      duration: '00:00:00',
-      summary: cancellation.message,
-      logs: [...logs, `[${timeLabel(new Date())}] ${cancellation.message}`],
-      steps: request.testCase.steps.map((step, index) => ({
-        id: `run-step-${runId}-${index}`,
-        stepId: step.id,
-        title: step.title,
-        status: 'neutral',
-        message: cancellation.message,
-      })),
+    return this.createTerminalResponse(request, runId, title, startedAt, logs, {
+      status: 'cancelled',
+      reason: runReason('userCancelled', cancellation.message),
       artifacts,
-      ...(fixtureLifecycles.length ? { fixtureLifecycles } : {}),
+      fixtureLifecycles,
       cancellation,
-    };
-    this.emitRunEvent({
-      runId,
-      title,
-      type: 'complete',
-      status: detail.status,
-      duration: detail.duration,
-      summary: detail.summary,
-      detail,
     });
-    return { runId, title, detail };
   }
 
   private createPreflightBlockedResponse(
@@ -696,10 +699,32 @@ export class TestRunner {
     title: string,
     startedAt: Date,
     logs: string[],
-    reason: string,
+    message: string,
     fixtureLifecycles: FixtureLifecycleEvidence[] = [],
+    reasonCode: RunReason['code'] = 'fixturePreflight',
   ): RunTestCaseResponse {
-    const message = reason;
+    return this.createTerminalResponse(request, runId, title, startedAt, logs, {
+      status: 'blocked',
+      reason: runReason(reasonCode, message),
+      fixtureLifecycles,
+    });
+  }
+
+  private createTerminalResponse(
+    request: RunTestCaseRequest,
+    runId: string,
+    title: string,
+    startedAt: Date,
+    logs: string[],
+    outcome: {
+      status: Exclude<RunStatus, 'running'>;
+      reason: RunReason;
+      artifacts?: RunArtifact[];
+      fixtureLifecycles?: FixtureLifecycleEvidence[];
+      cancellation?: RunDetail['cancellation'];
+    },
+  ): RunTestCaseResponse {
+    const message = outcome.reason.message;
     const documentId = getTestCasePrdPath(request.testCase)?.documentId;
     const detail: RunDetail = {
       id: runId,
@@ -708,9 +733,9 @@ export class TestRunner {
       ...(documentId ? { documentId } : {}),
       environmentId: request.environment.id,
       title,
-      status: 'neutral',
+      status: outcome.status,
       startedAt: startedAt.toISOString(),
-      endedAt: new Date().toISOString(),
+      endedAt: outcome.cancellation?.cancelledAt ?? new Date().toISOString(),
       duration: '00:00:00',
       summary: message,
       logs: [...logs, `[${timeLabel(new Date())}] ${message}`],
@@ -718,11 +743,13 @@ export class TestRunner {
         id: `run-step-${runId}-${index}`,
         stepId: step.id,
         title: step.title,
-        status: 'neutral',
+        status: outcome.status,
         message,
       })),
-      artifacts: [],
-      ...(fixtureLifecycles.length ? { fixtureLifecycles } : {}),
+      artifacts: outcome.artifacts ?? [],
+      reason: outcome.reason,
+      ...(outcome.fixtureLifecycles?.length ? { fixtureLifecycles: outcome.fixtureLifecycles } : {}),
+      ...(outcome.cancellation ? { cancellation: outcome.cancellation } : {}),
     };
     this.emitRunEvent({
       runId,
@@ -807,13 +834,14 @@ function appendUnexecutedSteps(
   runId: string,
   screenshotPath: string,
   reason: string,
+  status: Extract<Exclude<RunStatus, 'running'>, 'skipped' | 'cancelled'> = 'skipped',
 ): void {
   request.testCase.steps.slice(firstIndex).forEach((step, offset) => {
     steps.push({
       id: `run-step-${runId}-${firstIndex + offset}`,
       stepId: step.id,
       title: step.title,
-      status: 'neutral',
+      status,
       message: `前序步骤未形成可继续执行的结论：${reason}`,
       screenshotPath,
     });
@@ -872,6 +900,48 @@ function isAgentRunResult(value: unknown): value is AgentRunResult {
       'plan' in value &&
       'events' in value,
   );
+}
+
+type TerminalOutcome =
+  | { status: 'passed' }
+  | { status: Exclude<RunStatus, 'running' | 'passed'>; reason: RunReason };
+
+function terminalOutcome(
+  status: RunStatus,
+  existingReason: RunReason | undefined,
+  cancellation: RunDetail['cancellation'],
+  step: TestStepDraft,
+): TerminalOutcome {
+  if (cancellation) {
+    return { status: 'cancelled', reason: runReason('userCancelled', cancellation.message) };
+  }
+  if (status === 'passed') {
+    return { status };
+  }
+  if (status === 'failed') {
+    return {
+      status,
+      reason: existingReason ?? runReason(step.type === 'aiAssert' ? 'assertionFailed' : 'actionFailed', '步骤执行失败。'),
+    };
+  }
+  if (status === 'blocked') {
+    return { status, reason: existingReason ?? runReason('unsupportedAction', '步骤当前不可执行。') };
+  }
+  if (status === 'skipped') {
+    return { status, reason: existingReason ?? runReason('dependencyFailed', '前序步骤未通过。') };
+  }
+  if (status === 'cancelled') {
+    return { status, reason: existingReason ?? runReason('userCancelled', '用户已取消运行。') };
+  }
+  return { status: 'error', reason: existingReason ?? runReason('executorError', '执行器未产生终态结果。') };
+}
+
+function runReason(code: RunReason['code'], message: string): RunReason {
+  return { code, message };
+}
+
+function isCredentialUnavailable(message: string): boolean {
+  return /认证|凭据|credential|storage state/i.test(message);
 }
 
 function toDeterministicAssertionPlanStep(step: TestStepDraft): AgentPlanStepDraft {

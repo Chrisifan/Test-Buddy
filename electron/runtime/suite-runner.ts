@@ -1,6 +1,8 @@
 import type {
   ProjectDraft,
   ProjectEnvironment,
+  RunReason,
+  RunStatus,
   RunTone,
   SuiteAsset,
   SuiteCaseReference,
@@ -19,8 +21,10 @@ export interface SuiteCaseExecutionRequest {
 }
 
 export interface SuiteCaseExecutionResult {
+  /** Executor lifecycle state; SuiteRunner projects it into a terminal result. */
   status: Exclude<RunTone, 'running'>;
   summary: string;
+  reason?: RunReason;
   runId?: string;
 }
 
@@ -69,7 +73,7 @@ export class SuiteRunner {
     const issues = resolution.issues.map((issue) => issue.message);
     const effectiveConcurrency = Math.min(clampConcurrency(suite.execution.concurrency), this.maxConcurrency);
     if (!resolution.environment || resolution.issues.length) {
-      return this.createResult(suite, startedAt, effectiveConcurrency, [], issues);
+      return this.createResult(suite, startedAt, effectiveConcurrency, [], issues, Boolean(cancellationSignal?.aborted));
     }
 
     const pending = resolution.orderedCases.map(({ reference, testCase }) => ({
@@ -85,7 +89,7 @@ export class SuiteRunner {
     while (pending.length || running.size) {
       if (cancellationSignal?.aborted) {
         pending.splice(0).forEach((candidate) => {
-          results.set(referenceKey(candidate.reference), skippedResult(candidate, 'Suite run was cancelled before this Case started.'));
+          results.set(referenceKey(candidate.reference), cancelledResult(candidate, 'Suite run was cancelled before this Case started.'));
         });
       } else if (failFastTriggered) {
         pending.splice(0).forEach((candidate) => {
@@ -112,11 +116,12 @@ export class SuiteRunner {
               }
             })
             .catch((error) => {
-              results.set(key, {
-                ...skippedResult(candidate, 'Suite Case execution failed before producing a result.'),
-                status: cancellationSignal?.aborted ? 'neutral' : 'failed',
-                summary: cancellationSignal?.aborted ? 'Suite run was cancelled.' : errorMessage(error),
-              });
+              results.set(
+                key,
+                cancellationSignal?.aborted
+                  ? cancelledResult(candidate, 'Suite run was cancelled.')
+                  : executorErrorResult(candidate, errorMessage(error)),
+              );
               if (suite.execution.failurePolicy === 'failFast') {
                 failFastTriggered = true;
               }
@@ -136,7 +141,7 @@ export class SuiteRunner {
 
       if (pending.length) {
         // No in-flight work and no runnable member means a dependency is not
-        // satisfiable. This remains neutral and never invokes the executor.
+        // satisfiable. It never invokes the executor.
         pending.splice(0).forEach((candidate) => {
           results.set(referenceKey(candidate.reference), skippedResult(candidate, 'Suite dependency did not pass.'));
         });
@@ -146,7 +151,7 @@ export class SuiteRunner {
     const orderedResults = resolution.orderedCases
       .map(({ reference }) => results.get(referenceKey(reference)))
       .filter((result): result is SuiteCaseRunResult => Boolean(result));
-    return this.createResult(suite, startedAt, effectiveConcurrency, orderedResults, issues);
+    return this.createResult(suite, startedAt, effectiveConcurrency, orderedResults, issues, Boolean(cancellationSignal?.aborted));
   }
 
   private markBlockedDependencies(
@@ -180,22 +185,22 @@ export class SuiteRunner {
   ): Promise<SuiteCaseRunResult> {
     let attempts = 0;
     let hadFailure = false;
-    let lastResult: SuiteCaseExecutionResult | undefined;
+    let lastResult: TerminalSuiteCaseExecutionResult | undefined;
     while (attempts <= suite.execution.retryLimit) {
       if (cancellationSignal?.aborted) {
-        return skippedResult(candidate, 'Suite run was cancelled.');
+        return cancelledResult(candidate, 'Suite run was cancelled.');
       }
       attempts += 1;
-      lastResult = await this.executor.execute({
+      lastResult = terminalSuiteCaseResult(await this.executor.execute({
         suite,
         testCase: candidate.testCase,
         environment,
         attempt: attempts,
         cancellationSignal,
-      });
+      }));
       if (cancellationSignal?.aborted) {
         return {
-          ...skippedResult(candidate, 'Suite run was cancelled.'),
+          ...cancelledResult(candidate, 'Suite run was cancelled.'),
           ...(lastResult.runId ? { runId: lastResult.runId } : {}),
         };
       }
@@ -205,6 +210,7 @@ export class SuiteRunner {
           testCaseVersion: candidate.reference.version,
           status: 'passed',
           summary: lastResult.summary,
+          ...(lastResult.reason ? { reason: lastResult.reason } : {}),
           attempts,
           flaky: hadFailure,
           ...(lastResult.runId ? { runId: lastResult.runId } : {}),
@@ -215,12 +221,17 @@ export class SuiteRunner {
       }
       hadFailure = true;
     }
-    const result = lastResult ?? { status: 'neutral' as const, summary: 'Suite Case did not run.' };
+    const result = lastResult ?? {
+      status: 'skipped' as const,
+      summary: 'Suite Case did not run.',
+      reason: reason('dependencyFailed', 'Suite Case did not run.'),
+    };
     return {
       testCaseId: candidate.testCase.id,
       testCaseVersion: candidate.reference.version,
       status: result.status,
       summary: result.summary,
+      ...(result.reason ? { reason: result.reason } : {}),
       attempts,
       flaky: false,
       ...(result.runId ? { runId: result.runId } : {}),
@@ -233,18 +244,13 @@ export class SuiteRunner {
     effectiveConcurrency: number,
     results: SuiteCaseRunResult[],
     issues: string[],
+    cancelled: boolean,
   ): SuiteRunResult {
     return {
       suiteId: suite.id,
       suiteVersion: suite.version,
       environmentId: suite.environmentId,
-      status: issues.length
-        ? 'neutral'
-        : results.some((result) => result.status === 'failed')
-          ? 'failed'
-          : results.some((result) => result.status === 'neutral')
-            ? 'neutral'
-            : 'passed',
+      ...(suiteResultOutcome(results, issues, cancelled)),
       startedAt,
       endedAt: this.now().toISOString(),
       effectiveConcurrency,
@@ -280,11 +286,114 @@ function skippedResult(candidate: PendingSuiteCase, summary: string): SuiteCaseR
   return {
     testCaseId: candidate.testCase.id,
     testCaseVersion: candidate.reference.version,
-    status: 'neutral',
+    status: 'skipped',
     summary,
+    reason: reason('dependencyFailed', summary),
     attempts: 0,
     flaky: false,
   };
+}
+
+function cancelledResult(candidate: PendingSuiteCase, summary: string): SuiteCaseRunResult {
+  return {
+    testCaseId: candidate.testCase.id,
+    testCaseVersion: candidate.reference.version,
+    status: 'cancelled',
+    summary,
+    reason: reason('userCancelled', summary),
+    attempts: 0,
+    flaky: false,
+  };
+}
+
+function executorErrorResult(candidate: PendingSuiteCase, summary: string): SuiteCaseRunResult {
+  return {
+    testCaseId: candidate.testCase.id,
+    testCaseVersion: candidate.reference.version,
+    status: 'error',
+    summary,
+    reason: reason('executorError', summary),
+    attempts: 0,
+    flaky: false,
+  };
+}
+
+interface TerminalSuiteCaseExecutionResult {
+  status: Exclude<RunStatus, 'running'>;
+  summary: string;
+  reason?: RunReason;
+  runId?: string;
+}
+
+function terminalSuiteCaseResult(result: SuiteCaseExecutionResult): TerminalSuiteCaseExecutionResult {
+  switch (result.status) {
+    case 'passed':
+      return { status: result.status, summary: result.summary, ...(result.runId ? { runId: result.runId } : {}) };
+    case 'failed':
+      return withSuiteReason(result, 'failed', 'actionFailed');
+    case 'blocked':
+      return withSuiteReason(result, 'blocked', 'unsupportedAction');
+    case 'skipped':
+      return withSuiteReason(result, 'skipped', 'dependencyFailed');
+    case 'cancelled':
+      return withSuiteReason(result, 'cancelled', 'userCancelled');
+    case 'error':
+      return withSuiteReason(result, 'error', 'executorError');
+    case 'neutral':
+      return withSuiteReason(result, 'blocked', 'unsupportedAction');
+  }
+}
+
+function withSuiteReason(
+  result: Omit<SuiteCaseExecutionResult, 'status'>,
+  status: Exclude<RunStatus, 'running' | 'passed'>,
+  defaultCode: RunReason['code'],
+): TerminalSuiteCaseExecutionResult {
+  return {
+    status,
+    summary: result.summary,
+    reason: result.reason ?? reason(defaultCode, result.summary),
+    ...(result.runId ? { runId: result.runId } : {}),
+  };
+}
+
+function suiteResultOutcome(
+  results: SuiteCaseRunResult[],
+  issues: string[],
+  cancelled: boolean,
+): Pick<SuiteRunResult, 'status' | 'reason'> {
+  if (cancelled) {
+    return { status: 'cancelled', reason: reason('userCancelled', 'Suite run was cancelled.') };
+  }
+  if (issues.length) {
+    return { status: 'blocked', reason: reason('missingAssetVersion', issues[0]!) };
+  }
+  const first = (status: SuiteCaseRunResult['status']) => results.find((result) => result.status === status);
+  const errored = first('error');
+  if (errored) {
+    return { status: 'error', reason: errored.reason ?? reason('executorError', errored.summary) };
+  }
+  const failed = first('failed');
+  if (failed) {
+    return { status: 'failed', reason: failed.reason ?? reason('actionFailed', failed.summary) };
+  }
+  const memberCancelled = first('cancelled');
+  if (memberCancelled) {
+    return { status: 'cancelled', reason: memberCancelled.reason ?? reason('userCancelled', memberCancelled.summary) };
+  }
+  const blocked = first('blocked');
+  if (blocked) {
+    return { status: 'blocked', reason: blocked.reason ?? reason('unsupportedAction', blocked.summary) };
+  }
+  const skipped = first('skipped');
+  if (skipped) {
+    return { status: 'skipped', reason: skipped.reason ?? reason('dependencyFailed', skipped.summary) };
+  }
+  return { status: 'passed' };
+}
+
+function reason(code: RunReason['code'], message: string): RunReason {
+  return { code, message };
 }
 
 function clampConcurrency(value: number): number {

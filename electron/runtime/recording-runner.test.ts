@@ -73,6 +73,8 @@ describe('RecordingRunner', () => {
     expect(response.detail.testCaseId).toBe('case-recording-login');
     expect(response.detail.documentId).toBe('doc-login');
     expect(response.agentRun.status).toBe('neutral');
+    expect(response.detail.status).toBe('blocked');
+    expect(response.detail.reason).toMatchObject({ code: 'unsupportedAction' });
     expect(response.detail.agentRun).toBe(response.agentRun);
     expect(response.detail.artifacts).toEqual(
       expect.arrayContaining([
@@ -81,7 +83,7 @@ describe('RecordingRunner', () => {
       ]),
     );
     expect(emitRunEvent).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'complete', status: 'neutral', detail: response.detail }),
+      expect.objectContaining({ type: 'complete', status: 'blocked', detail: response.detail }),
     );
   });
 
@@ -122,9 +124,10 @@ describe('RecordingRunner', () => {
     const response = await runner.run({ project, environment, recording });
 
     expect(replayRecordingSteps).not.toHaveBeenCalled();
-    expect(response.detail.status).toBe('neutral');
+    expect(response.detail.status).toBe('blocked');
+    expect(response.detail.reason).toMatchObject({ code: 'credentialUnavailable' });
     expect(response.detail.summary).toContain('认证状态已过期');
-    expect(response.detail.steps).toEqual([expect.objectContaining({ status: 'neutral' })]);
+    expect(response.detail.steps).toEqual([expect.objectContaining({ status: 'blocked' })]);
   });
 
   it('attaches an archived trace to recording evidence when the browser runtime provides one', async () => {
@@ -256,7 +259,7 @@ describe('RecordingRunner', () => {
     );
   });
 
-  it('marks an interrupted replay and remaining recording nodes as neutral', async () => {
+  it('marks an interrupted replay and remaining recording nodes as cancelled', async () => {
     const project = createEmptyProject(1);
     const environment = project.environments[0]!;
     const recording = {
@@ -307,19 +310,20 @@ describe('RecordingRunner', () => {
     const response = await pending;
 
     expect(replayRecordingSteps).toHaveBeenCalledWith(recording.steps, response.runId, controller.signal);
-    expect(response.detail.status).toBe('neutral');
+    expect(response.detail.status).toBe('cancelled');
+    expect(response.detail.reason).toMatchObject({ code: 'userCancelled' });
     expect(response.detail.cancellation).toEqual(expect.objectContaining({ source: 'user', reason: 'userCancelled' }));
     expect(response.detail.steps).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ stepId: 'recording-step-wait', status: 'neutral' }),
-        expect.objectContaining({ stepId: 'recording-step-next', status: 'neutral' }),
+        expect.objectContaining({ stepId: 'recording-step-wait', status: 'cancelled' }),
+        expect.objectContaining({ stepId: 'recording-step-next', status: 'cancelled' }),
       ]),
     );
     expect(response.agentRun.events).toContainEqual(
       expect.objectContaining({ type: 'agent:run-cancelled', status: 'neutral' }),
     );
     expect(emitRunEvent).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'complete', status: 'neutral', detail: response.detail }),
+      expect.objectContaining({ type: 'complete', status: 'cancelled', detail: response.detail }),
     );
   });
 
@@ -374,6 +378,8 @@ describe('RecordingRunner', () => {
     const response = await runner.run({ project, environment, recording });
 
     expect(response.agentRun.status).toBe('neutral');
+    expect(response.detail.status).toBe('blocked');
+    expect(response.detail.reason).toMatchObject({ code: 'unsupportedAction' });
     expect(response.agentRun.events).toContainEqual(
       expect.objectContaining({
         type: 'agent:assertion-result',
