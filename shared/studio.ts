@@ -1379,9 +1379,16 @@ export interface RuntimeProfile {
   headless: boolean;
 }
 
+/** Public metadata for a model key held exclusively by the main process. */
+export interface ModelSecretRef {
+  id: string;
+  hasKey: boolean;
+  updatedAt: string;
+}
+
 export interface MidsceneConfig {
   modelBaseUrl: string;
-  modelApiKey: string;
+  modelSecret: ModelSecretRef;
   modelName: string;
   modelFamily: string;
   preferredLanguage: string;
@@ -1403,7 +1410,7 @@ export interface MidsceneConnectionTestResult {
 export interface AgentRoleModelConfig {
   provider: AgentModelProvider;
   modelBaseUrl: string;
-  modelApiKey: string;
+  modelSecret: ModelSecretRef;
   modelName: string;
   modelFamily: string;
   temperature: string;
@@ -1804,7 +1811,7 @@ export const defaultRuntimeProfile: RuntimeProfile = {
 
 export const defaultMidsceneConfig: MidsceneConfig = {
   modelBaseUrl: '',
-  modelApiKey: '',
+  modelSecret: createEmptyModelSecretRef('midscene'),
   modelName: '',
   modelFamily: '',
   preferredLanguage: 'Chinese',
@@ -1813,21 +1820,21 @@ export const defaultMidsceneConfig: MidsceneConfig = {
   defaultContext: '',
 };
 
-const defaultAgentRoleModelConfig: AgentRoleModelConfig = {
+const defaultAgentRoleModelConfig = (role: AgentModelRole): AgentRoleModelConfig => ({
   provider: 'reuseMidscene',
   modelBaseUrl: '',
-  modelApiKey: '',
+  modelSecret: createEmptyModelSecretRef(`agent:${role}`),
   modelName: '',
   modelFamily: '',
   temperature: '0.2',
   enabled: true,
-};
+});
 
 export const defaultAgentModelConfig: AgentModelConfig = {
-  planner: structuredClone(defaultAgentRoleModelConfig),
-  executor: structuredClone(defaultAgentRoleModelConfig),
-  verifier: structuredClone(defaultAgentRoleModelConfig),
-  reporter: structuredClone(defaultAgentRoleModelConfig),
+  planner: defaultAgentRoleModelConfig('planner'),
+  executor: defaultAgentRoleModelConfig('executor'),
+  verifier: defaultAgentRoleModelConfig('verifier'),
+  reporter: defaultAgentRoleModelConfig('reporter'),
 };
 
 export const defaultAppearanceConfig: AppearanceConfig = {
@@ -1860,7 +1867,7 @@ export function resolveAgentModelAssignments({
         modelName: roleConfig.modelName,
         modelFamily: roleConfig.modelFamily,
         temperature: roleConfig.temperature,
-        hasApiKey: Boolean(roleConfig.modelApiKey.trim()),
+        hasApiKey: roleConfig.modelSecret.hasKey,
       };
     }
 
@@ -1872,7 +1879,7 @@ export function resolveAgentModelAssignments({
       modelBaseUrl: midsceneConfig.modelBaseUrl,
       modelName: midsceneConfig.modelName,
       modelFamily: midsceneConfig.modelFamily,
-      hasApiKey: Boolean(midsceneConfig.modelApiKey.trim()),
+      hasApiKey: midsceneConfig.modelSecret.hasKey,
     };
   });
 }
@@ -2386,10 +2393,12 @@ export function hydrateStudioState(
   const rawMidsceneConfig = (rawState.midsceneConfig ?? {}) as Partial<MidsceneConfig> & {
     endpoint?: string;
     workspaceName?: string;
+    modelApiKey?: unknown;
   };
+  const { modelApiKey: _legacyMidsceneApiKey, ...keyFreeMidsceneConfig } = rawMidsceneConfig;
   const hydratedMidsceneConfig = {
     ...initialState.midsceneConfig,
-    ...rawMidsceneConfig,
+    ...keyFreeMidsceneConfig,
     modelBaseUrl: rawMidsceneConfig.modelBaseUrl ?? rawMidsceneConfig.endpoint ?? '',
     modelName: rawMidsceneConfig.modelName ?? rawMidsceneConfig.workspaceName ?? '',
   };
@@ -2399,7 +2408,7 @@ export function hydrateStudioState(
       ...nextConfig,
       [role]: {
         ...initialState.agentModelConfig[role],
-        ...rawAgentModelConfig[role],
+        ...withoutLegacyModelApiKey(rawAgentModelConfig[role]),
       },
     }),
     {} as AgentModelConfig,
@@ -2620,10 +2629,28 @@ export function mergeProjectAssetBindings(
 export function isMidsceneConfigured(config: MidsceneConfig): boolean {
   return Boolean(
     config.modelBaseUrl.trim() &&
-      config.modelApiKey.trim() &&
+      config.modelSecret.hasKey &&
       config.modelName.trim() &&
       config.modelFamily.trim(),
   );
+}
+
+function createEmptyModelSecretRef(id: string): ModelSecretRef {
+  return {
+    id,
+    hasKey: false,
+    updatedAt: new Date(0).toISOString(),
+  };
+}
+
+function withoutLegacyModelApiKey(config: Partial<AgentRoleModelConfig> | undefined): Partial<AgentRoleModelConfig> {
+  if (!config) {
+    return {};
+  }
+  const { modelApiKey: _legacyModelApiKey, ...keyFreeConfig } = config as Partial<AgentRoleModelConfig> & {
+    modelApiKey?: unknown;
+  };
+  return keyFreeConfig;
 }
 
 function inferWorkflowKind(steps: WorkflowStepDraft[]): WorkflowKind {

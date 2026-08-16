@@ -577,7 +577,9 @@ function registerIpcHandlers(): void {
   registerRuntimeIpcHandlers({
     handle: (channel, listener) => ipcMain.handle(channel, listener),
     loadState: () => getStoreOrThrow().load(),
-    saveState: (state) => getStoreOrThrow().save(state),
+    saveState: async (state) => {
+      await getStoreOrThrow().save(state);
+    },
     getRuntimeBundle: getRuntimeBundleOrThrow,
     projectRepository: getProjectRepositoryOrThrow(),
     getFixtureScriptTrustContext,
