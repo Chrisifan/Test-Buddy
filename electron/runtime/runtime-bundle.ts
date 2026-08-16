@@ -350,8 +350,9 @@ export function createRuntimeBundle(options: RuntimeBundleOptions): RuntimeBundl
         const caseDetails: RunTestCaseResponse['detail'][] = [];
         const suiteResult = await new SuiteRunner({
           execute: async ({ testCase, environment, attempt }) => {
+            const memberRunId = `${runId}-${testCase.id}@${testCase.version}-attempt-${attempt}`;
             const response = await executeTestCase({
-              runId: `${runId}-${testCase.id}-attempt-${attempt}`,
+              runId: memberRunId,
               projectSnapshot: request.projectSnapshot,
               testCase,
               environment,
@@ -362,8 +363,11 @@ export function createRuntimeBundle(options: RuntimeBundleOptions): RuntimeBundl
               ...(request.fixtureScriptTrustRecords ? { fixtureScriptTrustRecords: request.fixtureScriptTrustRecords } : {}),
               ...(request.fixtureScriptTrustDirectory ? { fixtureScriptTrustDirectory: request.fixtureScriptTrustDirectory } : {}),
               cancellationSignal,
-            }, `${runId}-${testCase.id}-attempt-${attempt}`, cancellationSignal);
-            caseDetails.push(response.detail);
+            }, memberRunId, cancellationSignal);
+            caseDetails.push({
+              ...response.detail,
+              testCaseVersion: testCase.version,
+            });
             return {
               status: response.detail.status === 'running' ? 'error' : response.detail.status,
               summary: response.detail.summary,

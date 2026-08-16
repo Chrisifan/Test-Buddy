@@ -181,6 +181,11 @@ export interface RunProvenance {
   source: 'projectDirectory' | 'legacyStudioStore';
   reproducibility: 'versioned' | 'legacy';
   testCase: VersionedTestAssetReference;
+  /** Present only when this Case was executed as a member of a Suite. */
+  suite?: {
+    reference: VersionedTestAssetReference;
+    parentRunId: string;
+  };
   fixtures: VersionedTestAssetReference[];
   reusableFlows: VersionedTestAssetReference[];
   baselines: VersionedTestAssetReference[];
@@ -205,6 +210,25 @@ export interface RunProvenance {
     hasKey: boolean;
   };
   createdAt: string;
+}
+
+/** Immutable, Suite-level execution identity without a fabricated Case. */
+export interface SuiteRunProvenance extends Omit<RunProvenance, 'testCase' | 'suite'> {
+  suite: {
+    reference: VersionedTestAssetReference;
+    parentRunId: string;
+  };
+}
+
+export interface SuiteRunRecord {
+  id: string;
+  provenance: SuiteRunProvenance;
+  startedAt: string;
+  finishedAt?: string;
+  status: RunStatus;
+  reasonCode?: RunReasonCode;
+  memberRunIds: string[];
+  summary: Record<Exclude<RunStatus, 'running'>, number>;
 }
 
 export type SuiteFailurePolicy = 'continue' | 'failFast';
@@ -1223,6 +1247,8 @@ export interface RunDetail {
   id: string;
   projectId: string;
   testCaseId: string;
+  /** Exact Case revision for Suite member history; absent on legacy records. */
+  testCaseVersion?: number;
   documentId?: string;
   environmentId: string;
   title: string;
@@ -1408,6 +1434,7 @@ export interface StudioState {
   projects: ProjectDraft[];
   projectAssetBindings: ProjectAssetBinding[];
   runDetails: RunDetail[];
+  suiteRunRecords: SuiteRunRecord[];
   recentRuns: RunSummary[];
   chatEntries: ChatEntry[];
   runtimeProfile: RuntimeProfile;
@@ -2245,6 +2272,7 @@ export function createInitialStudioState(): StudioState {
     projects: [],
     projectAssetBindings: [],
     runDetails: [],
+    suiteRunRecords: [],
     recentRuns: [],
     chatEntries: [],
     runtimeProfile: structuredClone(defaultRuntimeProfile),
@@ -2353,6 +2381,9 @@ export function hydrateStudioState(
       .filter((run) => run.projectId !== builtInMockProjectId)
       .map(migrateLegacyRunDetail)
     : initialState.runDetails;
+  const suiteRunRecords = Array.isArray(rawState.suiteRunRecords)
+    ? structuredClone(rawState.suiteRunRecords)
+    : initialState.suiteRunRecords;
   const recentRuns = Array.isArray(rawState.recentRuns)
     ? rawState.recentRuns
       .filter((run) => run.projectId !== builtInMockProjectId)
@@ -2367,6 +2398,7 @@ export function hydrateStudioState(
     projects: migratedProjects,
     projectAssetBindings,
     runDetails,
+    suiteRunRecords,
     recentRuns,
     chatEntries: Array.isArray(rawState.chatEntries)
       ? rawState.chatEntries.filter((entry) => !builtInMockChatEntryIds.has(entry.id))

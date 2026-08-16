@@ -402,6 +402,75 @@ describe('RuntimeBundle desktop Suite adapter', () => {
     await bundle.close();
   });
 
+  it('keeps same-ID Suite Case versions in distinct versioned run details', async () => {
+    const bundle = createRuntimeBundle({
+      rootDir: '/tmp/testbuddy-runtime-bundle-suite-versioned-members',
+      visualDiffImageAdapter: { read: vi.fn(), write: vi.fn() },
+    });
+    const project = createEmptyProject(1);
+    const environment = project.environments[0]!;
+    const first = {
+      ...createEmptyTestCase(1, project.groups[0]!.id, environment.id),
+      id: 'case/versioned-member',
+      version: 1,
+      steps: [{ id: 'step-versioned-v1', type: 'manual' as const, title: 'V1', body: 'V1' }],
+    };
+    const second = {
+      ...first,
+      version: 2,
+      name: 'Version two',
+      steps: [{ id: 'step-versioned-v2', type: 'manual' as const, title: 'V2', body: 'V2' }],
+    };
+    const suite = {
+      ...createEmptySuiteAsset(project, 1),
+      id: 'suite-versioned-members',
+      environmentId: environment.id,
+      caseReferences: [
+        { id: first.id, version: first.version, dependsOn: [] },
+        { id: second.id, version: second.version, dependsOn: [] },
+      ],
+      execution: { concurrency: 1, failurePolicy: 'continue' as const, retryLimit: 0 },
+    };
+    project.testCases = [first, second];
+    project.suites = [suite];
+    vi.spyOn(bundle.testRunner, 'run').mockImplementation(async ({ runId, testCase }) => ({
+      runId: runId!,
+      title: testCase.name,
+      detail: {
+        id: runId!,
+        projectId: project.id,
+        testCaseId: testCase.id,
+        environmentId: environment.id,
+        title: testCase.name,
+        status: 'passed',
+        startedAt: new Date(0).toISOString(),
+        endedAt: new Date(0).toISOString(),
+        duration: '00:00:01',
+        summary: 'Passed',
+        logs: [],
+        steps: [],
+        artifacts: [],
+      },
+    } satisfies RunTestCaseResponse));
+
+    const response = await bundle.runSuite({
+      runId: 'suite-versioned-run',
+      projectSnapshot: projectSnapshot(project),
+      suite,
+      environment,
+    });
+
+    expect(response.detail.caseDetails).toEqual([
+      expect.objectContaining({ id: 'suite-versioned-run-case/versioned-member@1-attempt-1', testCaseVersion: 1 }),
+      expect.objectContaining({ id: 'suite-versioned-run-case/versioned-member@2-attempt-1', testCaseVersion: 2 }),
+    ]);
+    expect(response.detail.suite.results.map((result) => result.runId)).toEqual([
+      'suite-versioned-run-case/versioned-member@1-attempt-1',
+      'suite-versioned-run-case/versioned-member@2-attempt-1',
+    ]);
+    await bundle.close();
+  });
+
   it('retains every Case RunDetail when a failed attempt recovers on retry', async () => {
     const bundle = createRuntimeBundle({
       rootDir: '/tmp/testbuddy-runtime-bundle-suite-retry-details',
@@ -424,7 +493,7 @@ describe('RuntimeBundle desktop Suite adapter', () => {
     };
     project.testCases = [testCase];
     project.suites = [suite];
-    const runIdPrefix = `suite-retry-run-${testCase.id}`;
+    const runIdPrefix = `suite-retry-run-${testCase.id}@${testCase.version}`;
     const attemptResponses = [
       {
         runId: `${runIdPrefix}-attempt-1`,
@@ -484,6 +553,7 @@ describe('RuntimeBundle desktop Suite adapter', () => {
       `${runIdPrefix}-attempt-1`,
       `${runIdPrefix}-attempt-2`,
     ]);
+    expect(response.detail.caseDetails.map((detail) => detail.testCaseVersion)).toEqual([1, 1]);
     expect(response.detail.suite).toMatchObject({
       status: 'passed',
       results: [{ testCaseId: testCase.id, attempts: 2, status: 'passed', flaky: true }],

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { createInitialStudioState, type RunTestCaseResponse } from '../../shared/studio.js';
-import { appendRunToStudioState } from './run-history.js';
+import { appendRunToStudioState, appendSuiteRunToStudioState } from './run-history.js';
 
 describe('appendRunToStudioState', () => {
   it('keeps a detailed run and a bounded recent-run summary in sync', () => {
@@ -48,5 +48,67 @@ describe('appendRunToStudioState', () => {
       expect.objectContaining({ id: 'run-1', projectId: 'project-web', environmentName: 'CI' }),
     ]);
     expect(next.browserSession.status).toBe('closed');
+  });
+
+  it('keeps Suite parent history separate from Case details and copies its provenance', () => {
+    const state = createInitialStudioState();
+    const legacyState = { ...state } as typeof state & { suiteRunRecords?: typeof state.suiteRunRecords };
+    delete legacyState.suiteRunRecords;
+    const parentRecord = {
+      id: 'suite-run-1',
+      provenance: {
+        schemaVersion: 1 as const,
+        projectId: 'project-web',
+        projectRevision: 'a'.repeat(64),
+        source: 'projectDirectory' as const,
+        reproducibility: 'versioned' as const,
+        suite: {
+          reference: { id: 'suite-login', version: 1 },
+          parentRunId: 'suite-run-1',
+        },
+        fixtures: [],
+        reusableFlows: [],
+        baselines: [],
+        environment: {
+          id: 'env-ci',
+          name: 'CI',
+          baseUrl: 'https://example.test',
+        },
+        browserProfile: { engine: 'chromium' as const, headless: true },
+        executor: { appVersion: 'test-buddy-desktop', runnerVersion: 'runtime-bundle-v1' },
+        model: { hasKey: false },
+        createdAt: '2026-08-15T00:00:00.000Z',
+      },
+      startedAt: '2026-08-15T00:00:00.000Z',
+      finishedAt: '2026-08-15T00:00:02.000Z',
+      status: 'passed' as const,
+      memberRunIds: ['case-run-1'],
+      summary: {
+        passed: 1,
+        failed: 0,
+        blocked: 0,
+        skipped: 0,
+        cancelled: 0,
+        error: 0,
+      },
+    };
+
+    const next = appendSuiteRunToStudioState(legacyState, parentRecord);
+    parentRecord.provenance.suite.reference.version = 2;
+    parentRecord.memberRunIds.push('case-run-2');
+
+    expect(next.runDetails).toEqual([]);
+    expect(next.suiteRunRecords).toEqual([
+      expect.objectContaining({
+        id: 'suite-run-1',
+        provenance: expect.objectContaining({
+          suite: {
+            reference: { id: 'suite-login', version: 1 },
+            parentRunId: 'suite-run-1',
+          },
+        }),
+        memberRunIds: ['case-run-1'],
+      }),
+    ]);
   });
 });

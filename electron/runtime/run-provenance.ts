@@ -7,6 +7,8 @@ import type {
   ProjectEnvironment,
   RunProvenance,
   RunReason,
+  SuiteAsset,
+  SuiteRunProvenance,
   TestCaseDraft,
   VersionedTestAssetReference,
 } from '../../shared/studio.js';
@@ -62,20 +64,53 @@ export function createRunProvenance(
   runtimeMetadata: RunProvenanceRuntimeMetadata,
 ): RunProvenance {
   const assetReferences = testCase.assetReferences;
+  return deepFreeze({
+    ...createRunProvenanceBase(snapshot, environment, runtimeMetadata),
+    testCase: exactReference(testCase, 'Case'),
+    fixtures: (assetReferences?.fixtures ?? []).map((reference) => exactReference(reference, 'Fixture')),
+    reusableFlows: (assetReferences?.reusableFlows ?? []).map((reference) => exactReference(reference, 'reusable Flow')),
+    baselines: assetReferences?.baseline ? [exactReference(assetReferences.baseline, 'Baseline')] : [],
+  });
+}
+
+/** Freezes a Suite parent identity without inventing a representative Case. */
+export function createSuiteRunProvenance(
+  snapshot: ProjectSnapshot,
+  suite: SuiteAsset,
+  environment: ProjectEnvironment,
+  runtimeMetadata: RunProvenanceRuntimeMetadata,
+  parentRunId: string,
+): SuiteRunProvenance {
+  if (!parentRunId.trim()) {
+    throw new Error('Suite provenance requires a parent run ID.');
+  }
+  return deepFreeze({
+    ...createRunProvenanceBase(snapshot, environment, runtimeMetadata),
+    fixtures: [],
+    reusableFlows: [],
+    baselines: [],
+    suite: {
+      reference: exactReference(suite, 'Suite'),
+      parentRunId,
+    },
+  });
+}
+
+function createRunProvenanceBase(
+  snapshot: ProjectSnapshot,
+  environment: ProjectEnvironment,
+  runtimeMetadata: RunProvenanceRuntimeMetadata,
+): Omit<RunProvenance, 'testCase' | 'suite' | 'fixtures' | 'reusableFlows' | 'baselines'> {
   const modelProvider = nonEmpty(runtimeMetadata.model.provider);
   const modelName = nonEmpty(runtimeMetadata.model.name);
   const endpoint = nonEmpty(runtimeMetadata.model.endpoint);
   const fingerprint = endpoint ? endpointFingerprint(endpoint) : undefined;
-  const provenance: RunProvenance = {
+  return {
     schemaVersion: 1,
     projectId: snapshot.project.id,
     projectRevision: snapshot.revision,
     source: snapshot.source,
     reproducibility: snapshot.reproducibility,
-    testCase: exactReference(testCase, 'Case'),
-    fixtures: (assetReferences?.fixtures ?? []).map((reference) => exactReference(reference, 'Fixture')),
-    reusableFlows: (assetReferences?.reusableFlows ?? []).map((reference) => exactReference(reference, 'reusable Flow')),
-    baselines: assetReferences?.baseline ? [exactReference(assetReferences.baseline, 'Baseline')] : [],
     environment: {
       id: environment.id,
       name: environment.name,
@@ -98,8 +133,6 @@ export function createRunProvenance(
     },
     createdAt: runtimeMetadata.createdAt,
   };
-
-  return deepFreeze(provenance);
 }
 
 /**

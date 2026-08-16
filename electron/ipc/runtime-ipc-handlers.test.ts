@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import fsPromises from 'node:fs/promises';
+import * as crypto from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -14,10 +15,12 @@ import {
   findTestCaseVersion,
   type ProjectDraft,
   type RunTestCaseResponse,
+  type RunSuiteResponse,
 } from '../../shared/studio.js';
 import { executeCliCommand } from '../cli.js';
 import { ProjectAssetStore } from '../projectAssetStore.js';
 import { ProjectRepository, ProjectRepositoryError } from '../projectRepository.js';
+import { RunCancelledError, isRunCancelled } from '../runtime/run-cancellation.js';
 import * as runtimeBundle from '../runtime/runtime-bundle.js';
 import { StudioStore } from '../studioStore.js';
 
@@ -296,7 +299,7 @@ describe('registerRuntimeIpcHandlers', () => {
       fixtureScriptTrustRecords: [],
       project: { ...project, testCases: [testCaseV2] },
       environment: { ...environment, name: 'Renderer override' },
-    } as unknown)).resolves.toEqual(response);
+    } as unknown)).resolves.toMatchObject(response);
 
     const runtime = dependencies.getRuntimeBundle();
     expect(dependencies.getFixtureScriptTrustContext).toHaveBeenCalledWith(project.id);
@@ -308,12 +311,112 @@ describe('registerRuntimeIpcHandlers', () => {
       fixtureScriptTrustRecords: expect.arrayContaining([expect.objectContaining({ fixtureId: 'fixture-1' })]),
     }));
     expect(dependencies.saveState).toHaveBeenCalledWith(expect.objectContaining({
-      runDetails: [response.detail],
+      runDetails: [expect.objectContaining({
+        id: response.detail.id,
+        provenance: expect.objectContaining({ testCase: { id: testCaseV1.id, version: testCaseV1.version } }),
+      })],
       recentRuns: [expect.objectContaining({
         id: response.runId,
         environmentId: environment.id,
       })],
     }));
+  });
+
+  it('persists frozen, secret-free Case provenance resolved by main before execution', async () => {
+    const project = createEmptyProject(1);
+    const environment = {
+      ...project.environments[0]!,
+      url: 'https://environment-user:environment-password@example.test/catalog?session=secret#fragment',
+    };
+    project.environments = [environment];
+    const testCase = {
+      ...createTestCase(project, 'case-provenance', environment.id),
+      assetReferences: {
+        fixtures: [{ id: 'fixture-checkout', version: 1 }],
+        reusableFlows: [],
+      },
+    };
+    project.testCases = [testCase];
+    project.fixtures = [{
+      id: 'fixture-checkout',
+      version: 1,
+      name: 'Checkout fixture',
+      description: '',
+      tags: [],
+      inputSchema: [],
+      outputs: [],
+      lifecycle: {},
+      createdAt: new Date(0).toISOString(),
+      updatedAt: new Date(0).toISOString(),
+    }];
+    const state = createInitialStudioState();
+    state.midsceneConfig = {
+      ...state.midsceneConfig,
+      modelBaseUrl: 'https://model-user:model-password@models.example.test/v1?token=endpoint-secret',
+      modelApiKey: 'model-api-secret',
+      modelName: 'model-v1',
+    };
+    const response = runTestCaseResponse(project.id, testCase.id, environment.id);
+    const runTestCase = vi.fn().mockImplementation(async (request) => {
+      request.testCase.assetReferences!.fixtures[0]!.version = 99;
+      request.environment.url = 'https://runner-mutated.example.test';
+      state.midsceneConfig.modelApiKey = 'mutated-model-api-secret';
+      return response;
+    });
+    const dependencies = createDependencies({
+      loadState: vi.fn().mockResolvedValue(state),
+      getRuntimeBundle: vi.fn().mockReturnValue({
+        artifactManager: { isManagedArtifactPath: () => true, exportArtifact: vi.fn(), importManualEvidence: vi.fn() },
+        browserRuntime: { getState: () => ({ status: 'idle' }) },
+        runTestCase,
+        runSuite: vi.fn(),
+        cancelRun: vi.fn(),
+      }),
+      projectRepository: {
+        load: vi.fn(),
+        loadBound: vi.fn().mockResolvedValue(projectSnapshot(project, '9'.repeat(64), 'projectDirectory')),
+      },
+    });
+    const handlers = registerHandlers(dependencies);
+
+    const result = await handlers.get(runtimeIpcChannels.runTestCase)!({}, {
+      projectId: project.id,
+      testCase: { id: testCase.id, version: testCase.version },
+    }) as RunTestCaseResponse;
+
+    expect(result.runId).toBe(response.runId);
+    expect(result.title).toBe(response.title);
+    expect(result.detail).toMatchObject({
+      ...response.detail,
+    });
+    expect(result.detail.provenance).toMatchObject({
+      testCase: { id: testCase.id, version: testCase.version },
+      environment: { baseUrl: 'https://example.test/catalog' },
+    });
+    expect(Object.isFrozen(result.detail.provenance)).toBe(true);
+
+    const savedState = dependencies.saveState.mock.calls.at(-1)![0];
+    expect(savedState.runDetails[0]).toMatchObject({
+      provenance: {
+        projectId: project.id,
+        projectRevision: '9'.repeat(64),
+        testCase: { id: testCase.id, version: 1 },
+        fixtures: [{ id: 'fixture-checkout', version: 1 }],
+        environment: {
+          id: environment.id,
+          baseUrl: 'https://example.test/catalog',
+        },
+        browserProfile: { engine: 'chromium', headless: true },
+        executor: { appVersion: 'test-buddy-desktop', runnerVersion: 'runtime-bundle-v1' },
+        model: { model: 'model-v1', hasKey: true },
+      },
+    });
+    const persisted = JSON.stringify(savedState.runDetails[0]!.provenance);
+    expect(persisted).not.toContain('model-api-secret');
+    expect(persisted).not.toContain('model-password');
+    expect(persisted).not.toContain('endpoint-secret');
+    expect(persisted).not.toContain('environment-password');
+    expect(persisted).not.toContain('runner-mutated');
   });
 
   it('preserves a concurrent StudioState edit while a Case run is pending', async () => {
@@ -369,13 +472,13 @@ describe('registerRuntimeIpcHandlers', () => {
     }));
     currentState = concurrentState;
     deferred.resolve(response);
-    await expect(pending).resolves.toEqual(response);
+    await expect(pending).resolves.toMatchObject(response);
 
     expect(dependencies.saveState).toHaveBeenCalledWith(expect.objectContaining({
       projects: [expect.objectContaining({ name: 'Concurrent Case edit' })],
       runtimeProfile: concurrentState.runtimeProfile,
       midsceneConfig: concurrentState.midsceneConfig,
-      runDetails: [response.detail],
+      runDetails: [expect.objectContaining({ id: response.detail.id })],
     }));
   });
 
@@ -440,13 +543,13 @@ describe('registerRuntimeIpcHandlers', () => {
     }));
     currentState = concurrentState;
     deferred.resolve(response);
-    await expect(pending).resolves.toEqual(response);
+    await expect(pending).resolves.toMatchObject(response);
 
     expect(dependencies.saveState).toHaveBeenCalledWith(expect.objectContaining({
       projects: [expect.objectContaining({ name: 'Concurrent Suite edit' })],
       runtimeProfile: concurrentState.runtimeProfile,
       midsceneConfig: concurrentState.midsceneConfig,
-      runDetails: [response.detail.caseDetails[0]],
+      runDetails: [expect.objectContaining({ id: response.detail.caseDetails[0]!.id })],
     }));
   });
 
@@ -615,8 +718,15 @@ describe('registerRuntimeIpcHandlers', () => {
     };
     project.testCases = [testCase];
     project.suites = [suite];
+    const testCaseVersion = testCase.version;
     const snapshot = projectSnapshot(project, '3'.repeat(64), 'projectDirectory');
     const response = runSuiteResponse(project.id, 'case-suite-1', environment.id);
+    const runSuite = vi.fn().mockImplementation(async (request) => {
+      request.projectSnapshot.project.testCases[0]!.version = 2;
+      request.environment.url = 'https://suite-runner-mutated.example.test';
+      request.environment.name = 'Suite runner mutated';
+      return response;
+    });
     const dependencies = createDependencies({
       getFixtureScriptTrustContext: vi.fn().mockResolvedValue({
         projectDirectory: '/projects/one',
@@ -636,7 +746,7 @@ describe('registerRuntimeIpcHandlers', () => {
         artifactManager: { isManagedArtifactPath: () => true, exportArtifact: vi.fn(), importManualEvidence: vi.fn() },
         browserRuntime: { getState: () => ({ status: 'idle' }) },
         runTestCase: vi.fn(),
-        runSuite: vi.fn().mockResolvedValue(response),
+        runSuite,
         cancelRun: vi.fn(),
       }),
       projectRepository: {
@@ -646,14 +756,27 @@ describe('registerRuntimeIpcHandlers', () => {
     });
     const handlers = registerHandlers(dependencies);
 
-    await expect(handlers.get(runtimeIpcChannels.runSuite)!({}, {
+    const result = await handlers.get(runtimeIpcChannels.runSuite)!({}, {
       runId: 'suite-ipc-run',
       cancellationSignal: { aborted: true },
       fixtureScriptTrustDirectory: '/renderer-controlled',
       fixtureScriptTrustRecords: [],
       projectId: project.id,
       suite: { id: suite.id, version: suite.version },
-    } as unknown)).resolves.toEqual(response);
+    } as unknown) as RunSuiteResponse;
+
+    expect(result).toMatchObject({
+      ...response,
+      detail: expect.objectContaining({
+        caseDetails: [expect.objectContaining({
+          provenance: expect.objectContaining({
+            testCase: { id: testCase.id, version: testCaseVersion },
+            suite: { reference: { id: suite.id, version: suite.version }, parentRunId: 'suite-ipc-run' },
+          }),
+        })],
+      }),
+    });
+    expect(Object.isFrozen(result.detail.caseDetails[0]!.provenance)).toBe(true);
 
     const runtime = dependencies.getRuntimeBundle();
     expect(dependencies.getFixtureScriptTrustContext).toHaveBeenCalledWith(project.id);
@@ -666,7 +789,34 @@ describe('registerRuntimeIpcHandlers', () => {
       fixtureScriptTrustRecords: [expect.objectContaining({ fixtureId: 'fixture-suite-1' })],
     }));
     expect(dependencies.saveState).toHaveBeenCalledWith(expect.objectContaining({
-      runDetails: [response.detail.caseDetails[0]],
+      runDetails: [expect.objectContaining({
+        id: response.detail.caseDetails[0]!.id,
+        provenance: expect.objectContaining({
+          testCase: { id: testCase.id, version: testCaseVersion },
+          suite: { reference: { id: suite.id, version: suite.version }, parentRunId: 'suite-ipc-run' },
+        }),
+      })],
+      recentRuns: [expect.objectContaining({ environmentName: 'Staging' })],
+      suiteRunRecords: [expect.objectContaining({
+        id: 'suite-ipc-run',
+        provenance: expect.objectContaining({
+          projectId: project.id,
+          suite: {
+            reference: { id: suite.id, version: suite.version },
+            parentRunId: 'suite-ipc-run',
+          },
+        }),
+        status: 'passed',
+        memberRunIds: [response.detail.caseDetails[0]!.id],
+        summary: {
+          passed: 1,
+          failed: 0,
+          blocked: 0,
+          skipped: 0,
+          cancelled: 0,
+          error: 0,
+        },
+      })],
     }));
   });
 
@@ -699,12 +849,14 @@ describe('registerRuntimeIpcHandlers', () => {
     const failedAttempt = {
       ...runTestCaseResponse(project.id, 'case-retry-1', environment.id).detail,
       id: 'attempt-1',
+      testCaseVersion: testCase.version,
       status: 'failed' as const,
       summary: 'Failed',
     };
     const passedAttempt = {
       ...runTestCaseResponse(project.id, 'case-retry-1', environment.id).detail,
       id: 'attempt-2',
+      testCaseVersion: testCase.version,
       status: 'passed' as const,
       summary: 'Passed',
     };
@@ -753,15 +905,335 @@ describe('registerRuntimeIpcHandlers', () => {
       runId: 'suite-retry-run',
       projectId: project.id,
       suite: { id: suite.id, version: suite.version },
-    } as unknown)).resolves.toEqual(response);
+    } as unknown)).resolves.toMatchObject(response);
 
     expect(dependencies.saveState).toHaveBeenCalledWith(expect.objectContaining({
       runDetails: expect.arrayContaining([expect.objectContaining({ id: 'attempt-2' }), expect.objectContaining({ id: 'attempt-1' })]),
       recentRuns: expect.arrayContaining([expect.objectContaining({ id: 'attempt-2' }), expect.objectContaining({ id: 'attempt-1' })]),
     }));
-    const savedState = dependencies.saveState.mock.calls[0]![0];
+    const savedState = dependencies.saveState.mock.calls.at(-1)![0];
     expect(savedState.runDetails.map((detail: { id: string }) => detail.id)).toEqual(['attempt-2', 'attempt-1']);
     expect(savedState.recentRuns.map((run: { id: string }) => run.id)).toEqual(['attempt-2', 'attempt-1']);
+    expect(savedState.runDetails).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: 'attempt-1',
+        provenance: expect.objectContaining({ testCase: { id: testCase.id, version: testCase.version } }),
+      }),
+      expect.objectContaining({
+        id: 'attempt-2',
+        provenance: expect.objectContaining({ testCase: { id: testCase.id, version: testCase.version } }),
+      }),
+    ]));
+  });
+
+  it('persists same-ID Suite Case versions with distinct exact frozen provenance', async () => {
+    const project = createEmptyProject(1);
+    const environment = project.environments[0]!;
+    const caseV1 = { ...createTestCase(project, 'case/versioned', environment.id), version: 1, name: 'Version one' };
+    const caseV2 = { ...caseV1, version: 2, name: 'Version two' };
+    const suite = {
+      ...createEmptySuiteAsset(project, 1),
+      id: 'suite/versioned',
+      version: 1,
+      environmentId: environment.id,
+      caseReferences: [
+        { id: caseV1.id, version: caseV1.version, dependsOn: [] },
+        { id: caseV2.id, version: caseV2.version, dependsOn: [] },
+      ],
+    };
+    project.testCases = [caseV1, caseV2];
+    project.suites = [suite];
+    const firstDetail = {
+      ...runTestCaseResponse(project.id, caseV1.id, environment.id).detail,
+      id: 'suite-versioned-run-case-versioned@1-attempt-1',
+      testCaseVersion: 1,
+    };
+    const secondDetail = {
+      ...runTestCaseResponse(project.id, caseV2.id, environment.id).detail,
+      id: 'suite-versioned-run-case-versioned@2-attempt-1',
+      testCaseVersion: 2,
+    };
+    const response = {
+      runId: 'suite-versioned-run',
+      title: 'Versioned Suite',
+      detail: {
+        suite: {
+          suiteId: suite.id,
+          suiteVersion: suite.version,
+          environmentId: environment.id,
+          status: 'passed' as const,
+          startedAt: new Date(0).toISOString(),
+          endedAt: new Date(0).toISOString(),
+          effectiveConcurrency: 1,
+          results: [
+            { testCaseId: caseV1.id, testCaseVersion: 1, status: 'passed' as const, summary: 'v1', attempts: 1, flaky: false, runId: firstDetail.id },
+            { testCaseId: caseV2.id, testCaseVersion: 2, status: 'passed' as const, summary: 'v2', attempts: 1, flaky: false, runId: secondDetail.id },
+          ],
+          issues: [],
+        },
+        caseDetails: [firstDetail, secondDetail],
+      },
+    };
+    const dependencies = createDependencies({
+      getRuntimeBundle: vi.fn().mockReturnValue({
+        artifactManager: { isManagedArtifactPath: () => true, exportArtifact: vi.fn(), importManualEvidence: vi.fn() },
+        browserRuntime: { getState: () => ({ status: 'idle' }) },
+        runTestCase: vi.fn(),
+        runSuite: vi.fn().mockResolvedValue(response),
+        cancelRun: vi.fn(),
+      }),
+      projectRepository: {
+        load: vi.fn(),
+        loadBound: vi.fn().mockResolvedValue(projectSnapshot(project, '6'.repeat(64), 'projectDirectory')),
+      },
+    });
+    const handlers = registerHandlers(dependencies);
+
+    await expect(handlers.get(runtimeIpcChannels.runSuite)!({}, {
+      runId: response.runId,
+      projectId: project.id,
+      suite: { id: suite.id, version: suite.version },
+    })).resolves.toMatchObject(response);
+
+    const savedState = dependencies.saveState.mock.calls.at(-1)![0];
+    expect(savedState.runDetails).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: firstDetail.id,
+        provenance: expect.objectContaining({ testCase: { id: caseV1.id, version: 1 } }),
+      }),
+      expect.objectContaining({
+        id: secondDetail.id,
+        provenance: expect.objectContaining({ testCase: { id: caseV2.id, version: 2 } }),
+      }),
+    ]));
+    expect(new Set(savedState.runDetails.map((detail: { id: string }) => detail.id)).size).toBe(2);
+  });
+
+  it.each([
+    ['cancellation', () => new RunCancelledError(), 'cancelled', 'userCancelled'],
+    ['executor error', () => new Error('runtime crashed'), 'error', 'executorError'],
+  ] as const)('terminalizes a Suite parent when RuntimeBundle rejects with %s', async (_label, createError, status, reasonCode) => {
+    const project = createEmptyProject(1);
+    const environment = project.environments[0]!;
+    const testCase = createTestCase(project, 'case-rejected-suite', environment.id);
+    const suite = {
+      ...createEmptySuiteAsset(project, 1),
+      id: 'suite-rejected',
+      version: 1,
+      environmentId: environment.id,
+      caseReferences: [{ id: testCase.id, version: testCase.version, dependsOn: [] }],
+    };
+    project.testCases = [testCase];
+    project.suites = [suite];
+    const rejection = createError();
+    const dependencies = createDependencies({
+      getRuntimeBundle: vi.fn().mockReturnValue({
+        artifactManager: { isManagedArtifactPath: () => true, exportArtifact: vi.fn(), importManualEvidence: vi.fn() },
+        browserRuntime: { getState: () => ({ status: 'idle' }) },
+        runTestCase: vi.fn(),
+        runSuite: vi.fn().mockRejectedValue(rejection),
+        cancelRun: vi.fn(),
+      }),
+      projectRepository: {
+        load: vi.fn(),
+        loadBound: vi.fn().mockResolvedValue(projectSnapshot(project, '7'.repeat(64), 'projectDirectory')),
+      },
+    });
+    const handlers = registerHandlers(dependencies);
+
+    await expect(handlers.get(runtimeIpcChannels.runSuite)!({}, {
+      runId: 'suite-rejected-run',
+      projectId: project.id,
+      suite: { id: suite.id, version: suite.version },
+    })).rejects.toBe(rejection);
+
+    const savedState = dependencies.saveState.mock.calls.at(-1)![0];
+    expect(savedState.runDetails).toEqual([]);
+    expect(savedState.suiteRunRecords).toEqual([
+      expect.objectContaining({
+        id: 'suite-rejected-run',
+        status,
+        reasonCode,
+        finishedAt: expect.any(String),
+        memberRunIds: [],
+      }),
+    ]);
+  });
+
+  it('preserves the original Suite runtime rejection when terminal parent persistence also fails', async () => {
+    const project = createEmptyProject(1);
+    const environment = project.environments[0]!;
+    const testCase = createTestCase(project, 'case-terminal-persistence-failure', environment.id);
+    const suite = {
+      ...createEmptySuiteAsset(project, 1),
+      id: 'suite-terminal-persistence-failure',
+      version: 1,
+      environmentId: environment.id,
+      caseReferences: [{ id: testCase.id, version: testCase.version, dependsOn: [] }],
+    };
+    project.testCases = [testCase];
+    project.suites = [suite];
+    const runtimeFailure = new Error('runtime crashed');
+    const persistenceFailure = new Error('history storage unavailable');
+    const saveState = vi.fn()
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(persistenceFailure);
+    const dependencies = createDependencies({
+      saveState,
+      getRuntimeBundle: vi.fn().mockReturnValue({
+        artifactManager: { isManagedArtifactPath: () => true, exportArtifact: vi.fn(), importManualEvidence: vi.fn() },
+        browserRuntime: { getState: () => ({ status: 'idle' }) },
+        runTestCase: vi.fn(),
+        runSuite: vi.fn().mockRejectedValue(runtimeFailure),
+        cancelRun: vi.fn(),
+      }),
+      projectRepository: {
+        load: vi.fn(),
+        loadBound: vi.fn().mockResolvedValue(projectSnapshot(project, 'a'.repeat(64), 'projectDirectory')),
+      },
+    });
+    const handlers = registerHandlers(dependencies);
+
+    await expect(handlers.get(runtimeIpcChannels.runSuite)!({}, {
+      runId: 'suite-terminal-persistence-failure-run',
+      projectId: project.id,
+      suite: { id: suite.id, version: suite.version },
+    })).rejects.toBe(runtimeFailure);
+
+    expect(saveState).toHaveBeenCalledTimes(2);
+    expect(saveState.mock.calls[1]![0].suiteRunRecords).toEqual([
+      expect.objectContaining({
+        id: 'suite-terminal-persistence-failure-run',
+        status: 'error',
+        reasonCode: 'executorError',
+      }),
+    ]);
+  });
+
+  it('propagates a successful Suite persistence failure without overwriting its completed parent record', async () => {
+    const project = createEmptyProject(1);
+    const environment = project.environments[0]!;
+    const testCase = createTestCase(project, 'case-persistence-failure', environment.id);
+    const suite = {
+      ...createEmptySuiteAsset(project, 1),
+      id: 'suite-persistence-failure',
+      version: 1,
+      environmentId: environment.id,
+      caseReferences: [{ id: testCase.id, version: testCase.version, dependsOn: [] }],
+    };
+    project.testCases = [testCase];
+    project.suites = [suite];
+    const response = {
+      ...runSuiteResponse(project.id, testCase.id, environment.id),
+      runId: 'suite-persistence-failure-run',
+      detail: {
+        ...runSuiteResponse(project.id, testCase.id, environment.id).detail,
+        suite: {
+          ...runSuiteResponse(project.id, testCase.id, environment.id).detail.suite,
+          suiteId: suite.id,
+          suiteVersion: suite.version,
+        },
+      },
+    };
+    const persistenceFailure = new Error('history storage unavailable');
+    const saveState = vi.fn()
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(persistenceFailure);
+    const runSuite = vi.fn().mockResolvedValue(response);
+    const dependencies = createDependencies({
+      saveState,
+      getRuntimeBundle: vi.fn().mockReturnValue({
+        artifactManager: { isManagedArtifactPath: () => true, exportArtifact: vi.fn(), importManualEvidence: vi.fn() },
+        browserRuntime: { getState: () => ({ status: 'idle' }) },
+        runTestCase: vi.fn(),
+        runSuite,
+        cancelRun: vi.fn(),
+      }),
+      projectRepository: {
+        load: vi.fn(),
+        loadBound: vi.fn().mockResolvedValue(projectSnapshot(project, '8'.repeat(64), 'projectDirectory')),
+      },
+    });
+    const handlers = registerHandlers(dependencies);
+
+    await expect(handlers.get(runtimeIpcChannels.runSuite)!({}, {
+      runId: response.runId,
+      projectId: project.id,
+      suite: { id: suite.id, version: suite.version },
+    })).rejects.toBe(persistenceFailure);
+
+    expect(runSuite).toHaveBeenCalledTimes(1);
+    expect(saveState).toHaveBeenCalledTimes(2);
+    expect(saveState.mock.calls[0]![0].suiteRunRecords).toEqual([
+      expect.objectContaining({ id: response.runId, status: 'running' }),
+    ]);
+    expect(saveState.mock.calls[1]![0].suiteRunRecords).toEqual([
+      expect.objectContaining({ id: response.runId, status: 'passed' }),
+    ]);
+  });
+
+  it('generates a distinct parent Suite run ID when callers omit one', async () => {
+    const project = createEmptyProject(1);
+    const environment = project.environments[0]!;
+    const testCase = createTestCase(project, 'case-generated-run-id', environment.id);
+    const suite = {
+      ...createEmptySuiteAsset(project, 1),
+      id: 'suite-generated-run-id',
+      version: 1,
+      environmentId: environment.id,
+      caseReferences: [{ id: testCase.id, version: testCase.version, dependsOn: [] }],
+    };
+    project.testCases = [testCase];
+    project.suites = [suite];
+    const runSuite = vi.fn().mockImplementation(async (request) => ({
+      ...runSuiteResponse(project.id, testCase.id, environment.id),
+      runId: request.runId,
+      detail: {
+        ...runSuiteResponse(project.id, testCase.id, environment.id).detail,
+        suite: {
+          ...runSuiteResponse(project.id, testCase.id, environment.id).detail.suite,
+          suiteId: suite.id,
+          suiteVersion: suite.version,
+        },
+      },
+    }));
+    const dependencies = createDependencies({
+      getRuntimeBundle: vi.fn().mockReturnValue({
+        artifactManager: { isManagedArtifactPath: () => true, exportArtifact: vi.fn(), importManualEvidence: vi.fn() },
+        browserRuntime: { getState: () => ({ status: 'idle' }) },
+        runTestCase: vi.fn(),
+        runSuite,
+        cancelRun: vi.fn(),
+      }),
+      projectRepository: {
+        load: vi.fn(),
+        loadBound: vi.fn().mockResolvedValue(projectSnapshot(project, '9'.repeat(64), 'projectDirectory')),
+      },
+    });
+    const handlers = registerHandlers(dependencies);
+
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(0));
+    try {
+      await handlers.get(runtimeIpcChannels.runSuite)!({}, {
+        projectId: project.id,
+        suite: { id: suite.id, version: suite.version },
+      });
+      await handlers.get(runtimeIpcChannels.runSuite)!({}, {
+        projectId: project.id,
+        suite: { id: suite.id, version: suite.version },
+      });
+
+      const firstRunId = runSuite.mock.calls[0]![0].runId;
+      const secondRunId = runSuite.mock.calls[1]![0].runId;
+      expect(firstRunId).toEqual(expect.any(String));
+      expect(secondRunId).toEqual(expect.any(String));
+      expect(secondRunId).not.toBe(firstRunId);
+      expect(dependencies.saveState.mock.calls[0]![0].suiteRunRecords[0]!.id).toBe(firstRunId);
+      expect(dependencies.saveState.mock.calls[2]![0].suiteRunRecords[0]!.id).toBe(secondRunId);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('forwards a Suite run ID to the RuntimeBundle cancellation API', async () => {
@@ -885,14 +1357,36 @@ function loadRuntimeIpcHandlers(): {
   const channelModule = { exports: {} as { runtimeIpcChannels?: unknown } };
   new Function('module', 'exports', compile(path.join(ipcDirectory, 'runtime-ipc-channels.cts')))(channelModule, channelModule.exports);
 
-  const runHistoryModule = { exports: {} as { appendRunToStudioState?: unknown } };
+  const runHistoryModule = { exports: {} as { appendRunToStudioState?: unknown; appendSuiteRunToStudioState?: unknown } };
   new Function('module', 'exports', compile(path.join(process.cwd(), 'electron', 'runtime', 'run-history.ts')))(
     runHistoryModule,
     runHistoryModule.exports,
   );
 
+  const runProvenanceModule = { exports: {} as Record<string, unknown> };
+  const runProvenanceRequire = (moduleId: string) => {
+    if (moduleId === 'node:crypto') {
+      return crypto;
+    }
+    if (moduleId === '../../shared/studio.js') {
+      return { findTestCaseVersion };
+    }
+    if (moduleId === '../projectRepository.js') {
+      return { ProjectRepositoryError };
+    }
+    throw new Error(`Unexpected run provenance dependency: ${moduleId}`);
+  };
+  new Function('require', 'module', 'exports', compile(path.join(process.cwd(), 'electron', 'runtime', 'run-provenance.ts')))(
+    runProvenanceRequire,
+    runProvenanceModule,
+    runProvenanceModule.exports,
+  );
+
   const handlerModule = { exports: {} as Record<string, unknown> };
   const require = (moduleId: string) => {
+    if (moduleId === 'node:crypto') {
+      return crypto;
+    }
     if (moduleId === 'node:path') {
       return path;
     }
@@ -901,6 +1395,12 @@ function loadRuntimeIpcHandlers(): {
     }
     if (moduleId === '../runtime/run-history.js') {
       return runHistoryModule.exports;
+    }
+    if (moduleId === '../runtime/run-provenance.js') {
+      return runProvenanceModule.exports;
+    }
+    if (moduleId === '../runtime/run-cancellation.js') {
+      return { RunCancelledError, isRunCancelled };
     }
     if (moduleId === '../../shared/studio.js') {
       return { findSuiteAsset, findTestCaseVersion };
@@ -965,7 +1465,10 @@ function runSuiteResponse(projectId: string, testCaseId: string, environmentId: 
         }],
         issues: [],
       },
-      caseDetails: [runTestCaseResponse(projectId, testCaseId, environmentId).detail],
+      caseDetails: [{
+        ...runTestCaseResponse(projectId, testCaseId, environmentId).detail,
+        testCaseVersion: 1,
+      }],
     },
   };
 }

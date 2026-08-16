@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 
 import type {
   OpenDialogOptions,
@@ -12,16 +13,25 @@ import type {
   ProjectEnvironment,
   RunIntentIpcErrorResponse,
   RunDetail,
+  RunProvenance,
   RunSuiteResponse,
   RunSuiteIntent,
   RunTestCaseIntent,
   RunTestCaseResponse,
   RuntimeInfo,
+  SuiteAsset,
+  SuiteRunRecord,
   StudioState,
 } from '../../shared/studio.js';
 import { findSuiteAsset, findTestCaseVersion } from '../../shared/studio.js';
 import { ProjectRepositoryError, type ProjectRepository, type ProjectSnapshot } from '../projectRepository.js';
-import { appendRunToStudioState } from '../runtime/run-history.js';
+import {
+  createRunProvenance,
+  createSuiteRunProvenance,
+  type RunProvenanceRuntimeMetadata,
+} from '../runtime/run-provenance.js';
+import { isRunCancelled } from '../runtime/run-cancellation.js';
+import { appendRunToStudioState, appendSuiteRunToStudioState } from '../runtime/run-history.js';
 import type { ResolvedRunSuiteRequest, ResolvedRunTestCaseRequest, RuntimeBundle } from '../runtime/runtime-bundle.js';
 import channelModule from './runtime-ipc-channels.cjs';
 
@@ -90,7 +100,14 @@ export function registerRuntimeIpcHandlers(dependencies: RuntimeIpcDependencies)
       throw new RunIntentResolutionError('missingAssetVersion', `未找到 Case：${request.testCase.id}@${request.testCase.version}。`);
     }
     const environment = findEnvironment(projectSnapshot, testCase.environmentId, `Case ${testCase.id}@${testCase.version}`);
+    const historyEnvironment = structuredClone(environment);
     const state = await dependencies.loadState();
+    const provenance = createRunProvenance(
+      projectSnapshot,
+      testCase,
+      environment,
+      runtimeProvenanceMetadata(state, environment),
+    );
     const scriptTrust = await dependencies.getFixtureScriptTrustContext(request.projectId);
     const runtime = dependencies.getRuntimeBundle();
     const resolvedRequest: ResolvedRunTestCaseRequest = {
@@ -107,15 +124,16 @@ export function registerRuntimeIpcHandlers(dependencies: RuntimeIpcDependencies)
     };
     const result = await runtime.runTestCase(resolvedRequest);
     const latestState = await dependencies.loadState();
+    const persistedResult = withCaseProvenance(result, provenance);
     await dependencies.saveState(
       appendRunToStudioState(
         latestState,
-        result,
-        environment,
+        persistedResult,
+        historyEnvironment,
         runtime.browserRuntime.getState(),
       ),
     );
-    return result;
+    return persistedResult;
   }));
 
   dependencies.handle(runtimeIpcChannels.runSuite, (_event, request) => serializeRunIntentError(async () => {
@@ -125,11 +143,27 @@ export function registerRuntimeIpcHandlers(dependencies: RuntimeIpcDependencies)
       throw new RunIntentResolutionError('missingAssetVersion', `未找到 Suite：${request.suite.id}@${request.suite.version}。`);
     }
     const environment = findEnvironment(projectSnapshot, suite.environmentId, `Suite ${suite.id}@${suite.version}`);
+    const historyEnvironmentsById = new Map(
+      projectSnapshot.project.environments.map((candidate) => [candidate.id, structuredClone(candidate)]),
+    );
     const state = await dependencies.loadState();
+    const parentRunId = request.runId ?? createSuiteRunId();
+    const metadata = runtimeProvenanceMetadata(state, environment);
+    const parentRecord = createRunningSuiteRecord(
+      parentRunId,
+      createSuiteRunProvenance(projectSnapshot, suite, environment, metadata, parentRunId),
+    );
+    const memberProvenanceByTestCaseReference = createSuiteMemberProvenanceByTestCaseReference(
+      projectSnapshot,
+      suite,
+      environment,
+      metadata,
+      parentRunId,
+    );
     const scriptTrust = await dependencies.getFixtureScriptTrustContext(request.projectId);
     const runtime = dependencies.getRuntimeBundle();
     const resolvedRequest: ResolvedRunSuiteRequest = {
-      ...(request.runId ? { runId: request.runId } : {}),
+      runId: parentRunId,
       projectSnapshot,
       suite,
       environment,
@@ -140,20 +174,54 @@ export function registerRuntimeIpcHandlers(dependencies: RuntimeIpcDependencies)
       fixtureScriptTrustRecords: scriptTrust.records,
       ...(scriptTrust.projectDirectory ? { fixtureScriptTrustDirectory: scriptTrust.projectDirectory } : {}),
     };
-    const result = await runtime.runSuite(resolvedRequest);
-    const latestState = await dependencies.loadState();
-    if (!result.detail.caseDetails.length) {
-      return result;
+    await dependencies.saveState(
+      appendSuiteRunToStudioState(await dependencies.loadState(), parentRecord),
+    );
+    let result: RunSuiteResponse;
+    try {
+      result = await runtime.runSuite(resolvedRequest);
+    } catch (error) {
+      try {
+        await dependencies.saveState(
+          appendSuiteRunToStudioState(
+            await dependencies.loadState(),
+            terminalizeRejectedSuiteRunRecord(parentRecord, error),
+          ),
+        );
+      } catch {
+        // Terminal history is best-effort once execution has already failed.
+      }
+      throw error;
     }
-    const nextState = result.detail.caseDetails.reduce((current, detail) => {
-      const environment = projectSnapshot.project.environments.find((candidate) => candidate.id === detail.environmentId);
-      if (!environment) {
+    const persistedResult: RunSuiteResponse = {
+      ...result,
+      detail: {
+        ...result.detail,
+        caseDetails: result.detail.caseDetails.map((detail) => withCaseProvenance(
+          toCaseRunResponse(detail),
+          suiteCaseProvenance(memberProvenanceByTestCaseReference, detail),
+        ).detail),
+      },
+    };
+    const latestState = await dependencies.loadState();
+    const stateWithParent = appendSuiteRunToStudioState(
+      latestState,
+      completeSuiteRunRecord(parentRecord, persistedResult),
+    );
+    const nextState = persistedResult.detail.caseDetails.reduce((current, detail) => {
+      const historyEnvironment = historyEnvironmentsById.get(detail.environmentId);
+      if (!historyEnvironment) {
         return current;
       }
-      return appendRunToStudioState(current, toCaseRunResponse(detail), environment, runtime.browserRuntime.getState());
-    }, latestState);
+      return appendRunToStudioState(
+        current,
+        toCaseRunResponse(detail),
+        historyEnvironment,
+        runtime.browserRuntime.getState(),
+      );
+    }, stateWithParent);
     await dependencies.saveState(nextState);
-    return result;
+    return persistedResult;
   }));
 
   dependencies.handle(runtimeIpcChannels.cancelRun, async (_event, runId): Promise<boolean> => {
@@ -277,6 +345,160 @@ function toCaseRunResponse(detail: RunDetail): RunTestCaseResponse {
     title: detail.title,
     detail,
   };
+}
+
+function runtimeProvenanceMetadata(
+  state: StudioState,
+  environment: ProjectEnvironment,
+): RunProvenanceRuntimeMetadata {
+  return {
+    browserProfile: {
+      engine: environment.browser,
+      headless: environment.headless,
+    },
+    // RuntimeInfo has no version contract yet. These fixed local labels keep
+    // provenance stable without broadening IPC or exposing package metadata.
+    executor: {
+      appVersion: 'test-buddy-desktop',
+      runnerVersion: 'runtime-bundle-v1',
+    },
+    model: {
+      provider: 'midscene',
+      name: state.midsceneConfig.modelName,
+      endpoint: state.midsceneConfig.modelBaseUrl,
+      apiKey: state.midsceneConfig.modelApiKey,
+    },
+    createdAt: new Date().toISOString(),
+  };
+}
+
+function withCaseProvenance(
+  response: RunTestCaseResponse,
+  provenance: RunProvenance,
+): RunTestCaseResponse {
+  return {
+    ...response,
+    detail: {
+      ...response.detail,
+      provenance: deepFreeze(structuredClone(provenance)),
+    },
+  };
+}
+
+function createSuiteMemberProvenanceByTestCaseReference(
+  snapshot: ProjectSnapshot,
+  suite: SuiteAsset,
+  environment: ProjectEnvironment,
+  metadata: RunProvenanceRuntimeMetadata,
+  parentRunId: string,
+): ReadonlyMap<string, readonly RunProvenance[]> {
+  const members = new Map<string, RunProvenance[]>();
+  suite.caseReferences.forEach((reference) => {
+    const testCase = findTestCaseVersion(snapshot.project, reference);
+    if (!testCase) {
+      return;
+    }
+    const provenance = deepFreeze({
+      ...createRunProvenance(snapshot, testCase, environment, metadata),
+      suite: {
+        reference: { id: suite.id, version: suite.version },
+        parentRunId,
+      },
+    });
+    const key = versionedTestCaseKey(testCase.id, reference.version);
+    members.set(key, [...(members.get(key) ?? []), provenance]);
+  });
+  return members;
+}
+
+function suiteCaseProvenance(
+  memberProvenanceByTestCaseReference: ReadonlyMap<string, readonly RunProvenance[]>,
+  detail: RunDetail,
+): RunProvenance {
+  const version = detail.testCaseVersion;
+  if (typeof version !== 'number' || !Number.isSafeInteger(version) || version < 1) {
+    throw new Error(`Suite Case provenance is missing an exact version for ${detail.testCaseId}.`);
+  }
+  const matches = memberProvenanceByTestCaseReference.get(versionedTestCaseKey(detail.testCaseId, version)) ?? [];
+  if (matches.length !== 1) {
+    throw new Error(`Suite Case provenance is unavailable or ambiguous for ${detail.testCaseId}.`);
+  }
+  return matches[0]!;
+}
+
+function versionedTestCaseKey(id: string, version: number): string {
+  return JSON.stringify([id, version]);
+}
+
+function createRunningSuiteRecord(
+  id: string,
+  provenance: SuiteRunRecord['provenance'],
+): SuiteRunRecord {
+  return {
+    id,
+    provenance: deepFreeze(structuredClone(provenance)),
+    startedAt: provenance.createdAt,
+    status: 'running',
+    memberRunIds: [],
+    summary: emptySuiteSummary(),
+  };
+}
+
+function completeSuiteRunRecord(
+  record: SuiteRunRecord,
+  result: RunSuiteResponse,
+): SuiteRunRecord {
+  const suite = result.detail.suite;
+  return {
+    ...record,
+    startedAt: suite.startedAt,
+    finishedAt: suite.endedAt,
+    status: suite.status,
+    ...(suite.reason ? { reasonCode: suite.reason.code } : {}),
+    memberRunIds: result.detail.caseDetails.map((detail) => detail.id),
+    summary: suite.results.reduce((summary, member) => ({
+      ...summary,
+      [member.status]: summary[member.status] + 1,
+    }), emptySuiteSummary()),
+  };
+}
+
+function terminalizeRejectedSuiteRunRecord(
+  record: SuiteRunRecord,
+  error: unknown,
+): SuiteRunRecord {
+  const cancelled = isRunCancelled(error);
+  return {
+    ...record,
+    status: cancelled ? 'cancelled' : 'error',
+    reasonCode: cancelled ? 'userCancelled' : 'executorError',
+    finishedAt: new Date().toISOString(),
+    memberRunIds: [],
+    summary: emptySuiteSummary(),
+  };
+}
+
+function emptySuiteSummary(): SuiteRunRecord['summary'] {
+  return {
+    passed: 0,
+    failed: 0,
+    blocked: 0,
+    skipped: 0,
+    cancelled: 0,
+    error: 0,
+  };
+}
+
+function createSuiteRunId(): string {
+  return `suite-run-${randomUUID()}`;
+}
+
+function deepFreeze<Value>(value: Value): Value {
+  if (!value || typeof value !== 'object' || Object.isFrozen(value)) {
+    return value;
+  }
+  Object.values(value).forEach((child) => deepFreeze(child));
+  return Object.freeze(value);
 }
 
 export type { RuntimeIpcChannel };
