@@ -50,11 +50,22 @@ describe('ArtifactManager', () => {
   });
 
   it('renders an escaped project management report without local artifact paths', async () => {
-    const html = renderProjectRunReportHtml({
+    const report = {
       generatedAt: '2026-08-04T00:00:00.000Z',
       projectName: '订单 <回归>',
-      runStats: { running: 0, passed: 1, failed: 1, neutral: 0 },
-      coverageRisk: { total: 1, verified: 0, risks: [{ testCaseName: '支付 <确认>', groupName: '交易', environmentName: 'Staging', status: 'failed' }] },
+      runStats: { running: 0, passed: 1, failed: 1, blocked: 1, skipped: 1, cancelled: 1, error: 1 },
+      coverageRisk: {
+        total: 6,
+        verified: 0,
+        risks: [
+          { testCaseName: '从未 <执行>', groupName: '交易', environmentName: 'Staging', status: 'neverExecuted' as const },
+          { testCaseName: '失败 <确认>', groupName: '交易', environmentName: 'Staging', status: 'failed' as const },
+          { testCaseName: '错误 <确认>', groupName: '交易', environmentName: 'Staging', status: 'error' as const },
+          { testCaseName: '阻断 <确认>', groupName: '交易', environmentName: 'Staging', status: 'blocked' as const },
+          { testCaseName: '跳过 <确认>', groupName: '交易', environmentName: 'Staging', status: 'skipped' as const },
+          { testCaseName: '取消 <确认>', groupName: '交易', environmentName: 'Staging', status: 'cancelled' as const },
+        ],
+      },
       prdCoverage: {
         paths: 1,
         targets: {
@@ -63,13 +74,46 @@ describe('ArtifactManager', () => {
         },
       },
       problemRuns: [{
-        id: 'run-1', testCaseName: '支付 <确认>', environmentName: 'Staging', status: 'failed', startedAt: '2026-08-04T00:00:00.000Z', duration: '00:00:01', summary: '失败 <详情>', artifactLabels: ['报告 <HTML>'],
+        id: 'run-1', testCaseName: '支付 <确认>', environmentName: 'Staging', status: 'error' as const, startedAt: '2026-08-04T00:00:00.000Z', duration: '00:00:01', summary: '失败 <详情>', artifactLabels: ['报告 <HTML>'],
       }],
-    }, 'zh-CN');
+      nonExecutedRuns: [{
+        id: 'run-2', testCaseName: '准备 <夹具>', environmentName: 'Staging', status: 'blocked' as const, startedAt: '2026-08-04T00:01:00.000Z', duration: '00:00:01', summary: '夹具尚未准备。', reason: { code: 'fixturePreflight' as const, message: '夹具 <未准备>' }, artifactLabels: ['准备 <记录>'],
+      }],
+    };
+    const html = renderProjectRunReportHtml(report, 'zh-CN');
+    const englishHtml = renderProjectRunReportHtml(report, 'en-US');
 
     expect(html).toContain('订单 &lt;回归&gt;');
     expect(html).toContain('支付 &lt;确认&gt;');
     expect(html).toContain('报告 &lt;HTML&gt;');
+    expect(html).toContain('准备 &lt;夹具&gt;');
+    expect(html).toContain('fixturePreflight · 夹具 &lt;未准备&gt;');
+    expect(html).toContain('运行中');
+    expect(html).toContain('通过');
+    expect(html).toContain('失败');
+    expect(html).toContain('阻断');
+    expect(html).toContain('跳过');
+    expect(html).toContain('已取消');
+    expect(html).toContain('错误');
+    expect(html).toContain('从未执行');
+    expect(html).toContain('最近失败');
+    expect(html).toContain('最近错误');
+    expect(html).toContain('最近阻断');
+    expect(html).toContain('最近跳过');
+    expect(html).toContain('最近取消');
+    expect(englishHtml).toContain('Running');
+    expect(englishHtml).toContain('Passed');
+    expect(englishHtml).toContain('Failed');
+    expect(englishHtml).toContain('Blocked');
+    expect(englishHtml).toContain('Skipped');
+    expect(englishHtml).toContain('Cancelled');
+    expect(englishHtml).toContain('Error');
+    expect(englishHtml).toContain('Never executed');
+    expect(englishHtml).toContain('Last run failed');
+    expect(englishHtml).toContain('Last run errored');
+    expect(englishHtml).toContain('Last run blocked');
+    expect(englishHtml).toContain('Last run skipped');
+    expect(englishHtml).toContain('Last run cancelled');
     expect(html).not.toContain('artifact.path');
     expect(html).not.toContain('modelApiKey');
   });

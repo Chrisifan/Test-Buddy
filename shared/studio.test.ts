@@ -2366,6 +2366,28 @@ describe('studio state hydration', () => {
       ...createInitialStudioState(),
       projects: [project],
       runDetails: [legacyDetail] as unknown as studio.RunDetail[],
+      recentRuns: [
+        {
+          id: legacyDetail.id,
+          name: legacyDetail.title,
+          status: 'neutral',
+          duration: legacyDetail.duration,
+          summary: legacyDetail.summary,
+          projectId: legacyDetail.projectId,
+          testCaseId: legacyDetail.testCaseId,
+          environmentId: legacyDetail.environmentId,
+        },
+        {
+          id: 'run-legacy-unmatched',
+          name: 'Legacy unmatched run',
+          status: 'neutral',
+          duration: legacyDetail.duration,
+          summary: 'No detail is available for this summary.',
+          projectId: legacyDetail.projectId,
+          testCaseId: legacyDetail.testCaseId,
+          environmentId: legacyDetail.environmentId,
+        },
+      ] as unknown as studio.RunSummary[],
     });
 
     expect(hydrated.runDetails[0]).toMatchObject({
@@ -2375,6 +2397,308 @@ describe('studio state hydration', () => {
         message: legacyDetail.cancellation.message,
       },
     });
+    expect(hydrated.recentRuns[0]).toMatchObject({
+      status: 'cancelled',
+      reason: {
+        code: 'userCancelled',
+        message: legacyDetail.cancellation.message,
+      },
+    });
+    expect(hydrated.recentRuns[1]).toMatchObject({
+      status: 'blocked',
+      reason: { code: 'legacyAmbiguousNeutral' },
+    });
+  });
+
+  it('inherits any matching terminal detail status for legacy neutral summaries without requiring a reason', () => {
+    const sourceProject = createEmptyProject(1);
+    const testCase = createEmptyTestCase(1, sourceProject.groups[0]!.id, sourceProject.environments[0]!.id);
+    const project = { ...sourceProject, id: 'project-terminal-summary', testCases: [testCase] };
+    const createDetail = (id: string, status: studio.RunStatus) => ({
+      id,
+      projectId: project.id,
+      testCaseId: testCase.id,
+      environmentId: testCase.environmentId,
+      title: id,
+      status,
+      startedAt: '2026-08-16T00:00:00.000Z',
+      duration: '00:00:01',
+      summary: id,
+      logs: [],
+      steps: [],
+      artifacts: [],
+    });
+    const createSummary = (id: string) => ({
+      id,
+      name: id,
+      status: 'neutral',
+      duration: '00:00:01',
+      summary: id,
+      projectId: project.id,
+      testCaseId: testCase.id,
+      environmentId: testCase.environmentId,
+    });
+
+    const hydrated = hydrateStudioState({
+      ...createInitialStudioState(),
+      projects: [project],
+      runDetails: [
+        createDetail('run-detail-failed', 'failed'),
+        createDetail('run-detail-passed', 'passed'),
+        createDetail('run-detail-running', 'running'),
+      ] as studio.RunDetail[],
+      recentRuns: [
+        createSummary('run-detail-failed'),
+        createSummary('run-detail-passed'),
+        createSummary('run-detail-running'),
+      ] as unknown as studio.RunSummary[],
+    });
+
+    expect(hydrated.recentRuns).toEqual([
+      expect.objectContaining({ id: 'run-detail-failed', status: 'failed' }),
+      expect.objectContaining({ id: 'run-detail-passed', status: 'passed' }),
+      expect.objectContaining({ id: 'run-detail-running', status: 'blocked', reason: expect.objectContaining({ code: 'legacyAmbiguousNeutral' }) }),
+    ]);
+    expect(hydrated.recentRuns[0]).not.toHaveProperty('reason');
+    expect(hydrated.recentRuns[1]).not.toHaveProperty('reason');
+  });
+
+  it('inherits a globally unique terminal detail for a legacy neutral summary without stable scope fields', () => {
+    const detail: studio.RunDetail = {
+      id: 'run-global-legacy-match',
+      projectId: 'project-global-detail',
+      testCaseId: 'case-global-detail',
+      environmentId: 'environment-global-detail',
+      title: 'Globally unique detail',
+      status: 'error',
+      startedAt: '2026-08-16T00:00:00.000Z',
+      duration: '00:00:01',
+      summary: 'The executor failed.',
+      reason: { code: 'executorError', message: 'The executor stopped unexpectedly.' },
+      logs: [],
+      steps: [],
+      artifacts: [],
+    };
+    const summary = {
+      id: detail.id,
+      name: 'Legacy unscoped summary',
+      status: 'neutral',
+      duration: detail.duration,
+      summary: detail.summary,
+    };
+
+    const hydrated = hydrateStudioState({
+      ...createInitialStudioState(),
+      runDetails: [detail],
+      recentRuns: [summary] as unknown as studio.RunSummary[],
+    });
+
+    expect(hydrated.recentRuns[0]).toMatchObject({
+      status: 'error',
+      reason: detail.reason,
+    });
+  });
+
+  it('uses supplied case and environment scope to match a legacy neutral summary without a project', () => {
+    const matchingDetail: studio.RunDetail = {
+      id: 'run-partially-scoped-legacy-match',
+      projectId: 'project-matching',
+      testCaseId: 'case-matching',
+      environmentId: 'environment-matching',
+      title: 'Matching detail',
+      status: 'error',
+      startedAt: '2026-08-16T00:00:00.000Z',
+      duration: '00:00:01',
+      summary: 'The matching executor failed.',
+      reason: { code: 'executorError', message: 'The matching executor stopped unexpectedly.' },
+      logs: [],
+      steps: [],
+      artifacts: [],
+    };
+    const otherScopeDetail: studio.RunDetail = {
+      ...matchingDetail,
+      projectId: 'project-other',
+      testCaseId: 'case-other',
+      environmentId: 'environment-other',
+      title: 'Other detail',
+      status: 'failed',
+      reason: { code: 'actionFailed', message: 'The other action failed.' },
+    };
+    const summary = {
+      id: matchingDetail.id,
+      name: 'Legacy partially scoped summary',
+      status: 'neutral',
+      duration: matchingDetail.duration,
+      summary: matchingDetail.summary,
+      testCaseId: matchingDetail.testCaseId,
+      environmentId: matchingDetail.environmentId,
+    };
+
+    const hydrated = hydrateStudioState({
+      ...createInitialStudioState(),
+      runDetails: [matchingDetail, otherScopeDetail],
+      recentRuns: [summary] as unknown as studio.RunSummary[],
+    });
+
+    expect(hydrated.recentRuns[0]).toMatchObject({
+      status: matchingDetail.status,
+      reason: matchingDetail.reason,
+    });
+  });
+
+  it('keeps an unscoped legacy neutral summary with duplicate run identifiers blocked', () => {
+    const duplicateDetails: studio.RunDetail[] = [
+      {
+        id: 'run-duplicate-unscoped-legacy-match',
+        projectId: 'project-one',
+        testCaseId: 'case-one',
+        environmentId: 'environment-one',
+        title: 'First duplicate detail',
+        status: 'failed',
+        startedAt: '2026-08-16T00:00:00.000Z',
+        duration: '00:00:01',
+        summary: 'The first duplicate failed.',
+        reason: { code: 'actionFailed', message: 'The first action failed.' },
+        logs: [],
+        steps: [],
+        artifacts: [],
+      },
+      {
+        id: 'run-duplicate-unscoped-legacy-match',
+        projectId: 'project-two',
+        testCaseId: 'case-two',
+        environmentId: 'environment-two',
+        title: 'Second duplicate detail',
+        status: 'error',
+        startedAt: '2026-08-16T00:00:01.000Z',
+        duration: '00:00:01',
+        summary: 'The second duplicate errored.',
+        reason: { code: 'executorError', message: 'The second executor stopped unexpectedly.' },
+        logs: [],
+        steps: [],
+        artifacts: [],
+      },
+    ];
+    const summary = {
+      id: duplicateDetails[0]!.id,
+      name: 'Legacy unscoped duplicate summary',
+      status: 'neutral',
+      duration: '00:00:01',
+      summary: 'The matching detail is ambiguous.',
+    };
+
+    const hydrated = hydrateStudioState({
+      ...createInitialStudioState(),
+      runDetails: duplicateDetails,
+      recentRuns: [summary] as unknown as studio.RunSummary[],
+    });
+
+    expect(hydrated.recentRuns[0]).toMatchObject({
+      status: 'blocked',
+      reason: { code: 'legacyAmbiguousNeutral' },
+    });
+  });
+
+  it('keeps duplicate or cross-scope run identifiers from transferring hydration or report evidence', () => {
+    const sourceProject = createEmptyProject(1);
+    const summaryCase = createEmptyTestCase(1, sourceProject.groups[0]!.id, sourceProject.environments[0]!.id);
+    const otherCase = { ...summaryCase, id: 'case-other-scope' };
+    const project = {
+      ...sourceProject,
+      id: 'project-safe-association',
+      testCases: [summaryCase, otherCase],
+    };
+    const crossProjectDetail: studio.RunDetail = {
+      id: 'run-collision',
+      projectId: 'project-other',
+      testCaseId: summaryCase.id,
+      environmentId: summaryCase.environmentId,
+      title: 'Cross-project detail',
+      status: 'failed',
+      startedAt: '2026-08-16T00:00:00.000Z',
+      duration: '00:00:01',
+      summary: 'Cross-project failure.',
+      reason: { code: 'actionFailed', message: 'Cross-project detail must not match.' },
+      failureReason: 'Cross-project failure reason.',
+      logs: [],
+      steps: [],
+      artifacts: [{ id: 'artifact-cross', type: 'report', label: 'Cross-project artifact', path: '/secret/cross-project.html' }],
+    };
+    const wrongScopeDetail: studio.RunDetail = {
+      ...crossProjectDetail,
+      projectId: project.id,
+      testCaseId: otherCase.id,
+      title: 'Wrong Case detail',
+      status: 'error',
+      reason: { code: 'executorError', message: 'Wrong Case detail must not match.' },
+      failureReason: 'Wrong Case failure reason.',
+      artifacts: [{ id: 'artifact-wrong-case', type: 'report', label: 'Wrong Case artifact', path: '/secret/wrong-case.html' }],
+    };
+    const duplicateScopeDetail: studio.RunDetail = {
+      ...crossProjectDetail,
+      projectId: project.id,
+      title: 'Duplicate Case detail',
+      reason: { code: 'actionFailed', message: 'Duplicate Case detail must not match.' },
+      failureReason: 'Duplicate Case failure reason.',
+      artifacts: [{ id: 'artifact-duplicate-one', type: 'report', label: 'Duplicate Case artifact one', path: '/secret/duplicate-one.html' }],
+    };
+    const duplicateScopeDetailTwo: studio.RunDetail = {
+      ...duplicateScopeDetail,
+      status: 'error',
+      reason: { code: 'executorError', message: 'Second duplicate Case detail must not match.' },
+      failureReason: 'Second duplicate Case failure reason.',
+      artifacts: [{ id: 'artifact-duplicate-two', type: 'report', label: 'Duplicate Case artifact two', path: '/secret/duplicate-two.html' }],
+    };
+    const failureDetail: studio.RunDetail = {
+      ...wrongScopeDetail,
+      id: 'run-failure-collision',
+      status: 'failed',
+    };
+    const neutralSummary = {
+      id: 'run-collision',
+      name: 'Neutral collision summary',
+      status: 'neutral',
+      duration: '00:00:01',
+      summary: 'No unambiguous detail exists.',
+      projectId: project.id,
+      testCaseId: summaryCase.id,
+      environmentId: summaryCase.environmentId,
+    };
+    const failureSummary: studio.RunSummary = {
+      id: failureDetail.id,
+      name: 'Failed collision summary',
+      status: 'failed',
+      duration: '00:00:01',
+      summary: 'Failure summary without matching detail scope.',
+      projectId: project.id,
+      testCaseId: summaryCase.id,
+      environmentId: summaryCase.environmentId,
+    };
+
+    const hydrated = hydrateStudioState({
+      ...createInitialStudioState(),
+      projects: [project],
+      runDetails: [crossProjectDetail, wrongScopeDetail, duplicateScopeDetail, duplicateScopeDetailTwo, failureDetail],
+      recentRuns: [neutralSummary] as unknown as studio.RunSummary[],
+    });
+    const report = deriveProjectRunReport(
+      project,
+      [...hydrated.recentRuns, failureSummary],
+      hydrated.runDetails,
+      '2026-08-16T00:00:02.000Z',
+    );
+
+    expect(hydrated.recentRuns[0]).toMatchObject({
+      status: 'blocked',
+      reason: { code: 'legacyAmbiguousNeutral' },
+    });
+    expect(report.nonExecutedRuns[0]).toMatchObject({
+      id: neutralSummary.id,
+      reason: { code: 'legacyAmbiguousNeutral' },
+      artifactLabels: [],
+    });
+    expect(report.problemRuns[0]).toMatchObject({ id: failureSummary.id, artifactLabels: [] });
+    expect(report.problemRuns[0]).not.toHaveProperty('failureReason');
   });
 
   it('excludes neutral from new persisted run contracts', () => {
@@ -2478,11 +2802,13 @@ describe('studio state hydration', () => {
       error: 1,
     });
     expect(report.problemRuns.map((run) => run.status)).toEqual([
+      'error',
+      'failed',
+    ]);
+    expect(report.nonExecutedRuns.map((run) => run.status)).toEqual([
       'cancelled',
       'skipped',
       'blocked',
-      'error',
-      'failed',
     ]);
   });
 
@@ -2567,8 +2893,9 @@ describe('studio state hydration', () => {
       runStats: { failed: 11, blocked: 11 },
       prdCoverage: { paths: 1, targets: { recording: { deferred: 1 } } },
     });
-    expect(report.problemRuns).toHaveLength(20);
-    expect(report.problemRuns[0]).toMatchObject({ id: 'run-report-20', failureReason: '等待人工确认', artifactLabels: ['失败报告'] });
+    expect(report.problemRuns).toHaveLength(11);
+    expect(report.nonExecutedRuns).toHaveLength(11);
+    expect(report.nonExecutedRuns[0]).toMatchObject({ id: 'run-report-20', artifactLabels: ['失败报告'] });
     expect(JSON.stringify(report)).not.toContain('/secret/local-path');
     expect(JSON.stringify(report)).not.toContain('credentialRefs');
   });

@@ -2,7 +2,13 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 
-import type { ProjectReportLocale, ProjectRunReport, RunArtifact } from '../../shared/studio.js';
+import type {
+  ProjectReportLocale,
+  ProjectRunReport,
+  RunArtifact,
+  RunCoverageRiskStatus,
+  RunStatus,
+} from '../../shared/studio.js';
 
 export class ArtifactManager {
   private readonly artifactsDir: string;
@@ -150,6 +156,11 @@ export function renderProjectRunReportHtml(report: ProjectRunReport, locale: Pro
         .map((run) => `<article class="problem"><div><strong>${escapeXml(run.testCaseName)}</strong><span>${escapeXml(run.environmentName)} · ${escapeXml(labels.status[run.status])}</span></div><p>${escapeXml(run.failureReason || run.summary)}</p><small>${escapeXml(run.startedAt || labels.unknownTime)} · ${escapeXml(run.duration)}${run.artifactLabels.length ? ` · ${escapeXml(run.artifactLabels.join(' / '))}` : ''}</small></article>`)
         .join('')
     : `<p class="muted">${escapeXml(labels.noProblemRuns)}</p>`;
+  const nonExecutedRuns = report.nonExecutedRuns.length
+    ? report.nonExecutedRuns
+        .map((run) => `<article class="non-executed"><div><strong>${escapeXml(run.testCaseName)}</strong><span>${escapeXml(run.environmentName)} · ${escapeXml(labels.status[run.status])}</span></div><p>${escapeXml(run.reason ? `${run.reason.code} · ${run.reason.message}` : run.summary)}</p><small>${escapeXml(run.startedAt || labels.unknownTime)} · ${escapeXml(run.duration)}${run.artifactLabels.length ? ` · ${escapeXml(run.artifactLabels.join(' / '))}` : ''}</small></article>`)
+        .join('')
+    : `<p class="muted">${escapeXml(labels.noNonExecutedRuns)}</p>`;
 
   return `<!doctype html>
 <html lang="${locale}">
@@ -165,7 +176,7 @@ export function renderProjectRunReportHtml(report: ProjectRunReport, locale: Pro
     .meta, .muted, small { color: #667085; } .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; padding: 0; list-style: none; }
     .grid li { border: 1px solid #dfe5ee; padding: 14px; display: flex; justify-content: space-between; gap: 12px; } strong { color: #172033; }
     table { width: 100%; border-collapse: collapse; font-size: 13px; } th, td { padding: 10px; border-bottom: 1px solid #e8edf4; text-align: left; vertical-align: top; }
-    th { color: #667085; font-weight: 600; } .problem { border: 1px solid #dfe5ee; padding: 14px; margin-bottom: 10px; } .problem div { display: flex; justify-content: space-between; gap: 12px; } .problem div span { color: #667085; font-size: 13px; }
+    th { color: #667085; font-weight: 600; } .problem, .non-executed { border: 1px solid #dfe5ee; padding: 14px; margin-bottom: 10px; } .problem div, .non-executed div { display: flex; justify-content: space-between; gap: 12px; } .problem div span, .non-executed div span { color: #667085; font-size: 13px; }
   </style>
 </head>
 <body><main>
@@ -177,26 +188,52 @@ export function renderProjectRunReportHtml(report: ProjectRunReport, locale: Pro
   <h2>${escapeXml(labels.prdCoverage)}</h2><p class="meta">${escapeXml(labels.prdPaths)} ${report.prdCoverage.paths}</p>
   <table><thead><tr><th>${escapeXml(labels.targetLabel)}</th><th>${escapeXml(labels.triage.pending)}</th><th>${escapeXml(labels.triage.deferred)}</th><th>${escapeXml(labels.triage.ignored)}</th><th>${escapeXml(labels.triage.resolved)}</th></tr></thead><tbody>${triageRows}</tbody></table>
   <h2>${escapeXml(labels.problemRuns)}</h2>${problemRuns}
+  <h2>${escapeXml(labels.nonExecutedRuns)}</h2>${nonExecutedRuns}
 </main></body></html>`;
 }
 
-function projectReportLabels(locale: ProjectReportLocale) {
+function projectReportLabels(locale: ProjectReportLocale): ProjectReportLabels {
   if (locale === 'en-US') {
     return {
-      title: 'TestBuddy Project Report', generatedAt: 'Generated at', runSummary: 'Run summary', coverageRisk: 'Coverage risk', verified: 'Verified', testCase: 'Test case', group: 'Group', environment: 'Environment', riskStatus: 'Risk', noRisks: 'No coverage risks.', prdCoverage: 'PRD coverage governance', prdPaths: 'Requirement paths', targetLabel: 'Target', problemRuns: 'Recent failed or pending runs', noProblemRuns: 'No failed or pending runs.', unknownTime: 'Unknown time',
-      status: { running: 'Running', passed: 'Passed', failed: 'Failed', neutral: 'Pending' },
-      risk: { neverExecuted: 'Never executed', failed: 'Last run failed', neutral: 'Last run pending' },
+      title: 'TestBuddy Project Report', generatedAt: 'Generated at', runSummary: 'Run summary', coverageRisk: 'Coverage risk', verified: 'Verified', testCase: 'Test case', group: 'Group', environment: 'Environment', riskStatus: 'Risk', noRisks: 'No coverage risks.', prdCoverage: 'PRD coverage governance', prdPaths: 'Requirement paths', targetLabel: 'Target', problemRuns: 'Recent failed runs', noProblemRuns: 'No failed runs.', nonExecutedRuns: 'Recent non-executed runs', noNonExecutedRuns: 'No non-executed runs.', unknownTime: 'Unknown time',
+      status: { running: 'Running', passed: 'Passed', failed: 'Failed', blocked: 'Blocked', skipped: 'Skipped', cancelled: 'Cancelled', error: 'Error' },
+      risk: { neverExecuted: 'Never executed', failed: 'Last run failed', error: 'Last run errored', blocked: 'Last run blocked', skipped: 'Last run skipped', cancelled: 'Last run cancelled' },
       target: { case: 'Test case', recording: 'Recording' },
       triage: { pending: 'Pending', deferred: 'Deferred', ignored: 'Ignored', resolved: 'Resolved' },
     };
   }
   return {
-    title: 'TestBuddy 项目报告', generatedAt: '生成时间', runSummary: '运行汇总', coverageRisk: '覆盖风险', verified: '已验证', testCase: '用例', group: '分组', environment: '环境', riskStatus: '风险', noRisks: '当前没有覆盖风险。', prdCoverage: 'PRD 覆盖治理', prdPaths: '需求路径', targetLabel: '目标', problemRuns: '最近失败或等待运行', noProblemRuns: '当前没有失败或等待运行。', unknownTime: '未知时间',
-    status: { running: '运行中', passed: '通过', failed: '失败', neutral: '等待' },
-    risk: { neverExecuted: '从未执行', failed: '最近失败', neutral: '最近等待' },
+    title: 'TestBuddy 项目报告', generatedAt: '生成时间', runSummary: '运行汇总', coverageRisk: '覆盖风险', verified: '已验证', testCase: '用例', group: '分组', environment: '环境', riskStatus: '风险', noRisks: '当前没有覆盖风险。', prdCoverage: 'PRD 覆盖治理', prdPaths: '需求路径', targetLabel: '目标', problemRuns: '最近失败运行', noProblemRuns: '当前没有失败运行。', nonExecutedRuns: '最近未执行运行', noNonExecutedRuns: '当前没有未执行运行。', unknownTime: '未知时间',
+    status: { running: '运行中', passed: '通过', failed: '失败', blocked: '阻断', skipped: '跳过', cancelled: '已取消', error: '错误' },
+    risk: { neverExecuted: '从未执行', failed: '最近失败', error: '最近错误', blocked: '最近阻断', skipped: '最近跳过', cancelled: '最近取消' },
     target: { case: '用例', recording: '录制' },
     triage: { pending: '待处理', deferred: '延后', ignored: '忽略', resolved: '已解决' },
   };
+}
+
+interface ProjectReportLabels {
+  title: string;
+  generatedAt: string;
+  runSummary: string;
+  coverageRisk: string;
+  verified: string;
+  testCase: string;
+  group: string;
+  environment: string;
+  riskStatus: string;
+  noRisks: string;
+  prdCoverage: string;
+  prdPaths: string;
+  targetLabel: string;
+  problemRuns: string;
+  noProblemRuns: string;
+  nonExecutedRuns: string;
+  noNonExecutedRuns: string;
+  unknownTime: string;
+  status: Record<RunStatus, string>;
+  risk: Record<RunCoverageRiskStatus, string>;
+  target: Record<'case' | 'recording', string>;
+  triage: Record<'pending' | 'deferred' | 'ignored' | 'resolved', string>;
 }
 
 function getSafeExtension(sourceName: string): string {

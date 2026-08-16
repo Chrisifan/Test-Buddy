@@ -1255,7 +1255,9 @@ export interface RunCancellation {
   cancelledAt: string;
 }
 
-export type RunProblemStatus = Exclude<RunStatus, 'running' | 'passed'>;
+export type RunFailureStatus = Extract<RunStatus, 'failed' | 'error'>;
+export type RunNonExecutedStatus = Extract<RunStatus, 'blocked' | 'skipped' | 'cancelled'>;
+export type RunProblemStatus = RunFailureStatus | RunNonExecutedStatus;
 export type RunCoverageRiskStatus = 'neverExecuted' | RunProblemStatus;
 
 export interface RunCoverageRisk {
@@ -1278,11 +1280,23 @@ export interface ProjectRunReportProblemRun {
   id: string;
   testCaseName: string;
   environmentName: string;
-  status: RunProblemStatus;
+  status: RunFailureStatus;
   startedAt?: string;
   duration: string;
   summary: string;
   failureReason?: string;
+  artifactLabels: string[];
+}
+
+export interface ProjectRunReportNonExecutedRun {
+  id: string;
+  testCaseName: string;
+  environmentName: string;
+  status: RunNonExecutedStatus;
+  startedAt?: string;
+  duration: string;
+  summary: string;
+  reason?: RunReason;
   artifactLabels: string[];
 }
 
@@ -1308,6 +1322,7 @@ export interface ProjectRunReport {
     targets: Record<PrdCoverageTarget, Record<PrdCoverageTriageStatus, number>>;
   };
   problemRuns: ProjectRunReportProblemRun[];
+  nonExecutedRuns: ProjectRunReportNonExecutedRun[];
 }
 
 export interface BrowserSessionState {
@@ -2331,6 +2346,16 @@ export function hydrateStudioState(
     {} as AgentModelConfig,
   );
   const rawStartupGuide: Partial<StartupGuideState> = rawState.startupGuide ?? {};
+  const runDetails = Array.isArray(rawState.runDetails)
+    ? rawState.runDetails
+      .filter((run) => run.projectId !== builtInMockProjectId)
+      .map(migrateLegacyRunDetail)
+    : initialState.runDetails;
+  const recentRuns = Array.isArray(rawState.recentRuns)
+    ? rawState.recentRuns
+      .filter((run) => run.projectId !== builtInMockProjectId)
+      .map((run) => migrateLegacyRunSummary(run, findUnambiguousMatchingRunDetail(run, runDetails)))
+    : initialState.recentRuns;
 
   return {
     selectedProjectId,
@@ -2339,16 +2364,8 @@ export function hydrateStudioState(
     selectedRecordingId,
     projects: migratedProjects,
     projectAssetBindings,
-    runDetails: Array.isArray(rawState.runDetails)
-      ? rawState.runDetails
-        .filter((run) => run.projectId !== builtInMockProjectId)
-        .map(migrateLegacyRunDetail)
-      : initialState.runDetails,
-    recentRuns: Array.isArray(rawState.recentRuns)
-      ? rawState.recentRuns
-        .filter((run) => run.projectId !== builtInMockProjectId)
-        .map(migrateLegacyRunSummary)
-      : initialState.recentRuns,
+    runDetails,
+    recentRuns,
     chatEntries: Array.isArray(rawState.chatEntries)
       ? rawState.chatEntries.filter((entry) => !builtInMockChatEntryIds.has(entry.id))
       : initialState.chatEntries,
@@ -2390,15 +2407,40 @@ function migrateLegacyRunDetail(run: RunDetail): RunDetail {
   };
 }
 
-function migrateLegacyRunSummary(run: RunSummary): RunSummary {
+function migrateLegacyRunSummary(run: RunSummary, detail?: RunDetail): RunSummary {
   if ((run as { status?: unknown }).status !== 'neutral') {
     return run;
+  }
+
+  if (detail && isTerminalRunStatus(detail.status)) {
+    return {
+      ...run,
+      status: detail.status,
+      ...(detail.reason ? { reason: detail.reason } : {}),
+    };
   }
 
   return {
     ...run,
     ...classifyLegacyNeutralRun(),
   };
+}
+
+function findUnambiguousMatchingRunDetail(summary: RunSummary, details: RunDetail[]): RunDetail | undefined {
+  const sameId = details.filter((detail) => detail.id === summary.id);
+  const hasProjectId = summary.projectId !== undefined;
+  const hasTestCaseId = summary.testCaseId !== undefined;
+  const hasEnvironmentId = summary.environmentId !== undefined;
+  if (!hasProjectId && !hasTestCaseId && !hasEnvironmentId) {
+    return sameId.length === 1 ? sameId[0] : undefined;
+  }
+
+  const matches = sameId.filter((detail) =>
+    (!hasProjectId || detail.projectId === summary.projectId) &&
+    (!hasTestCaseId || detail.testCaseId === summary.testCaseId) &&
+    (!hasEnvironmentId || detail.environmentId === summary.environmentId),
+  );
+  return matches.length === 1 ? matches[0] : undefined;
 }
 
 function classifyLegacyNeutralRun(cancellationValue?: unknown): Pick<RunDetail, 'status' | 'reason'> {
@@ -3626,21 +3668,19 @@ export function deriveProjectRunReport(
     }
   });
 
-  const detailsById = new Map(
-    runDetails.filter((detail) => detail.projectId === project.id).map((detail) => [detail.id, detail]),
-  );
+  const projectRunDetails = runDetails.filter((detail) => detail.projectId === project.id);
   const testCaseNames = new Map(project.testCases.map((testCase) => [testCase.id, testCase.name]));
   const environmentNames = new Map(project.environments.map((environment) => [environment.id, environment.name]));
   const groupNames = new Map(project.groups.map((group) => [group.id, group.name]));
   const problemRuns = projectRuns
     .filter(
-      (entry): entry is { run: RunSummary & { status: RunProblemStatus }; index: number } =>
-        isRunProblemStatus(entry.run.status),
+      (entry): entry is { run: RunSummary & { status: RunFailureStatus }; index: number } =>
+        isRunFailureStatus(entry.run.status),
     )
     .sort((left, right) => compareRunHistoryEntriesNewest(left, right))
     .slice(0, 20)
     .map(({ run }) => {
-      const detail = detailsById.get(run.id);
+      const detail = findUnambiguousMatchingRunDetail(run, projectRunDetails);
       const artifactLabels = Array.from(new Set([
         ...(detail?.artifacts ?? []).map((artifact) => artifact.label),
         ...(detail?.agentRun?.artifacts ?? []).map((artifact) => artifact.label),
@@ -3655,6 +3695,33 @@ export function deriveProjectRunReport(
         duration: run.duration,
         summary: run.summary,
         ...(detail?.failureReason ? { failureReason: detail.failureReason } : {}),
+        artifactLabels,
+      };
+    });
+  const nonExecutedRuns = projectRuns
+    .filter(
+      (entry): entry is { run: RunSummary & { status: RunNonExecutedStatus }; index: number } =>
+        isRunNonExecutedStatus(entry.run.status),
+    )
+    .sort((left, right) => compareRunHistoryEntriesNewest(left, right))
+    .slice(0, 20)
+    .map(({ run }) => {
+      const detail = findUnambiguousMatchingRunDetail(run, projectRunDetails);
+      const artifactLabels = Array.from(new Set([
+        ...(detail?.artifacts ?? []).map((artifact) => artifact.label),
+        ...(detail?.agentRun?.artifacts ?? []).map((artifact) => artifact.label),
+        ...(detail?.agentRuns ?? []).flatMap((agentRun) => agentRun.artifacts.map((artifact) => artifact.label)),
+      ].filter(Boolean)));
+      const reason = detail?.reason ?? run.reason;
+      return {
+        id: run.id,
+        testCaseName: testCaseNames.get(run.testCaseId ?? '') ?? run.name,
+        environmentName: environmentNames.get(run.environmentId ?? '') ?? run.environmentName ?? '',
+        status: run.status,
+        ...(run.startedAt ? { startedAt: run.startedAt } : {}),
+        duration: run.duration,
+        summary: run.summary,
+        ...(reason ? { reason } : {}),
         artifactLabels,
       };
     });
@@ -3701,6 +3768,7 @@ export function deriveProjectRunReport(
       targets,
     },
     problemRuns,
+    nonExecutedRuns,
   };
 }
 
@@ -3729,6 +3797,14 @@ function isRunProblemStatus(value: unknown): value is RunProblemStatus {
     value === 'skipped' ||
     value === 'cancelled' ||
     value === 'error';
+}
+
+function isRunFailureStatus(value: unknown): value is RunFailureStatus {
+  return value === 'failed' || value === 'error';
+}
+
+function isRunNonExecutedStatus(value: unknown): value is RunNonExecutedStatus {
+  return value === 'blocked' || value === 'skipped' || value === 'cancelled';
 }
 
 function compareRunHistoryEntriesNewest(
