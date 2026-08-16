@@ -1,5 +1,7 @@
 import type {
   RunIntentIpcErrorResponse,
+  HistoricalRerunExecutionResult,
+  HistoricalRerunPlan,
   RunSuiteIntent,
   RunSuiteResponse,
   RunTestCaseIntent,
@@ -63,6 +65,8 @@ contextBridge.exposeInMainWorld('desktopApi', {
   cancelRun: (runId: string) => ipcRenderer.invoke(runtimeIpcChannels.cancelRun, runId),
   exportProjectReport: (request: unknown) => ipcRenderer.invoke('runtime:export-project-report', request),
   loadRunDetail: (runId: string) => ipcRenderer.invoke(runtimeIpcChannels.loadRunDetail, runId),
+  planHistoricalRerun: (runId: string) => ipcRenderer.invoke(runtimeIpcChannels.planHistoricalRerun, runId) as Promise<HistoricalRerunPlan>,
+  runHistoricalRerun: (runId: string) => ipcRenderer.invoke(runtimeIpcChannels.runHistoricalRerun, runId) as Promise<HistoricalRerunExecutionResult>,
   openArtifact: (artifactPath: string) => ipcRenderer.invoke(runtimeIpcChannels.openArtifact, artifactPath),
   exportArtifact: (artifactPath: string) => ipcRenderer.invoke(runtimeIpcChannels.exportArtifact, artifactPath),
   attachManualEvidence: () => ipcRenderer.invoke(runtimeIpcChannels.attachManualEvidence),

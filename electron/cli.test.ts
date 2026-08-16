@@ -5,7 +5,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createEmptyProject, createInitialStudioState } from '../shared/studio.js';
-import { executeCliCommand, main, parseCliArguments, renderJUnitReport, type CliRunSummary } from './cli.js';
+import { cliExitCode, executeCliCommand, main, parseCliArguments, renderJUnitReport, type CliRunSummary } from './cli.js';
 import { ProjectAssetStore } from './projectAssetStore.js';
 import * as runtimeBundle from './runtime/runtime-bundle.js';
 import { StudioStore } from './studioStore.js';
@@ -87,7 +87,7 @@ describe('TestBuddy CLI', () => {
     expect(() => parseCliArguments(['inspect'])).toThrow('未知命令');
   });
 
-  it('renders passed, failed, and incomplete results as portable JUnit XML', () => {
+  it('renders each explicit terminal outcome as portable JUnit XML', () => {
     const summary: CliRunSummary = {
       command: 'run',
       status: 'failed',
@@ -119,11 +119,38 @@ describe('TestBuddy CLI', () => {
         },
         {
           projectId: 'project-web',
-          testCaseId: 'case-neutral',
+          testCaseId: 'case-error',
           environmentId: 'env-ci',
-          title: '人工检查',
-          status: 'neutral',
-          summary: '等待人工结论',
+          title: '执行器异常',
+          status: 'error',
+          summary: '执行器崩溃',
+          artifacts: [],
+        },
+        {
+          projectId: 'project-web',
+          testCaseId: 'case-blocked',
+          environmentId: 'env-ci',
+          title: '缺少固定资产',
+          status: 'blocked',
+          summary: '缺少历史版本',
+          artifacts: [],
+        },
+        {
+          projectId: 'project-web',
+          testCaseId: 'case-skipped',
+          environmentId: 'env-ci',
+          title: '依赖失败',
+          status: 'skipped',
+          summary: '上游失败',
+          artifacts: [],
+        },
+        {
+          projectId: 'project-web',
+          testCaseId: 'case-cancelled',
+          environmentId: 'env-ci',
+          title: '用户取消',
+          status: 'cancelled',
+          summary: '已取消',
           artifacts: [],
         },
       ],
@@ -131,10 +158,89 @@ describe('TestBuddy CLI', () => {
 
     const report = renderJUnitReport(summary);
 
-    expect(report).toContain('tests="3" failures="1" errors="1" time="3.000"');
+    expect(report).toContain('tests="6" failures="1" errors="1" skipped="3" time="3.000"');
     expect(report).toContain('<failure message="期望 &quot;成功&quot;，实际 &lt;错误&gt;">');
-    expect(report).toContain('<error type="incomplete" message="等待人工结论">');
+    expect(report).toContain('<error message="执行器崩溃">');
+    expect(report).toContain('<skipped message="缺少历史版本"/>');
+    expect(report).toContain('<skipped message="上游失败"/>');
+    expect(report).toContain('<skipped message="已取消"/>');
     expect(report).toContain('name="支付 &lt;确认&gt;" time="2.000"');
+  });
+
+  it('prefers a structured reason message over legacy JUnit failure fields', () => {
+    const report = renderJUnitReport({
+      command: 'run',
+      status: 'failed',
+      dataDir: '/workspace/testbuddy',
+      startedAt: '2026-08-03T00:00:00.000Z',
+      endedAt: '2026-08-03T00:00:01.000Z',
+      reports: { junit: '/workspace/testbuddy/report.xml' },
+      results: [{
+        projectId: 'project-web',
+        testCaseId: 'case-failed',
+        environmentId: 'env-ci',
+        title: 'Structured reason wins',
+        status: 'failed',
+        summary: 'Summary must not be used.',
+        failureReason: 'Legacy failure reason must not be used.',
+        reason: { code: 'assertionFailed', message: 'Structured reason must be used.' },
+        artifacts: [],
+      }],
+    });
+
+    expect(report).toContain('<failure message="Structured reason must be used.">Structured reason must be used.</failure>');
+    expect(report).not.toContain('Legacy failure reason must not be used.');
+  });
+
+  it('removes XML-invalid controls while preserving permitted whitespace and escaped JUnit text', () => {
+    const invalidControls = '\u0000\u0001\u0002\u0003\u0004\u0005\u0006\u0007\u0008\u000B\u000C\u000E\u000F\u0010\u0011\u0012\u0013\u0014\u0015\u0016\u0017\u0018\u0019\u001A\u001B\u001C\u001D\u001E\u001F\uD800';
+    const report = renderJUnitReport({
+      command: 'run',
+      status: 'failed',
+      dataDir: '/workspace/testbuddy',
+      startedAt: '2026-08-03T00:00:00.000Z',
+      endedAt: '2026-08-03T00:00:01.000Z',
+      reports: { junit: '/workspace/testbuddy/report.xml' },
+      results: [{
+        projectId: 'project-web',
+        testCaseId: 'case-invalid-xml',
+        environmentId: 'env-ci',
+        title: `Case${invalidControls}\tTitle\nLine\rReturn <&>"'`,
+        status: 'failed',
+        summary: `Summary${invalidControls}\tDetail\nNext\rReturn <&>"'`,
+        artifacts: [],
+      }],
+    });
+
+    expect(report).not.toMatch(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\uD800-\uDFFF]/);
+    expect(report).toContain('name="Case\tTitle\nLine\rReturn &lt;&amp;&gt;&quot;&apos;"');
+    expect(report).toContain('<system-out>Summary\tDetail\nNext\rReturn &lt;&amp;&gt;&quot;&apos;</system-out>');
+  });
+
+  it('returns a nonzero CLI exit code only for failed and error results', () => {
+    const summary = {
+      command: 'run' as const,
+      status: 'passed' as const,
+      dataDir: '/workspace/testbuddy',
+      startedAt: '2026-08-03T00:00:00.000Z',
+      endedAt: '2026-08-03T00:00:00.000Z',
+      reports: { junit: '/workspace/testbuddy/report.xml' },
+      results: [{
+        projectId: 'project-web',
+        testCaseId: 'case-blocked',
+        environmentId: 'env-ci',
+        title: 'Blocked Case',
+        status: 'blocked' as const,
+        summary: 'Missing historical asset',
+        artifacts: [],
+      }],
+    } satisfies CliRunSummary;
+
+    expect(cliExitCode(summary)).toBe(0);
+    expect(cliExitCode({ ...summary, results: [{ ...summary.results[0]!, status: 'skipped' }] })).toBe(0);
+    expect(cliExitCode({ ...summary, results: [{ ...summary.results[0]!, status: 'cancelled' }] })).toBe(0);
+    expect(cliExitCode({ ...summary, results: [{ ...summary.results[0]!, status: 'failed' }] })).toBe(1);
+    expect(cliExitCode({ ...summary, results: [{ ...summary.results[0]!, status: 'error' }] })).toBe(1);
   });
 
   it('creates CI reports from an explicit data directory without starting Electron', async () => {
@@ -168,11 +274,98 @@ describe('TestBuddy CLI', () => {
       caseReferences: [{ id: 'case-agent', version: 1 }],
     });
 
-    expect(summary.status).toBe('failed');
+    expect(summary.status).toBe('passed');
     expect(summary.results).toEqual([
-      expect.objectContaining({ testCaseId: 'case-agent', status: 'failed', failureReason: 'Midscene 模型未配置。' }),
+      expect.objectContaining({ testCaseId: 'case-agent', status: 'blocked', failureReason: 'Midscene 模型未配置。' }),
     ]);
-    await expect(fs.readFile(summary.reports.junit, 'utf8')).resolves.toContain('Midscene 模型未配置。');
+    await expect(fs.readFile(summary.reports.junit, 'utf8')).resolves.toContain('该 Agent 用例需要已配置的 Midscene 模型，当前数据目录未包含可用模型配置。');
+  });
+
+  it('adds status-matched fallback reasons to direct non-passed Case output', async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'testbuddy-cli-fallback-reasons-'));
+    temporaryDirectories.push(directory);
+    const project = createEmptyProject(1);
+    const environment = project.environments[0]!;
+    const outcomes = [
+      { status: 'failed', code: 'actionFailed' },
+      { status: 'blocked', code: 'unsupportedAction' },
+      { status: 'skipped', code: 'dependencyFailed' },
+      { status: 'cancelled', code: 'userCancelled' },
+      { status: 'error', code: 'executorError' },
+    ] as const;
+    project.testCases = outcomes.map((outcome) => ({
+      id: `case-${outcome.status}`,
+      version: 1,
+      kind: 'scenario' as const,
+      name: `${outcome.status} Case`,
+      category: '',
+      lastEdited: '',
+      url: environment.url,
+      notes: '',
+      groupId: project.groups[0]!.id,
+      environmentId: environment.id,
+      source: 'manual' as const,
+      steps: [{ id: `step-${outcome.status}`, type: 'manual' as const, title: 'Run', body: 'Run' }],
+    }));
+    const state = createInitialStudioState();
+    state.projects = [project];
+    await new StudioStore(directory).save(state);
+    const runTestCase = vi.fn(async (request: { testCase: { id: string; name: string } }) => {
+      const outcome = outcomes.find((candidate) => request.testCase.id === `case-${candidate.status}`);
+      if (!outcome) throw new Error('Unexpected Case.');
+      return {
+        runId: `run-${outcome.status}`,
+        title: request.testCase.name,
+        detail: {
+          id: `run-${outcome.status}`,
+          projectId: project.id,
+          testCaseId: request.testCase.id,
+          environmentId: environment.id,
+          title: request.testCase.name,
+          status: outcome.status,
+          startedAt: '2026-08-14T00:00:00.000Z',
+          endedAt: '2026-08-14T00:00:01.000Z',
+          duration: '00:00:01',
+          summary: `${outcome.status} summary`,
+          ...(outcome.status === 'failed' ? { failureReason: 'Failure details' } : {}),
+          logs: [],
+          steps: [],
+          artifacts: [],
+        },
+      };
+    });
+    vi.spyOn(runtimeBundle, 'createRuntimeBundle').mockReturnValue({
+      ensureReady: vi.fn(),
+      runTestCase,
+      browserRuntime: { getState: vi.fn(() => state.browserSession) },
+      close: vi.fn(),
+    } as never);
+
+    const summary = await executeCliCommand({
+      kind: 'run',
+      dataDir: directory,
+      projectId: project.id,
+      caseReferences: outcomes.map((outcome) => ({ id: `case-${outcome.status}`, version: 1 })),
+    });
+
+    expect(summary.results.map((result) => ({
+      status: result.status,
+      reason: result.reason,
+    }))).toEqual(outcomes.map((outcome) => ({
+      status: outcome.status,
+      reason: { code: outcome.code, message: `${outcome.status} summary` },
+    })));
+    expect(summary.results.find((result) => result.status === 'failed')).toMatchObject({
+      failureReason: 'Failure details',
+    });
+    const persisted = await new StudioStore(directory).loadExisting();
+    expect(persisted.runDetails).toEqual(expect.arrayContaining(outcomes.map((outcome) =>
+      expect.objectContaining({
+        testCaseId: `case-${outcome.status}`,
+        status: outcome.status,
+        reason: { code: outcome.code, message: `${outcome.status} summary` },
+      }),
+    )));
   });
 
   it('appends a Case run to the latest concurrent Studio state', async () => {
@@ -340,6 +533,8 @@ describe('TestBuddy CLI', () => {
     }];
     const state = createInitialStudioState();
     state.projects = [project];
+    state.midsceneConfig.modelApiKey = 'suite-cli-api-key-must-not-leak';
+    state.midsceneConfig.modelBaseUrl = 'https://suite-cli-user:suite-cli-password@models.example.test/v1?tenant=secret';
     await new StudioStore(directory).save(state);
 
     const summary = await executeCliCommand({
@@ -350,17 +545,79 @@ describe('TestBuddy CLI', () => {
       suiteReference: { id: 'suite-release', version: 1 },
     });
 
-    expect(summary.status).toBe('failed');
-    expect(summary.suite).toMatchObject({ id: 'suite-release', version: 1, status: 'failed', effectiveConcurrency: 1, issues: [] });
+    expect(summary.status).toBe('passed');
+    expect(summary.suite).toMatchObject({ id: 'suite-release', version: 1, status: 'blocked', effectiveConcurrency: 1, issues: [] });
+    expect(summary.suite).toMatchObject({
+      provenance: {
+        projectId: project.id,
+        projectRevision: expect.any(String),
+        source: 'legacyStudioStore',
+        reproducibility: 'legacy',
+        suite: {
+          reference: { id: 'suite-release', version: 1 },
+          parentRunId: expect.stringMatching(/^cli-suite-run-/u),
+        },
+        environment: { id: environment.id, name: environment.name },
+        model: { hasKey: true },
+      },
+    });
+    expect(JSON.stringify(summary)).not.toContain('suite-cli-api-key-must-not-leak');
+    expect(JSON.stringify(summary)).not.toContain('https://suite-cli-user:suite-cli-password@models.example.test/v1?tenant=secret');
     expect(summary.results).toEqual([
-      expect.objectContaining({ testCaseId: 'case-agent', status: 'failed', attempts: 1, flaky: false }),
+      expect.objectContaining({ testCaseId: 'case-agent', status: 'blocked', attempts: 1, flaky: false }),
     ]);
     expect(() => parseCliArguments([
       'run', '--data-dir', directory, '--project-id', project.id, '--suite-id', 'suite-release@1', '--environment-id', environment.id,
     ])).toThrow('固定目标环境');
   });
 
-  it('keeps every SuiteRunner outcome when an unconfigured Agent Case fails', async () => {
+  it('persists an empty Suite preflight parent without requiring a JSON report', async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'testbuddy-cli-suite-preflight-history-'));
+    temporaryDirectories.push(directory);
+    const project = createEmptyProject(1);
+    const environment = project.environments[0]!;
+    project.suites = [{
+      schemaVersion: 1, id: 'suite-empty', version: 1, name: 'Empty Suite', description: '', tags: [], environmentId: environment.id,
+      caseReferences: [], execution: { concurrency: 1, failurePolicy: 'continue', retryLimit: 0 },
+      createdAt: '2026-08-14T00:00:00.000Z', updatedAt: '2026-08-14T00:00:00.000Z',
+    }];
+    const state = createInitialStudioState();
+    state.projects = [project];
+    state.midsceneConfig.modelApiKey = 'empty-suite-api-key-must-not-leak';
+    state.midsceneConfig.modelBaseUrl = 'https://empty-suite-user:empty-suite-password@models.example.test/v1?tenant=secret';
+    await new StudioStore(directory).save(state);
+    vi.spyOn(runtimeBundle, 'createRuntimeBundle').mockReturnValue({
+      ensureReady: vi.fn(), runTestCase: vi.fn(), browserRuntime: { getState: vi.fn(() => state.browserSession) }, close: vi.fn(),
+    } as never);
+
+    const summary = await executeCliCommand({
+      kind: 'run', dataDir: directory, projectId: project.id, caseReferences: [], suiteReference: { id: 'suite-empty', version: 1 },
+    });
+
+    expect(summary.reports.json).toBeUndefined();
+    expect(summary.results).toEqual([]);
+    expect(summary.suite).toMatchObject({
+      status: 'blocked',
+      reason: { code: 'missingAssetVersion' },
+      provenance: { suite: { reference: { id: 'suite-empty', version: 1 } } },
+    });
+    const persisted = await new StudioStore(directory).loadExisting();
+    expect(persisted.suiteRunRecords).toEqual([
+      expect.objectContaining({
+        id: summary.suite!.provenance.suite.parentRunId,
+        provenance: summary.suite!.provenance,
+        status: summary.suite!.status,
+        reasonCode: summary.suite!.reason?.code,
+        memberRunIds: [],
+        summary: { passed: 0, failed: 0, blocked: 0, skipped: 0, cancelled: 0, error: 0 },
+      }),
+    ]);
+    const serializedHistory = JSON.stringify(persisted.suiteRunRecords);
+    expect(serializedHistory).not.toContain('empty-suite-api-key-must-not-leak');
+    expect(serializedHistory).not.toContain('https://empty-suite-user:empty-suite-password@models.example.test/v1?tenant=secret');
+  });
+
+  it('serializes structured reasons for every non-passed Suite outcome', async () => {
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'testbuddy-cli-suite-scheduler-'));
     temporaryDirectories.push(directory);
     const project = createEmptyProject(1);
@@ -370,22 +627,28 @@ describe('TestBuddy CLI', () => {
       url: environment.url, notes: '', groupId: project.groups[0]!.id, environmentId: environment.id,
       source: 'manual' as const, steps: [{ id: 'step-agent', type: 'ai' as const, title: 'Agent', body: 'Agent' }],
     };
-    const independentCase = {
-      id: 'case-independent', version: 1, kind: 'scenario' as const, name: 'Independent Case', category: '', lastEdited: '',
+    const erroredCase = {
+      id: 'case-error', version: 1, kind: 'scenario' as const, name: 'Error Case', category: '', lastEdited: '',
       url: environment.url, notes: '', groupId: project.groups[0]!.id, environmentId: environment.id,
-      source: 'manual' as const, steps: [{ id: 'step-independent', type: 'manual' as const, title: 'Independent', body: 'Independent' }],
+      source: 'manual' as const, steps: [{ id: 'step-error', type: 'manual' as const, title: 'Error', body: 'Error' }],
+    };
+    const cancelledCase = {
+      id: 'case-cancelled', version: 1, kind: 'scenario' as const, name: 'Cancelled Case', category: '', lastEdited: '',
+      url: environment.url, notes: '', groupId: project.groups[0]!.id, environmentId: environment.id,
+      source: 'manual' as const, steps: [{ id: 'step-cancelled', type: 'manual' as const, title: 'Cancelled', body: 'Cancelled' }],
     };
     const dependentCase = {
       id: 'case-dependent', version: 1, kind: 'scenario' as const, name: 'Dependent Case', category: '', lastEdited: '',
       url: environment.url, notes: '', groupId: project.groups[0]!.id, environmentId: environment.id,
       source: 'manual' as const, steps: [{ id: 'step-dependent', type: 'manual' as const, title: 'Dependent', body: 'Dependent' }],
     };
-    project.testCases = [agentCase, independentCase, dependentCase];
+    project.testCases = [agentCase, erroredCase, cancelledCase, dependentCase];
     project.suites = [{
       schemaVersion: 1, id: 'suite-mixed', version: 1, name: 'Mixed Suite', description: '', tags: [], environmentId: environment.id,
       caseReferences: [
         { id: agentCase.id, version: 1, dependsOn: [] },
-        { id: independentCase.id, version: 1, dependsOn: [] },
+        { id: erroredCase.id, version: 1, dependsOn: [] },
+        { id: cancelledCase.id, version: 1, dependsOn: [] },
         { id: dependentCase.id, version: 1, dependsOn: [{ id: agentCase.id, version: 1 }] },
       ],
       execution: { concurrency: 3, failurePolicy: 'continue', retryLimit: 0 },
@@ -393,14 +656,26 @@ describe('TestBuddy CLI', () => {
     }];
     const state = createInitialStudioState();
     state.projects = [project];
+    state.midsceneConfig.modelApiKey = 'suite-member-api-key-must-not-leak';
+    state.midsceneConfig.modelBaseUrl = 'https://suite-member-user:suite-member-password@models.example.test/v1?tenant=secret';
     await new StudioStore(directory).save(state);
-    const runTestCase = vi.fn(async (request: { testCase: typeof independentCase }) => ({
+    const runTestCase = vi.fn(async (request: { testCase: typeof erroredCase }) => ({
       runId: `run-${request.testCase.id}`,
       title: request.testCase.name,
       detail: {
         id: `run-${request.testCase.id}`, projectId: project.id, testCaseId: request.testCase.id, environmentId: environment.id,
-        title: request.testCase.name, status: 'passed' as const, startedAt: '2026-08-14T00:00:00.000Z', endedAt: '2026-08-14T00:00:01.000Z',
-        duration: '00:00:01', summary: 'passed', logs: [], steps: [], artifacts: [],
+        title: request.testCase.name,
+        ...(request.testCase.id === erroredCase.id
+          ? {
+              status: 'error' as const,
+              summary: 'Executor crashed.',
+            }
+          : {
+              status: 'cancelled' as const,
+              summary: 'Cancelled by user.',
+            }),
+        startedAt: '2026-08-14T00:00:00.000Z', endedAt: '2026-08-14T00:00:01.000Z',
+        duration: '00:00:01', logs: [], steps: [], artifacts: [],
       },
     }));
     vi.spyOn(runtimeBundle, 'createRuntimeBundle').mockReturnValue({
@@ -411,16 +686,122 @@ describe('TestBuddy CLI', () => {
       kind: 'run', dataDir: directory, projectId: project.id, caseReferences: [], suiteReference: { id: 'suite-mixed', version: 1 },
     });
 
-    expect(summary.results.map((result) => [result.testCaseId, result.status])).toEqual([
-      ['case-agent', 'failed'],
-      ['case-independent', 'passed'],
-      ['case-dependent', 'neutral'],
+    expect(JSON.parse(JSON.stringify(summary))).toMatchObject({
+      suite: { status: 'error', reason: { code: 'executorError', message: 'Executor crashed.' } },
+      results: expect.arrayContaining([
+        expect.objectContaining({
+          testCaseId: agentCase.id,
+          status: 'blocked',
+          reason: {
+            code: 'credentialUnavailable',
+            message: '该 Agent 用例需要已配置的 Midscene 模型，当前数据目录未包含可用模型配置。',
+          },
+        }),
+        expect.objectContaining({ testCaseId: erroredCase.id, status: 'error', reason: { code: 'executorError', message: 'Executor crashed.' } }),
+        expect.objectContaining({ testCaseId: cancelledCase.id, status: 'cancelled', reason: { code: 'userCancelled', message: 'Cancelled by user.' } }),
+        expect.objectContaining({
+          testCaseId: dependentCase.id,
+          status: 'skipped',
+          reason: { code: 'dependencyFailed', message: 'A required Suite dependency did not pass.' },
+        }),
+      ]),
+    });
+    expect(runTestCase).toHaveBeenCalledTimes(2);
+
+    const suiteMembership = summary.suite!.provenance.suite;
+    expect(suiteMembership).toMatchObject({
+      reference: { id: 'suite-mixed', version: 1 },
+      parentRunId: expect.stringMatching(/^cli-suite-run-/u),
+    });
+    expect(summary.results).toHaveLength(4);
+    summary.results.forEach((result) => {
+      expect(result.provenance?.suite).toEqual(suiteMembership);
+    });
+
+    const persisted = await new StudioStore(directory).loadExisting();
+    expect(persisted.runDetails).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        testCaseId: agentCase.id,
+        status: 'blocked',
+        reason: {
+          code: 'credentialUnavailable',
+          message: '该 Agent 用例需要已配置的 Midscene 模型，当前数据目录未包含可用模型配置。',
+        },
+        provenance: expect.objectContaining({ suite: suiteMembership }),
+      }),
+      expect.objectContaining({
+        testCaseId: erroredCase.id,
+        reason: { code: 'executorError', message: 'Executor crashed.' },
+        provenance: expect.objectContaining({ suite: suiteMembership }),
+      }),
+      expect.objectContaining({
+        testCaseId: cancelledCase.id,
+        reason: { code: 'userCancelled', message: 'Cancelled by user.' },
+        provenance: expect.objectContaining({ suite: suiteMembership }),
+      }),
+      expect.objectContaining({
+        testCaseId: dependentCase.id,
+        status: 'skipped',
+        reason: { code: 'dependencyFailed', message: 'A required Suite dependency did not pass.' },
+        provenance: expect.objectContaining({ suite: suiteMembership }),
+      }),
+    ]));
+    expect(persisted.runDetails).toHaveLength(4);
+    persisted.runDetails.forEach((detail) => {
+      expect(detail.provenance?.suite).toEqual(suiteMembership);
+    });
+    expect(JSON.stringify(persisted.runDetails)).not.toContain('suite-member-api-key-must-not-leak');
+    expect(JSON.stringify(persisted.runDetails)).not.toContain('https://suite-member-user:suite-member-password@models.example.test/v1?tenant=secret');
+    const serializedSummary = JSON.stringify(summary);
+    expect(serializedSummary).not.toContain('suite-member-api-key-must-not-leak');
+    expect(serializedSummary).not.toContain('https://suite-member-user:suite-member-password@models.example.test/v1?tenant=secret');
+  });
+
+  it('persists an executor exception as a terminal Case RunDetail', async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'testbuddy-cli-persist-executor-error-'));
+    temporaryDirectories.push(directory);
+    const project = createEmptyProject(1);
+    const environment = project.environments[0]!;
+    const testCase = {
+      id: 'case-executor-error', version: 1, kind: 'scenario' as const, name: 'Executor Error Case', category: '', lastEdited: '',
+      url: environment.url, notes: '', groupId: project.groups[0]!.id, environmentId: environment.id,
+      source: 'manual' as const, steps: [{ id: 'step-executor-error', type: 'manual' as const, title: 'Run', body: 'Run' }],
+    };
+    project.testCases = [testCase];
+    const state = createInitialStudioState();
+    state.projects = [project];
+    await new StudioStore(directory).save(state);
+    vi.spyOn(runtimeBundle, 'createRuntimeBundle').mockReturnValue({
+      ensureReady: vi.fn(),
+      runTestCase: vi.fn(async () => {
+        throw new Error('Browser runtime stopped unexpectedly.');
+      }),
+      browserRuntime: { getState: vi.fn(() => state.browserSession) },
+      close: vi.fn(),
+    } as never);
+
+    const summary = await executeCliCommand({
+      kind: 'run', dataDir: directory, projectId: project.id, caseReferences: [{ id: testCase.id, version: testCase.version ?? 1 }],
+    });
+
+    expect(summary.results).toEqual([
+      expect.objectContaining({
+        testCaseId: testCase.id,
+        status: 'error',
+        reason: { code: 'executorError', message: '执行异常：Browser runtime stopped unexpectedly.' },
+      }),
     ]);
-    expect(runTestCase).toHaveBeenCalledWith(expect.objectContaining({
-      projectSnapshot: expect.objectContaining({ project: expect.objectContaining({ id: project.id }) }),
-      testCase: expect.objectContaining({ id: independentCase.id, version: 1 }),
-      environment: expect.objectContaining({ id: environment.id }),
-    }));
+    const persisted = await new StudioStore(directory).loadExisting();
+    expect(persisted.runDetails).toEqual([
+      expect.objectContaining({
+        projectId: project.id,
+        testCaseId: testCase.id,
+        environmentId: environment.id,
+        status: 'error',
+        reason: { code: 'executorError', message: '执行异常：Browser runtime stopped unexpectedly.' },
+        provenance: summary.results[0]!.provenance,
+      }),
+    ]);
   });
 
   it('returns an operational failure for an unavailable bound project directory', async () => {
@@ -494,6 +875,11 @@ describe('TestBuddy CLI', () => {
     expect(summary.results).toEqual([
       expect.objectContaining({ testCaseId: 'case-login', title: 'Snapshot Case v1', status: 'passed' }),
     ]);
+    expect(summary.results[0]?.provenance).toMatchObject({
+      projectRevision: snapshot.revision,
+      testCase: { id: 'case-login', version: 1 },
+      environment: { id: environment.id },
+    });
     expect(runTestCase).toHaveBeenCalledWith(expect.objectContaining({
       projectSnapshot: expect.objectContaining({
         source: 'projectDirectory',

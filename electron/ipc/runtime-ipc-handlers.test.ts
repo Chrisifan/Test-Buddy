@@ -195,6 +195,8 @@ describe('registerRuntimeIpcHandlers', () => {
       runtimeIpcChannels.runSuite,
       runtimeIpcChannels.cancelRun,
       runtimeIpcChannels.loadRunDetail,
+      runtimeIpcChannels.planHistoricalRerun,
+      runtimeIpcChannels.runHistoricalRerun,
       runtimeIpcChannels.openArtifact,
       runtimeIpcChannels.exportArtifact,
       runtimeIpcChannels.attachManualEvidence,
@@ -1253,6 +1255,116 @@ describe('registerRuntimeIpcHandlers', () => {
 
     expect(cancelRun).toHaveBeenCalledWith('suite-1');
   });
+
+  it('plans and executes a historical rerun from stored provenance without accepting renderer assets', async () => {
+    const project = createEmptyProject(1);
+    project.id = 'project-history';
+    const environment = project.environments[0]!;
+    const testCase = { ...createTestCase(project, 'case-history', environment.id), version: 2, name: 'Frozen Case v2' };
+    project.testCases = [testCase];
+    const state = createInitialStudioState();
+    state.runDetails = [{
+      ...runTestCaseResponse(project.id, testCase.id, environment.id).detail,
+      id: 'run-history',
+      testCaseVersion: 2,
+      provenance: {
+        schemaVersion: 1,
+        projectId: project.id,
+        projectRevision: 'a'.repeat(64),
+        source: 'projectDirectory',
+        reproducibility: 'versioned',
+        testCase: { id: testCase.id, version: 2 },
+        fixtures: [], reusableFlows: [], baselines: [],
+        environment: { id: environment.id, name: environment.name, baseUrl: environment.url },
+        browserProfile: { engine: environment.browser, headless: environment.headless },
+        executor: { appVersion: 'test-buddy-desktop', runnerVersion: 'runtime-bundle-v1' },
+        model: { hasKey: false },
+        createdAt: '2026-08-17T00:00:00.000Z',
+      },
+    }];
+    const runTestCase = vi.fn().mockResolvedValue({
+      ...runTestCaseResponse(project.id, testCase.id, environment.id),
+      runId: 'run-history-rerun',
+      detail: {
+        ...runTestCaseResponse(project.id, testCase.id, environment.id).detail,
+        id: 'run-history-rerun',
+        testCaseId: testCase.id,
+        testCaseVersion: 2,
+      },
+    });
+    const dependencies = createDependencies({
+      loadState: vi.fn().mockResolvedValue(state),
+      projectRepository: {
+        load: vi.fn(),
+        loadBound: vi.fn().mockResolvedValue(projectSnapshot(project, 'a'.repeat(64), 'projectDirectory')),
+      },
+      getRuntimeBundle: vi.fn().mockReturnValue({
+        artifactManager: { isManagedArtifactPath: () => true, exportArtifact: vi.fn(), importManualEvidence: vi.fn() },
+        browserRuntime: { getState: () => state.browserSession },
+        runTestCase,
+        runSuite: vi.fn(),
+        cancelRun: vi.fn(),
+      }),
+    });
+    const handlers = registerHandlers(dependencies);
+
+    const plan = await handlers.get(runtimeIpcChannels.planHistoricalRerun)!({}, 'run-history');
+    expect(plan).toEqual({ status: 'ready', runId: 'run-history' });
+    expect(plan).not.toHaveProperty('testCase');
+    expect(runTestCase).not.toHaveBeenCalled();
+
+    await expect(handlers.get(runtimeIpcChannels.runHistoricalRerun)!({}, 'run-history')).resolves.toMatchObject({
+      status: 'completed',
+      response: {
+        runId: 'run-history-rerun',
+        detail: {
+          provenance: expect.objectContaining({
+            projectRevision: 'a'.repeat(64),
+            testCase: { id: testCase.id, version: 2 },
+          }),
+        },
+      },
+    });
+    expect(runTestCase).toHaveBeenCalledWith(expect.objectContaining({
+      projectSnapshot: expect.objectContaining({ revision: 'a'.repeat(64) }),
+      testCase: expect.objectContaining({ id: testCase.id, version: 2, name: 'Frozen Case v2' }),
+      environment: expect.objectContaining({ id: environment.id }),
+    }));
+  });
+
+  it('blocks a legacy historical rerun before requesting the browser runtime', async () => {
+    const project = createEmptyProject(1);
+    const environment = project.environments[0]!;
+    const state = createInitialStudioState();
+    state.runDetails = [{
+      ...runTestCaseResponse(project.id, 'case-legacy', environment.id).detail,
+      id: 'run-legacy',
+    }];
+    const runTestCase = vi.fn();
+    const dependencies = createDependencies({
+      loadState: vi.fn().mockResolvedValue(state),
+      getRuntimeBundle: vi.fn().mockReturnValue({
+        artifactManager: { isManagedArtifactPath: () => true, exportArtifact: vi.fn(), importManualEvidence: vi.fn() },
+        browserRuntime: { getState: () => state.browserSession },
+        runTestCase,
+        runSuite: vi.fn(),
+        cancelRun: vi.fn(),
+      }),
+    });
+    const handlers = registerHandlers(dependencies);
+
+    await expect(handlers.get(runtimeIpcChannels.planHistoricalRerun)!({}, 'run-legacy')).resolves.toMatchObject({
+      status: 'blocked',
+      runId: 'run-legacy',
+      reason: { code: 'legacyAmbiguousNeutral' },
+      missingReferences: [],
+    });
+    await expect(handlers.get(runtimeIpcChannels.runHistoricalRerun)!({}, 'run-legacy')).resolves.toMatchObject({
+      status: 'blocked',
+      runId: 'run-legacy',
+    });
+    expect(runTestCase).not.toHaveBeenCalled();
+  });
 });
 
 function registerHandlers(dependencies: RuntimeIpcDependencies) {
@@ -1341,6 +1453,8 @@ function loadRuntimeIpcHandlers(): {
     runSuite: string;
     cancelRun: string;
     loadRunDetail: string;
+    planHistoricalRerun: string;
+    runHistoricalRerun: string;
     openArtifact: string;
     exportArtifact: string;
     attachManualEvidence: string;

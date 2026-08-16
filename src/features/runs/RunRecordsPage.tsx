@@ -1,12 +1,15 @@
-import { useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   canCreateReporterFixDraft,
   deriveRunCoverageRisk,
+  type HistoricalRerunExecutionResult,
+  type HistoricalRerunPlan,
   type ProjectAssetBinding,
   type ProjectDraft,
   type RunArtifact,
   type RunDetail,
   type RunSummary,
+  type RunStatus,
   type RunTone,
 } from '../../../shared/studio.js';
 import type { AgentArtifact, AgentExecutionMetrics, AgentReporterSummary, AgentRunEvent, AgentRunResult } from '../../../shared/agent.js';
@@ -27,7 +30,6 @@ import {
   Gauge,
   GitCompareArrows,
   Image,
-  Layers3,
   LocateFixed,
   MonitorDot,
   PackageOpen,
@@ -88,31 +90,20 @@ function formatEventMetrics(metrics: AgentExecutionMetrics, t: Translator): stri
   return values.join(' · ');
 }
 
-function getRunGroupName(project: ProjectDraft | undefined, run: RunSummary, t: Translator): string {
-  if (!project) {
-    return t('runs.value.unassigned');
-  }
-
-  const testCase = project.testCases.find((item) => item.id === run.testCaseId);
-  const group = project.groups.find((item) => item.id === testCase?.groupId);
-  return group?.name ?? t('runs.value.ungrouped');
+function isFailureStatus(status: RunStatus): boolean {
+  return status === 'failed' || status === 'error';
 }
 
-function getRunEnvironmentName(project: ProjectDraft | undefined, run: RunSummary, t: Translator): string {
-  if (run.environmentName) {
-    return run.environmentName;
-  }
-
-  return project?.environments.find((environment) => environment.id === run.environmentId)?.name ?? t('runs.value.environmentMissing');
+function getRunEnvironmentId(run: RunSummary, detail?: RunDetail): string {
+  return detail?.provenance?.environment.id ?? run.environmentId ?? `run:${run.id}`;
 }
 
-function getRunPrdDocumentName(
-  project: ProjectDraft | undefined,
-  run: Pick<RunSummary, 'documentId'>,
-): string | undefined {
-  return run.documentId
-    ? project?.documents.find((document) => document.id === run.documentId)?.name
-    : undefined;
+function getRunEnvironmentName(run: RunSummary, detail: RunDetail | undefined, t: Translator): string {
+  return detail?.provenance?.environment.name ?? run.environmentName ?? t('runs.value.environmentMissing');
+}
+
+function getRunTestCaseId(run: RunSummary): string {
+  return run.testCaseId ?? `run:${run.id}`;
 }
 
 function getHealthLabel(total: number, failed: number, running: number, t: Translator): string {
@@ -161,7 +152,7 @@ function getFailureTrend(runs: RunSummary[]): FailureTrend | undefined {
   const midpoint = Math.floor(chronologicalRuns.length / 2);
   const earlierRuns = chronologicalRuns.slice(0, midpoint);
   const recentRuns = chronologicalRuns.slice(midpoint);
-  const failureRate = (entries: typeof chronologicalRuns) => entries.filter((entry) => entry.run.status === 'failed').length / entries.length;
+  const failureRate = (entries: typeof chronologicalRuns) => entries.filter((entry) => isFailureStatus(entry.run.status)).length / entries.length;
   const delta = Math.round((failureRate(recentRuns) - failureRate(earlierRuns)) * 100);
   if (Math.abs(delta) < 15) {
     return { direction: 'steady', delta: 0 };
@@ -296,7 +287,8 @@ export function RunRecordsPage({
   onCreateReporterFixDraft,
   onExportProjectReport,
   onCancelRun,
-  onRerunTestCase,
+  onPlanExactRerun,
+  onRunExactRerun,
   isRunning = false,
   onAttachManualEvidence,
   onCaptureManualEvidence,
@@ -311,7 +303,8 @@ export function RunRecordsPage({
   onCreateReporterFixDraft?: (run: RunDetail, reporter: AgentReporterSummary) => void;
   onExportProjectReport?: () => Promise<void>;
   onCancelRun?: (runId: string) => Promise<void>;
-  onRerunTestCase?: (run: RunDetail) => void;
+  onPlanExactRerun?: (runId: string) => Promise<HistoricalRerunPlan>;
+  onRunExactRerun?: (runId: string) => Promise<HistoricalRerunExecutionResult>;
   isRunning?: boolean;
   onAttachManualEvidence?: (runId: string, stepId: string) => Promise<RunArtifact | undefined>;
   onCaptureManualEvidence?: (runId: string, stepId: string) => Promise<string | undefined>;
@@ -326,9 +319,8 @@ export function RunRecordsPage({
 }) {
   const { t } = useI18n();
   const isProjectBound = Boolean(project && projectAssetBinding?.projectId === project.id);
-  const [statusFilter, setStatusFilter] = useState<'all' | 'running' | 'passed' | 'failed' | 'neutral'>('all');
+  const [statusFilter, setStatusFilter] = useState<'all' | RunStatus>('all');
   const [environmentFilter, setEnvironmentFilter] = useState<string>('all');
-  const [groupFilter, setGroupFilter] = useState<string>('all');
   const [testCaseFilter, setTestCaseFilter] = useState<string>('all');
   const [comparisonRunId, setComparisonRunId] = useState<string>('');
   const [selectedEvidenceEventId, setSelectedEvidenceEventId] = useState<string>('');
@@ -340,41 +332,82 @@ export function RunRecordsPage({
   const [capturingManualEvidence, setCapturingManualEvidence] = useState<Record<string, boolean>>({});
   const [isExportingProjectReport, setIsExportingProjectReport] = useState(false);
   const [cancellingRunId, setCancellingRunId] = useState<string>('');
+  const [rerunPlan, setRerunPlan] = useState<HistoricalRerunPlan>();
+  const [isPlanningExactRerun, setIsPlanningExactRerun] = useState(false);
+  const [runningExactRerunId, setRunningExactRerunId] = useState('');
+  const selectedRunIdRef = useRef('');
   const projectRuns = project
     ? recentRuns.filter((run) => !run.projectId || run.projectId === project.id)
     : recentRuns;
+  const runDetailsById = useMemo(
+    () => new Map(runDetails.map((detail) => [detail.id, detail])),
+    [runDetails],
+  );
+  const environmentOptions = useMemo(() => {
+    const options = new Map<string, string>();
+    projectRuns.forEach((run) => {
+      const detail = runDetailsById.get(run.id);
+      options.set(getRunEnvironmentId(run, detail), getRunEnvironmentName(run, detail, t));
+    });
+    return [...options.entries()].map(([id, name]) => ({ id, name }));
+  }, [projectRuns, runDetailsById, t]);
+  const testCaseOptions = useMemo(() => {
+    const options = new Map<string, string>();
+    projectRuns.forEach((run) => {
+      options.set(getRunTestCaseId(run), run.name);
+    });
+    return [...options.entries()].map(([id, name]) => ({ id, name }));
+  }, [projectRuns]);
   const visibleRuns = useMemo(
     () =>
       projectRuns.filter((run) => {
         if (statusFilter !== 'all' && run.status !== statusFilter) {
           return false;
         }
-        if (environmentFilter !== 'all' && run.environmentId !== environmentFilter) {
+        if (environmentFilter !== 'all' && getRunEnvironmentId(run, runDetailsById.get(run.id)) !== environmentFilter) {
           return false;
         }
-        if (testCaseFilter !== 'all' && run.testCaseId !== testCaseFilter) {
+        if (testCaseFilter !== 'all' && getRunTestCaseId(run) !== testCaseFilter) {
           return false;
         }
-        if (!project || groupFilter === 'all') {
-          return true;
-        }
-
-        const testCase = project.testCases.find((item) => item.id === run.testCaseId);
-        return testCase?.groupId === groupFilter;
+        return true;
       }),
-    [environmentFilter, groupFilter, project, projectRuns, statusFilter, testCaseFilter],
+    [environmentFilter, projectRuns, runDetailsById, statusFilter, testCaseFilter],
   );
   const selectedRun =
     runDetails.find((run) => run.id === selectedRunId) ??
     runDetails.find((run) => run.id === visibleRuns[0]?.id);
+  selectedRunIdRef.current = selectedRun?.id ?? '';
   const activeRun = projectRuns.find((run) => run.status === 'running');
-  const selectedPrdDocumentName = selectedRun ? getRunPrdDocumentName(project, selectedRun) : undefined;
-  const rerunTestCase = selectedRun
-    ? project?.testCases.find((testCase) => testCase.id === selectedRun.testCaseId)
-    : undefined;
-  const isSelectedRunRerunnable = Boolean(
-    rerunTestCase && project?.environments.some((environment) => environment.id === selectedRun?.environmentId),
-  );
+  const isRunningExactRerun = runningExactRerunId === selectedRun?.id;
+  useEffect(() => {
+    let active = true;
+    if (!selectedRun || !onPlanExactRerun) {
+      setRerunPlan(undefined);
+      setIsPlanningExactRerun(false);
+      return () => { active = false; };
+    }
+    setIsPlanningExactRerun(true);
+    setRerunPlan(undefined);
+    void onPlanExactRerun(selectedRun.id)
+      .then((plan) => {
+        if (active) setRerunPlan(plan);
+      })
+      .catch(() => {
+        if (active) {
+          setRerunPlan({
+            status: 'blocked',
+            runId: selectedRun.id,
+            reason: { code: 'executorError', message: 'Unable to resolve the historical rerun.' },
+            missingReferences: [],
+          });
+        }
+      })
+      .finally(() => {
+        if (active) setIsPlanningExactRerun(false);
+      });
+    return () => { active = false; };
+  }, [selectedRun?.id]);
   const selectedAgentRuns = [
     ...(selectedRun?.agentRun ? [selectedRun.agentRun] : []),
     ...(selectedRun?.agentRuns ?? []),
@@ -428,40 +461,34 @@ export function RunRecordsPage({
     () => ({
       total: visibleRuns.length,
       passed: visibleRuns.filter((run) => run.status === 'passed').length,
-      failed: visibleRuns.filter((run) => run.status === 'failed').length,
+      failed: visibleRuns.filter((run) => isFailureStatus(run.status)).length,
       running: visibleRuns.filter((run) => run.status === 'running').length,
     }),
     [visibleRuns],
   );
   const runAnalytics = useMemo(() => {
-    const groupBuckets = new Map<string, Bucket>();
     const environmentBuckets = new Map<string, Bucket>();
 
     visibleRuns.forEach((run) => {
-      const groupName = getRunGroupName(project, run, t);
-      const environmentName = getRunEnvironmentName(project, run, t);
-      const groupBucket = groupBuckets.get(groupName) ?? { label: groupName, total: 0, failed: 0 };
+      const environmentName = getRunEnvironmentName(run, runDetailsById.get(run.id), t);
       const environmentBucket = environmentBuckets.get(environmentName) ?? {
         label: environmentName,
         total: 0,
-        failed: 0,
+      failed: 0,
       };
 
-      groupBucket.total += 1;
       environmentBucket.total += 1;
 
-      if (run.status === 'failed') {
-        groupBucket.failed += 1;
+      if (isFailureStatus(run.status)) {
         environmentBucket.failed += 1;
       }
 
-      groupBuckets.set(groupName, groupBucket);
       environmentBuckets.set(environmentName, environmentBucket);
     });
 
     const passRate = runStats.total ? Math.round((runStats.passed / runStats.total) * 100) : 0;
-    const failedRunIds = new Set(visibleRuns.filter((run) => run.status === 'failed').map((run) => run.id));
-    const latestFailure = runDetails.find((detail) => failedRunIds.has(detail.id) && detail.failureReason);
+    const failedRunIds = new Set(visibleRuns.filter((run) => isFailureStatus(run.status)).map((run) => run.id));
+    const latestFailure = runDetails.find((detail) => failedRunIds.has(detail.id) && getFailureReason(detail));
     const clusters = new Map<string, FailureCluster>();
     runDetails
       .filter((detail) => failedRunIds.has(detail.id))
@@ -479,13 +506,12 @@ export function RunRecordsPage({
     return {
       passRate,
       healthLabel: getHealthLabel(runStats.total, runStats.failed, runStats.running, t),
-      latestFailureReason: latestFailure?.failureReason ?? '',
-      worstGroup: getWorstBucket([...groupBuckets.values()]),
+      latestFailureReason: latestFailure ? getFailureReason(latestFailure) : '',
       worstEnvironment: getWorstBucket([...environmentBuckets.values()]),
       failureClusters: [...clusters.values()].sort((left, right) => right.count - left.count || left.reason.localeCompare(right.reason)).slice(0, 3),
       failureTrend: getFailureTrend(visibleRuns),
     };
-  }, [project, runDetails, runStats.failed, runStats.passed, runStats.running, runStats.total, t, visibleRuns]);
+  }, [runDetails, runDetailsById, runStats.failed, runStats.passed, runStats.running, runStats.total, t, visibleRuns]);
   const coverageRisk = useMemo(
     () => (project ? deriveRunCoverageRisk(project, recentRuns) : undefined),
     [project, recentRuns],
@@ -495,7 +521,7 @@ export function RunRecordsPage({
     <PageShell>
       <PageHeader
         action={
-          onExportProjectReport || (activeRun && onCancelRun) || (selectedRun && onRerunTestCase && isSelectedRunRerunnable) ? (
+          onExportProjectReport || (activeRun && onCancelRun) || (selectedRun && onPlanExactRerun && onRunExactRerun) ? (
             <div className="flex items-center gap-2">
               {onExportProjectReport ? (
                 <button
@@ -529,17 +555,30 @@ export function RunRecordsPage({
                   {cancellingRunId === activeRun.id ? t('runs.cancelRunWorking') : t('runs.cancelRun')}
                 </button>
               ) : null}
-              {selectedRun && onRerunTestCase && isSelectedRunRerunnable ? (
+              {selectedRun && onPlanExactRerun && onRunExactRerun ? (
                 <button
-                  aria-label={t('runs.rerun.currentCaseLegacy')}
+                  aria-label={t('runs.rerun.exact')}
                   className="inline-flex h-8 items-center gap-1.5 rounded-[4px] border border-border px-2.5 text-xs font-medium text-foreground transition-colors hover:bg-accent disabled:pointer-events-none disabled:opacity-45"
-                  disabled={isRunning || selectedRun.status === 'running'}
-                  onClick={() => onRerunTestCase(selectedRun)}
-                  title={t('runs.rerun.currentCaseLegacy')}
+                  disabled={isRunning || selectedRun.status === 'running' || isPlanningExactRerun || isRunningExactRerun || rerunPlan?.status !== 'ready'}
+                  onClick={() => {
+                    if (rerunPlan?.status !== 'ready') return;
+                    const runId = selectedRun.id;
+                    setRunningExactRerunId(runId);
+                    void onRunExactRerun(runId)
+                      .then((result) => {
+                        if (result.status === 'blocked' && selectedRunIdRef.current === runId) {
+                          setRerunPlan(result);
+                        }
+                      })
+                      .finally(() => {
+                        setRunningExactRerunId((runningRunId) => (runningRunId === runId ? '' : runningRunId));
+                      });
+                  }}
+                  title={t('runs.rerun.exact')}
                   type="button"
                 >
                   <RefreshCcw className="h-3.5 w-3.5" />
-                  {t('runs.rerun.currentCaseLegacy')}
+                  {isPlanningExactRerun ? t('runs.rerun.planning') : isRunningExactRerun ? t('runs.rerun.running') : t('runs.rerun.exact')}
                 </button>
               ) : null}
             </div>
@@ -560,11 +599,6 @@ export function RunRecordsPage({
       />
 
       <PageBody>
-      {selectedRun && onRerunTestCase ? (
-        <p className="mb-3 text-sm text-muted-foreground">
-          {t('runs.rerun.legacyUnavailable')}
-        </p>
-      ) : null}
       <section className="designer-split run-workbench" aria-label={t('runs.aria.workbench')}>
         <aside className="designer-panel">
           <div className="designer-panel-header grid gap-3">
@@ -582,24 +616,18 @@ export function RunRecordsPage({
                 <SelectItem value="running">{t('common.status.running')}</SelectItem>
                 <SelectItem value="passed">{t('common.status.passed')}</SelectItem>
                 <SelectItem value="failed">{t('common.status.failed')}</SelectItem>
-                <SelectItem value="neutral">{t('runs.filter.neutral')}</SelectItem>
+                <SelectItem value="blocked">{t('common.status.blocked')}</SelectItem>
+                <SelectItem value="skipped">{t('common.status.skipped')}</SelectItem>
+                <SelectItem value="cancelled">{t('common.status.cancelled')}</SelectItem>
+                <SelectItem value="error">{t('common.status.error')}</SelectItem>
               </SelectContent>
             </Select>
             <div className="run-filter-pair grid min-w-0 gap-2">
-              <Select onValueChange={(value) => setGroupFilter(value)} value={groupFilter}>
-                <SelectTrigger aria-label={t('runs.filter.group')} className="rounded-[4px]"><SelectValue placeholder={t('runs.filter.group')} /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">{t('runs.filter.allGroups')}</SelectItem>
-                  {project?.groups.map((group) => (
-                    <SelectItem key={group.id} value={group.id}>{group.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
               <Select onValueChange={(value) => setEnvironmentFilter(value)} value={environmentFilter}>
                 <SelectTrigger aria-label={t('runs.filter.environment')} className="rounded-[4px]"><SelectValue placeholder={t('runs.filter.environment')} /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">{t('runs.filter.allEnvironments')}</SelectItem>
-                  {project?.environments.map((environment) => (
+                  {environmentOptions.map((environment) => (
                     <SelectItem key={environment.id} value={environment.id}>{environment.name}</SelectItem>
                   ))}
                 </SelectContent>
@@ -609,7 +637,7 @@ export function RunRecordsPage({
               <SelectTrigger aria-label={t('runs.filter.testCase')} className="rounded-[4px]"><SelectValue placeholder={t('runs.filter.testCase')} /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">{t('runs.filter.allTestCases')}</SelectItem>
-                {project?.testCases.map((testCase) => (
+                {testCaseOptions.map((testCase) => (
                   <SelectItem key={testCase.id} value={testCase.id}>{testCase.name}</SelectItem>
                 ))}
               </SelectContent>
@@ -628,13 +656,6 @@ export function RunRecordsPage({
                   <StatusPill tone={run.status} />
                 </span>
                 <span className="mt-1 block line-clamp-2 text-xs leading-5 text-muted-foreground">{run.summary}</span>
-                {getRunPrdDocumentName(project, run) ? (
-                  <span className="mt-1.5 inline-flex">
-                    <Badge className="rounded-[4px]" variant="outline">
-                      {t('runs.prd.source', { name: getRunPrdDocumentName(project, run)! })}
-                    </Badge>
-                  </span>
-                ) : null}
               </button>
             ))}
             {!visibleRuns.length ? (
@@ -714,26 +735,12 @@ export function RunRecordsPage({
           ) : null}
           {selectedRun ? (
             <div className="mt-5 grid gap-5">
-              <div className="grid gap-3 md:grid-cols-4">
+              <div className="grid gap-3 md:grid-cols-3">
                   <InsightCard
                     icon={<Gauge className="h-4 w-4" />}
                     label={t('runs.metric.health')}
                     tone={runStats.failed ? 'failed' : runStats.running ? 'running' : 'passed'}
                     value={runAnalytics.healthLabel}
-                  />
-                  <InsightCard
-                    icon={<Layers3 className="h-4 w-4" />}
-                    label={t('runs.insight.group')}
-                    tone={runAnalytics.worstGroup?.failed ? 'failed' : 'neutral'}
-                    value={
-                      runAnalytics.worstGroup
-                        ? t('runs.insight.failureCount', {
-                            label: runAnalytics.worstGroup.label,
-                            failed: runAnalytics.worstGroup.failed,
-                            total: runAnalytics.worstGroup.total,
-                          })
-                        : t('runs.insight.noSamples')
-                    }
                   />
                   <InsightCard
                     icon={<AlertTriangle className="h-4 w-4" />}
@@ -772,6 +779,45 @@ export function RunRecordsPage({
                     }
                   />
               </div>
+              {selectedRun.reason ? (
+                <p className="text-xs leading-5 text-muted-foreground">
+                  {t('runs.reason.label')}: {t(`runs.reason.${selectedRun.reason.code}`)}
+                </p>
+              ) : null}
+              {selectedRun.provenance ? (
+                <section aria-label={t('runs.provenance.title')} className="grid gap-3 border-y border-border/70 py-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-xs font-medium text-foreground">{t('runs.provenance.title')}</p>
+                    <StatusPill tone={selectedRun.status} />
+                  </div>
+                  <dl className="grid gap-x-5 gap-y-2 text-xs leading-5 md:grid-cols-2">
+                    <ProvenanceRow label={t('runs.provenance.case')}>{selectedRun.provenance.testCase.id}@{selectedRun.provenance.testCase.version}</ProvenanceRow>
+                    {selectedRun.provenance.suite ? (
+                      <ProvenanceRow label={t('runs.provenance.suite')}>{selectedRun.provenance.suite.reference.id}@{selectedRun.provenance.suite.reference.version}</ProvenanceRow>
+                    ) : null}
+                    <ProvenanceReferences label={t('runs.provenance.fixture')} references={selectedRun.provenance.fixtures} />
+                    <ProvenanceReferences label={t('runs.provenance.flow')} references={selectedRun.provenance.reusableFlows} />
+                    <ProvenanceReferences label={t('runs.provenance.baseline')} references={selectedRun.provenance.baselines} />
+                    <ProvenanceRow label={t('runs.provenance.environment')}>
+                      {selectedRun.provenance.environment.name} ({selectedRun.provenance.environment.id})
+                    </ProvenanceRow>
+                    <ProvenanceRow label={t('runs.provenance.baseUrl')}>{selectedRun.provenance.environment.baseUrl}</ProvenanceRow>
+                    <ProvenanceRow label={t('runs.provenance.browser')}>
+                      {selectedRun.provenance.browserProfile.engine} / {selectedRun.provenance.browserProfile.headless ? t('runs.provenance.headless') : t('runs.provenance.headed')}
+                    </ProvenanceRow>
+                  </dl>
+                  {rerunPlan?.status === 'blocked' ? (
+                    <div className="grid gap-1 border-t border-border/70 pt-2 text-xs leading-5 text-muted-foreground">
+                      <p className="font-medium text-foreground">{t('runs.rerun.blocked', { reason: t(`runs.reason.${rerunPlan.reason.code}`) })}</p>
+                      {rerunPlan.missingReferences.length ? (
+                        <p>{t('runs.rerun.missing', { references: rerunPlan.missingReferences.map((reference) => `${reference.id}${reference.version ? `@${reference.version}` : ''}`).join(', ') })}</p>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </section>
+              ) : onPlanExactRerun ? (
+                <p className="text-xs leading-5 text-muted-foreground">{t('runs.rerun.legacyUnavailable')}</p>
+              ) : null}
 
               {runAnalytics.latestFailureReason ? (
                 <div className="rounded-[6px] bg-destructive/10 p-4 text-sm leading-7 text-foreground">
@@ -809,11 +855,6 @@ export function RunRecordsPage({
                 <MetricTile label={t('runs.metric.steps')} value={`${selectedRun.steps.length}`} />
                 <MetricTile label={t('runs.metric.artifacts')} value={`${selectedRun.artifacts.length}`} />
               </div>
-              {selectedPrdDocumentName ? (
-                <p className="text-xs leading-5 text-muted-foreground">
-                  {t('runs.prd.source', { name: selectedPrdDocumentName })}
-                </p>
-              ) : null}
               {comparisonRun && runComparison ? (
                 <Surface aria-label={t('runs.compare.aria')} className="p-4" variant="subtle">
                   <div className="flex flex-wrap items-start justify-between gap-3">
@@ -1387,7 +1428,7 @@ export function RunRecordsPage({
                               </div>
                             ) : null}
                           </div>
-                        ) : step.status === 'neutral' ? (
+                        ) : step.status === 'blocked' ? (
                           <div className="grid gap-2">
                             <div className="flex flex-col gap-2 sm:flex-row">
                               <textarea
@@ -1588,6 +1629,25 @@ function EvidenceTrailBlock({ label, value }: { label: string; value: string }) 
       <p className="break-words text-xs leading-5 text-foreground">{value}</p>
     </div>
   );
+}
+
+function ProvenanceRow({ children, label }: { children: ReactNode; label: string }) {
+  return (
+    <div className="min-w-0">
+      <dt className="sr-only">{label}</dt>
+      <dd className="break-words text-muted-foreground">{label} {children}</dd>
+    </div>
+  );
+}
+
+function ProvenanceReferences({
+  label,
+  references,
+}: {
+  label: string;
+  references: Array<{ id: string; version: number }>;
+}) {
+  return <ProvenanceRow label={label}>{references.length ? references.map((reference) => `${reference.id}@${reference.version}`).join(', ') : '-'}</ProvenanceRow>;
 }
 
 function ArtifactActions({ artifact, t }: { artifact: AgentArtifact | RunArtifact; t: Translator }) {

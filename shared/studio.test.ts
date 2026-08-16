@@ -2900,6 +2900,58 @@ describe('studio state hydration', () => {
     expect(JSON.stringify(report)).not.toContain('credentialRefs');
   });
 
+  it('keeps project report run labels frozen after current Case and environment assets change', () => {
+    const project = createEmptyProject(1);
+    const environment = { ...project.environments[0]!, name: 'Current renamed environment' };
+    const testCase = {
+      ...createEmptyTestCase(1, project.groups[0]!.id, environment.id),
+      id: 'case-historical', version: 1, name: 'Current renamed Case', environmentId: environment.id,
+    };
+    const currentProject = { ...project, environments: [environment], testCases: [testCase] };
+    const historicalEnvironmentId = environment.id;
+    const history: studio.RunSummary[] = [
+      {
+        id: 'run-frozen-failure', name: 'Historical Case v1', status: 'failed', duration: '00:00:01', summary: 'Historical failure.',
+        projectId: currentProject.id, testCaseId: testCase.id, environmentId: historicalEnvironmentId,
+        environmentName: 'Persisted fallback environment', startedAt: '2026-08-14T00:00:00.000Z',
+      },
+      {
+        id: 'run-persisted-blocked', name: 'Historical blocked Case v1', status: 'blocked', duration: '00:00:01', summary: 'Historical block.',
+        projectId: currentProject.id, testCaseId: testCase.id, environmentId: historicalEnvironmentId,
+        environmentName: 'Persisted QA environment', startedAt: '2026-08-13T00:00:00.000Z',
+      },
+    ];
+    const details: studio.RunDetail[] = [{
+      id: 'run-frozen-failure', projectId: currentProject.id, testCaseId: testCase.id, environmentId: historicalEnvironmentId,
+      title: 'Historical Case v1', status: 'failed', startedAt: '2026-08-14T00:00:00.000Z', endedAt: '2026-08-14T00:00:01.000Z',
+      duration: '00:00:01', summary: 'Historical failure.', reason: { code: 'actionFailed', message: 'Historical failure.' },
+      failureReason: 'Historical failure.', logs: [], steps: [], artifacts: [],
+      provenance: {
+        schemaVersion: 1, projectId: currentProject.id, projectRevision: 'historical-revision', source: 'legacyStudioStore', reproducibility: 'legacy',
+        testCase: { id: testCase.id, version: 1 }, fixtures: [], reusableFlows: [], baselines: [],
+        environment: { id: historicalEnvironmentId, name: 'Frozen production environment', baseUrl: 'https://history.example.test' },
+        browserProfile: { engine: 'chromium', headless: true }, executor: { appVersion: 'test-buddy', runnerVersion: 'runtime-bundle-v1' },
+        model: { hasKey: false }, createdAt: '2026-08-14T00:00:00.000Z',
+      },
+    }];
+
+    const reportWithRenamedAssets = deriveProjectRunReport(currentProject, history, details, '2026-08-15T00:00:00.000Z');
+    const reportWithDeletedAssets = deriveProjectRunReport(
+      { ...currentProject, testCases: [], environments: [] }, history, details, '2026-08-15T00:00:00.000Z',
+    );
+
+    for (const report of [reportWithRenamedAssets, reportWithDeletedAssets]) {
+      expect(report.problemRuns[0]).toMatchObject({
+        testCaseName: 'Historical Case v1',
+        environmentName: 'Frozen production environment',
+      });
+      expect(report.nonExecutedRuns[0]).toMatchObject({
+        testCaseName: 'Historical blocked Case v1',
+        environmentName: 'Persisted QA environment',
+      });
+    }
+  });
+
   it('resets persisted browser sessions because they cannot survive an app restart', () => {
     const project = createEmptyProject(1);
     const hydrated = hydrateStudioState({

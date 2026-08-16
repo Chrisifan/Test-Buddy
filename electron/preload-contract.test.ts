@@ -64,6 +64,8 @@ describe('desktop preload runtime IPC contract', () => {
     desktopApi.runTestCase({ projectId: 'project-1', testCase: { id: 'case-1', version: 2 }, runId: 'run-case-1' });
     desktopApi.cancelRun('suite-1');
     desktopApi.loadRunDetail('run-1');
+    desktopApi.planHistoricalRerun('run-history-1');
+    desktopApi.runHistoricalRerun('run-history-1');
     desktopApi.openArtifact('/artifacts/run.html');
     desktopApi.exportArtifact('/artifacts/run.html');
     desktopApi.attachManualEvidence();
@@ -81,9 +83,11 @@ describe('desktop preload runtime IPC contract', () => {
     });
     expect(invoke).toHaveBeenNthCalledWith(4, runtimeIpcChannels.cancelRun, 'suite-1');
     expect(invoke).toHaveBeenNthCalledWith(5, runtimeIpcChannels.loadRunDetail, 'run-1');
-    expect(invoke).toHaveBeenNthCalledWith(6, runtimeIpcChannels.openArtifact, '/artifacts/run.html');
-    expect(invoke).toHaveBeenNthCalledWith(7, runtimeIpcChannels.exportArtifact, '/artifacts/run.html');
-    expect(invoke).toHaveBeenNthCalledWith(8, runtimeIpcChannels.attachManualEvidence);
+    expect(invoke).toHaveBeenNthCalledWith(6, runtimeIpcChannels.planHistoricalRerun, 'run-history-1');
+    expect(invoke).toHaveBeenNthCalledWith(7, runtimeIpcChannels.runHistoricalRerun, 'run-history-1');
+    expect(invoke).toHaveBeenNthCalledWith(8, runtimeIpcChannels.openArtifact, '/artifacts/run.html');
+    expect(invoke).toHaveBeenNthCalledWith(9, runtimeIpcChannels.exportArtifact, '/artifacts/run.html');
+    expect(invoke).toHaveBeenNthCalledWith(10, runtimeIpcChannels.attachManualEvidence);
 
     expect(source).toContain("require('./ipc/runtime-ipc-channels.cjs')");
     for (const channel of Object.values(runtimeIpcChannels)) {

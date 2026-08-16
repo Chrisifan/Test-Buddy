@@ -26,11 +26,12 @@ describe('appendRunToStudioState', () => {
         testCaseId: 'case-login',
         environmentId: environment.id,
         title: '登录回归',
-        status: 'passed',
+        status: 'blocked',
         startedAt: '2026-08-03T00:00:00.000Z',
         endedAt: '2026-08-03T00:00:02.000Z',
         duration: '00:00:02',
         summary: '通过',
+        reason: { code: 'fixturePreflight', message: 'Fixture is unavailable.' },
         logs: [],
         steps: [],
         artifacts: [],
@@ -45,7 +46,10 @@ describe('appendRunToStudioState', () => {
 
     expect(next.runDetails).toEqual([result.detail]);
     expect(next.recentRuns).toEqual([
-      expect.objectContaining({ id: 'run-1', projectId: 'project-web', environmentName: 'CI' }),
+      expect.objectContaining({
+        id: 'run-1', projectId: 'project-web', environmentName: 'CI',
+        reason: { code: 'fixturePreflight', message: 'Fixture is unavailable.' },
+      }),
     ]);
     expect(next.browserSession.status).toBe('closed');
   });

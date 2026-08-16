@@ -15,6 +15,10 @@ export function StatusPill({ tone }: { tone: RunTone }) {
         tone === 'running' && 'status-pill-running',
         tone === 'failed' && 'status-pill-failed',
         tone === 'neutral' && 'status-pill-neutral',
+        tone === 'blocked' && 'status-pill-blocked border-amber-500/35 bg-amber-500/10 text-amber-700 dark:text-amber-300',
+        tone === 'skipped' && 'status-pill-skipped border-slate-400/35 bg-slate-400/10 text-slate-700 dark:text-slate-300',
+        tone === 'cancelled' && 'status-pill-cancelled border-slate-400/35 bg-slate-400/10 text-slate-700 dark:text-slate-300',
+        tone === 'error' && 'status-pill-error border-destructive/35 bg-destructive/10 text-destructive',
       )}
       variant="outline"
     >

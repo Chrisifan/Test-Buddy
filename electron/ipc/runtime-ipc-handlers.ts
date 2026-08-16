@@ -10,6 +10,8 @@ import type {
 
 import type {
   FixtureScriptTrustRecord,
+  HistoricalRerunExecutionResult,
+  HistoricalRerunPlan,
   ProjectEnvironment,
   RunIntentIpcErrorResponse,
   RunDetail,
@@ -28,6 +30,8 @@ import { ProjectRepositoryError, type ProjectRepository, type ProjectSnapshot } 
 import {
   createRunProvenance,
   createSuiteRunProvenance,
+  resolveRerunPlan,
+  type RerunPlan,
   type RunProvenanceRuntimeMetadata,
 } from '../runtime/run-provenance.js';
 import { isRunCancelled } from '../runtime/run-cancellation.js';
@@ -47,6 +51,8 @@ interface RuntimeIpcArguments {
   [runtimeIpcChannels.runSuite]: [RunSuiteIntent];
   [runtimeIpcChannels.cancelRun]: [string];
   [runtimeIpcChannels.loadRunDetail]: [string];
+  [runtimeIpcChannels.planHistoricalRerun]: [string];
+  [runtimeIpcChannels.runHistoricalRerun]: [string];
   [runtimeIpcChannels.openArtifact]: [string];
   [runtimeIpcChannels.exportArtifact]: [string];
   [runtimeIpcChannels.attachManualEvidence]: [];
@@ -236,6 +242,50 @@ export function registerRuntimeIpcHandlers(dependencies: RuntimeIpcDependencies)
     return state.runDetails.find((run) => run.id === runId) ?? null;
   });
 
+  dependencies.handle(runtimeIpcChannels.planHistoricalRerun, async (_event, runId): Promise<HistoricalRerunPlan> => {
+    const resolved = await resolveStoredHistoricalRerun(dependencies, runId);
+    return historicalRerunPlanForRenderer(runId, resolved.plan);
+  });
+
+  dependencies.handle(runtimeIpcChannels.runHistoricalRerun, async (_event, runId): Promise<HistoricalRerunExecutionResult> => {
+    const resolved = await resolveStoredHistoricalRerun(dependencies, runId);
+    const rendererPlan = historicalRerunPlanForRenderer(runId, resolved.plan);
+    if (rendererPlan.status === 'blocked' || !resolved.run?.provenance || resolved.plan.status === 'blocked') {
+      return rendererPlan as Extract<HistoricalRerunPlan, { status: 'blocked' }>;
+    }
+
+    const state = await dependencies.loadState();
+    const runtime = dependencies.getRuntimeBundle();
+    const provenance = createRunProvenance(
+      resolved.plan.snapshot,
+      resolved.plan.testCase,
+      resolved.plan.environment,
+      runtimeProvenanceMetadata(state, resolved.plan.environment),
+    );
+    const scriptTrust = await dependencies.getFixtureScriptTrustContext(provenance.projectId);
+    const result = await runtime.runTestCase({
+      projectSnapshot: resolved.plan.snapshot,
+      testCase: resolved.plan.testCase,
+      environment: resolved.plan.environment,
+      runtimeProfile: state.runtimeProfile,
+      midsceneConfig: state.midsceneConfig,
+      agentModelConfig: state.agentModelConfig,
+      browserSession: state.browserSession,
+      fixtureScriptTrustRecords: scriptTrust.records,
+      ...(scriptTrust.projectDirectory ? { fixtureScriptTrustDirectory: scriptTrust.projectDirectory } : {}),
+    });
+    const persistedResult = withCaseProvenance(result, provenance);
+    await dependencies.saveState(
+      appendRunToStudioState(
+        await dependencies.loadState(),
+        persistedResult,
+        structuredClone(resolved.plan.environment),
+        runtime.browserRuntime.getState(),
+      ),
+    );
+    return { status: 'completed', response: persistedResult };
+  });
+
   dependencies.handle(runtimeIpcChannels.openArtifact, async (_event, artifactPath) => {
     const runtime = dependencies.getRuntimeBundle();
     if (typeof artifactPath !== 'string' || !runtime.artifactManager.isManagedArtifactPath(artifactPath)) {
@@ -345,6 +395,45 @@ function toCaseRunResponse(detail: RunDetail): RunTestCaseResponse {
     title: detail.title,
     detail,
   };
+}
+
+async function resolveStoredHistoricalRerun(
+  dependencies: Pick<RuntimeIpcDependencies, 'loadState' | 'projectRepository'>,
+  runId: string,
+): Promise<{ run?: RunDetail; plan: RerunPlan }> {
+  const state = await dependencies.loadState();
+  const run = state.runDetails.find((candidate) => candidate.id === runId);
+  if (!run?.provenance) {
+    return {
+      ...(run ? { run } : {}),
+      plan: {
+        status: 'blocked',
+        reason: {
+          code: 'legacyAmbiguousNeutral',
+          message: run
+            ? 'Historical rerun is unavailable because this record has no frozen provenance.'
+            : 'Historical rerun is unavailable because the recorded run no longer exists.',
+        },
+        missingReferences: [],
+      },
+    };
+  }
+  return {
+    run,
+    plan: await resolveRerunPlan(dependencies.projectRepository, run.provenance),
+  };
+}
+
+function historicalRerunPlanForRenderer(runId: string, plan: RerunPlan): HistoricalRerunPlan {
+  if (plan.status === 'blocked') {
+    return {
+      status: 'blocked',
+      runId,
+      reason: structuredClone(plan.reason),
+      missingReferences: plan.missingReferences.map((reference) => ({ ...reference })),
+    };
+  }
+  return { status: 'ready', runId };
 }
 
 function runtimeProvenanceMetadata(

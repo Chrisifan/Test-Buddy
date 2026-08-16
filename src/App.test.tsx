@@ -9,6 +9,8 @@ import {
   createInitialStudioState,
   createPrdDocumentAsset,
   type DesktopApi,
+  type RunDetail,
+  type StudioState,
 } from '../shared/studio.js';
 import { App } from './App.js';
 
@@ -377,11 +379,92 @@ describe('App shell', () => {
 
     await waitFor(() => {
       const persisted = JSON.parse(window.localStorage.getItem('midscene-studio-state-v2') ?? '{}');
-      expect(persisted.runDetails[0]?.agentRun?.intent).toMatchObject({
-        projectId: project.id,
-        groupId: project.groups[0]!.id,
-        environmentId: environment.id,
+      expect(persisted.runDetails[0]).toMatchObject({
+        status: 'blocked',
+        reason: { code: 'unsupportedAction' },
+        agentRun: {
+          intent: {
+            projectId: project.id,
+            groupId: project.groups[0]!.id,
+            environmentId: environment.id,
+          },
+        },
       });
+      expect(persisted.recentRuns[0]).toMatchObject({
+        status: 'blocked',
+        reason: { code: 'unsupportedAction' },
+      });
+    });
+  });
+
+  it('clears the blocked reason after manual confirmation completes a run', async () => {
+    const project = createEmptyProject(1);
+    const environment = project.environments[0]!;
+    const testCase = {
+      ...createEmptyTestCase(1, project.groups[0]!.id, environment.id),
+      id: 'case-manual-confirmation',
+      name: '人工确认用例',
+      steps: [{ id: 'step-manual-confirmation', type: 'manual' as const, title: '确认订单', body: '检查订单详情。' }],
+    };
+    const state = createInitialStudioState();
+    state.projects = [{ ...project, testCases: [testCase] }];
+    state.selectedProjectId = project.id;
+    state.selectedGroupId = project.groups[0]!.id;
+    state.selectedTestCaseId = testCase.id;
+    state.selectedTestCaseReference = { id: testCase.id, version: testCase.version ?? 1 };
+    state.startupGuide.completed = true;
+    state.runDetails = [{
+      id: 'run-manual-confirmation',
+      projectId: project.id,
+      testCaseId: testCase.id,
+      environmentId: environment.id,
+      title: testCase.name,
+      status: 'blocked',
+      startedAt: new Date(0).toISOString(),
+      endedAt: new Date(0).toISOString(),
+      duration: '00:00:01',
+      summary: '等待人工确认。',
+      reason: { code: 'unsupportedAction', message: '等待人工确认。' },
+      logs: [],
+      steps: [{
+        id: 'run-manual-confirmation-step',
+        stepId: 'step-manual-confirmation',
+        title: '确认订单',
+        status: 'blocked',
+        message: '等待人工确认。',
+      }],
+      artifacts: [],
+    }];
+    state.recentRuns = [{
+      id: 'run-manual-confirmation',
+      name: testCase.name,
+      status: 'blocked',
+      duration: '00:00:01',
+      summary: '等待人工确认。',
+      reason: { code: 'unsupportedAction', message: '等待人工确认。' },
+      projectId: project.id,
+      testCaseId: testCase.id,
+      environmentId: environment.id,
+      environmentName: environment.name,
+      startedAt: new Date(0).toISOString(),
+    }];
+    window.localStorage.setItem('midscene-studio-state-v2', JSON.stringify(state));
+
+    render(<App />);
+
+    const navigation = await screen.findByRole('navigation', { name: '主导航' });
+    fireEvent.click(within(navigation).getByRole('button', { name: '运行记录' }));
+    fireEvent.change(await screen.findByLabelText('为 确认订单 填写人工确认说明'), {
+      target: { value: '订单信息已核对。' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '确认通过' }));
+
+    await waitFor(() => {
+      const persisted = JSON.parse(window.localStorage.getItem('midscene-studio-state-v2') ?? '{}');
+      expect(persisted.runDetails[0]).toMatchObject({ status: 'passed' });
+      expect(persisted.runDetails[0]?.reason).toBeUndefined();
+      expect(persisted.recentRuns[0]).toMatchObject({ status: 'passed' });
+      expect(persisted.recentRuns[0]?.reason).toBeUndefined();
     });
   });
 
@@ -424,6 +507,166 @@ describe('App shell', () => {
       ]));
       expect(persisted.runDetails.some((detail: { id: string }) => /^suite-run-\d+$/u.test(detail.id))).toBe(false);
     });
+  });
+
+  it('keeps historical exact-rerun status events bound to frozen provenance', async () => {
+    const originalDesktopApi = window.desktopApi;
+    const project = createEmptyProject(1);
+    project.id = 'project-history';
+    const historicalEnvironment = {
+      ...project.environments[0]!,
+      id: 'env-history',
+      name: 'Historical staging',
+      baseUrl: 'https://history.example.test',
+    };
+    const currentEnvironment = {
+      ...historicalEnvironment,
+      id: 'env-current',
+      name: 'Current preview',
+      baseUrl: 'https://current.example.test',
+    };
+    const currentCase = {
+      ...createEmptyTestCase(1, project.groups[0]!.id, currentEnvironment.id),
+      id: 'case-current',
+      version: 9,
+      name: 'Mutable current Case',
+      prdPath: { documentId: 'document-current', pathId: 'path-current' },
+    };
+    const historicalRun: RunDetail = {
+      id: 'run-history',
+      projectId: project.id,
+      testCaseId: 'case-history',
+      testCaseVersion: 4,
+      documentId: 'document-history',
+      environmentId: historicalEnvironment.id,
+      title: 'Frozen Case v4',
+      status: 'passed',
+      startedAt: new Date(0).toISOString(),
+      endedAt: new Date(0).toISOString(),
+      duration: '00:00:01',
+      summary: 'Historical run passed.',
+      provenance: {
+        schemaVersion: 1,
+        projectId: project.id,
+        projectRevision: 'a'.repeat(64),
+        source: 'projectDirectory',
+        reproducibility: 'versioned',
+        testCase: { id: 'case-history', version: 4 },
+        fixtures: [],
+        reusableFlows: [],
+        baselines: [],
+        environment: historicalEnvironment,
+        browserProfile: { engine: 'chromium', headless: true },
+        executor: { appVersion: '1.0.0', runnerVersion: 'runtime-bundle-v1' },
+        model: { hasKey: true },
+        createdAt: new Date(0).toISOString(),
+      },
+      logs: [],
+      steps: [],
+      artifacts: [],
+    };
+    const state = createInitialStudioState();
+    state.projects = [{
+      ...project,
+      environments: [historicalEnvironment, currentEnvironment],
+      selectedEnvironmentId: currentEnvironment.id,
+      testCases: [currentCase],
+    }];
+    state.selectedProjectId = project.id;
+    state.selectedGroupId = project.groups[0]!.id;
+    state.selectedTestCaseId = currentCase.id;
+    state.selectedTestCaseReference = { id: currentCase.id, version: currentCase.version ?? 1 };
+    state.startupGuide.completed = true;
+    state.appearance.localeMode = 'en-US';
+    state.runDetails = [historicalRun];
+    state.recentRuns = [{
+      id: historicalRun.id,
+      name: historicalRun.title,
+      status: historicalRun.status,
+      duration: historicalRun.duration,
+      summary: historicalRun.summary,
+      projectId: historicalRun.projectId,
+      testCaseId: historicalRun.testCaseId,
+      documentId: historicalRun.documentId,
+      environmentId: historicalRun.environmentId,
+      environmentName: historicalEnvironment.name,
+      startedAt: historicalRun.startedAt,
+    }];
+
+    let runEventListener: Parameters<DesktopApi['onRunEvent']>[0] = () => undefined;
+    let resolveHistoricalRerun: (result: unknown) => void = () => undefined;
+    const historicalRerun = new Promise((resolve) => {
+      resolveHistoricalRerun = resolve;
+    });
+    const saveStudioState = vi.fn().mockResolvedValue(undefined);
+    const desktopApi = {
+      getRuntimeInfo: vi.fn().mockResolvedValue({ platform: 'desktop', persistence: 'file' }),
+      loadStudioState: vi.fn().mockResolvedValue(state),
+      onRecordingEvent: vi.fn().mockReturnValue(() => undefined),
+      onRunEvent: vi.fn((listener) => {
+        runEventListener = listener;
+        return () => undefined;
+      }),
+      planHistoricalRerun: vi.fn().mockResolvedValue({ status: 'ready', runId: historicalRun.id }),
+      runHistoricalRerun: vi.fn().mockImplementation(() => historicalRerun),
+      saveStudioState,
+    } as unknown as DesktopApi;
+    window.desktopApi = desktopApi;
+
+    try {
+      render(<App />);
+
+      const navigation = await screen.findByRole('navigation', { name: 'Main Navigation' });
+      fireEvent.click(within(navigation).getByRole('button', { name: 'Run Records' }));
+      const rerunButton = await screen.findByRole('button', { name: 'Rerun exact version' });
+      await waitFor(() => expect(rerunButton).toBeEnabled());
+      fireEvent.click(rerunButton);
+      await waitFor(() => expect(desktopApi.runHistoricalRerun).toHaveBeenCalledWith(historicalRun.id));
+
+      await act(async () => {
+        runEventListener({
+          runId: 'run-history-rerun',
+          title: 'Frozen Case v4 rerun',
+          type: 'status',
+          status: 'running',
+          summary: 'Historical rerun started.',
+        });
+      });
+
+      await waitFor(() => {
+        const persisted = saveStudioState.mock.calls
+          .map(([candidate]) => candidate as StudioState)
+          .find((candidate) => candidate.recentRuns.some((run) => run.id === 'run-history-rerun'));
+        const rerunSummary = persisted?.recentRuns.find((run) => run.id === 'run-history-rerun');
+        expect(rerunSummary).toMatchObject({
+          projectId: project.id,
+          testCaseId: historicalRun.provenance!.testCase.id,
+          documentId: historicalRun.documentId,
+          environmentId: historicalEnvironment.id,
+          environmentName: historicalEnvironment.name,
+        });
+        expect(rerunSummary).not.toMatchObject({
+          testCaseId: currentCase.id,
+          documentId: currentCase.prdPath!.documentId,
+          environmentId: currentEnvironment.id,
+          environmentName: currentEnvironment.name,
+        });
+      });
+
+      await act(async () => {
+        resolveHistoricalRerun({
+          status: 'completed',
+          response: {
+            runId: 'run-history-rerun',
+            title: 'Frozen Case v4 rerun',
+            detail: { ...historicalRun, id: 'run-history-rerun' },
+          },
+        });
+        await historicalRerun;
+      });
+    } finally {
+      window.desktopApi = originalDesktopApi;
+    }
   });
 
   it('pins a bound Case run to its observed project revision and directs stale snapshots to reload', async () => {

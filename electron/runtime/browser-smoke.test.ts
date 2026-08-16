@@ -160,10 +160,22 @@ describe('local browser runtime smoke', () => {
       });
 
       expect(starts).toBe(1);
-      expect(response.detail.suite.status).toBe('neutral');
+      expect(response.detail.suite).toMatchObject({
+        status: 'cancelled',
+        reason: { code: 'userCancelled' },
+      });
       expect(response.detail.suite.results).toEqual([
-        expect.objectContaining({ testCaseId: first.id, status: 'neutral' }),
-        expect.objectContaining({ testCaseId: second.id, status: 'neutral', attempts: 0 }),
+        expect.objectContaining({
+          testCaseId: first.id,
+          status: 'cancelled',
+          reason: expect.objectContaining({ code: 'userCancelled' }),
+        }),
+        expect.objectContaining({
+          testCaseId: second.id,
+          status: 'cancelled',
+          reason: expect.objectContaining({ code: 'userCancelled' }),
+          attempts: 0,
+        }),
       ]);
     } finally {
       await bundle.close();

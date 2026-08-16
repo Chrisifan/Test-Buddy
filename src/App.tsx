@@ -70,6 +70,8 @@ import {
   type RuntimeProfile,
   type RunArtifact,
   type RunDetail,
+  type RunReason,
+  type RunStatus,
   type RunSummary,
   type RunTone,
   type SuiteAsset,
@@ -105,7 +107,9 @@ import {
   navigateBrowserSession,
   onRunEvent,
   onRecordingEvent,
+  planHistoricalRerun,
   runRecording,
+  runHistoricalRerun,
   runSuite,
   runTestCase,
   runWorkflow,
@@ -149,6 +153,17 @@ const SettingsModal = lazy(() =>
 );
 
 type SaveMode = 'debounced' | 'immediate';
+
+type PendingTestCaseRunContext = {
+  projectId: string;
+  testCase: VersionedTestAssetReference;
+  documentId?: string;
+  environment: {
+    id: string;
+    name: string;
+    baseUrl: string;
+  };
+};
 type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
 type PendingDeletion =
   | { kind: 'project'; id: string; description: string }
@@ -165,6 +180,44 @@ function latestTestCaseReference(project: ProjectDraft | undefined, id?: string)
   const latest = listLatestTestCaseVersions(project ?? { testCases: [] })
     .find((testCase) => !id || testCase.id === id);
   return latest ? { id: latest.id, version: latest.version ?? 1 } : undefined;
+}
+
+function persistedRunStatus(status: RunTone): RunStatus {
+  return status === 'neutral' ? 'blocked' : status;
+}
+
+function persistedRunReason(status: RunStatus, message: string): RunReason | undefined {
+  if (status === 'running' || status === 'passed') {
+    return undefined;
+  }
+
+  switch (status) {
+    case 'failed':
+      return { code: 'actionFailed', message };
+    case 'blocked':
+      return { code: 'unsupportedAction', message };
+    case 'skipped':
+      return { code: 'dependencyFailed', message };
+    case 'cancelled':
+      return { code: 'userCancelled', message };
+    case 'error':
+      return { code: 'executorError', message };
+  }
+}
+
+function agentStatusForPersistedRun(status: RunStatus): AgentRunResult['status'] {
+  switch (status) {
+    case 'running':
+    case 'passed':
+    case 'failed':
+      return status;
+    case 'error':
+      return 'failed';
+    case 'blocked':
+    case 'skipped':
+    case 'cancelled':
+      return 'neutral';
+  }
 }
 
 function RouteLoadingPlaceholder() {
@@ -217,6 +270,7 @@ export function App() {
     initialState.projects[0]?.documents[0]?.id ?? '',
   );
   const [runDetails, setRunDetails] = useState<RunDetail[]>(initialState.runDetails);
+  const [suiteRunRecords, setSuiteRunRecords] = useState(initialState.suiteRunRecords);
   const [selectedRunId, setSelectedRunId] = useState(initialState.recentRuns[0]?.id ?? '');
   const [recentRuns, setRecentRuns] = useState<RunSummary[]>(initialState.recentRuns);
   const [chatEntries, setChatEntries] = useState<ChatEntry[]>(initialState.chatEntries);
@@ -259,13 +313,7 @@ export function App() {
   const [projectConfigurationTargetId, setProjectConfigurationTargetId] = useState<string>();
   const pageTransitionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const selectedRecordingIdRef = useRef(selectedRecordingId);
-  const pendingTestCaseRunContextRef = useRef<{
-    projectId: string;
-    testCaseId: string;
-    documentId?: string;
-    environmentId: string;
-    environmentName: string;
-  } | null>(null);
+  const pendingTestCaseRunContextRef = useRef<PendingTestCaseRunContext | null>(null);
   const activeSuiteRunIdRef = useRef<string | undefined>(undefined);
   const previousLocaleRef = useRef(resolveLocale(initialState.appearance.localeMode));
   const latestStudioStateRef = useRef<StudioState | undefined>(undefined);
@@ -397,6 +445,7 @@ export function App() {
         setSelectedSuiteReference(latestSuiteReference(hydratedProject));
         setSelectedDocumentId(hydratedProject?.documents[0]?.id ?? '');
         setRunDetails(state.runDetails);
+        setSuiteRunRecords(state.suiteRunRecords);
         setRecentRuns(state.recentRuns);
         setSelectedRunId(state.recentRuns[0]?.id ?? '');
         setChatEntries(state.chatEntries);
@@ -455,6 +504,7 @@ export function App() {
       projects,
       projectAssetBindings,
       runDetails,
+      suiteRunRecords,
       recentRuns,
       chatEntries,
       runtimeProfile,
@@ -482,6 +532,7 @@ export function App() {
     projectAssetBindings,
     recentRuns,
     runDetails,
+    suiteRunRecords,
     runtimeProfile,
     selectedGroupId,
     selectedProjectId,
@@ -527,18 +578,21 @@ export function App() {
           setRunStatus(event.status);
         }
         if (summary) {
+          const status = persistedRunStatus(event.status ?? 'running');
+          const reason = persistedRunReason(status, summary);
           setRecentRuns((current) => [
             {
               id: event.runId,
               name: event.title,
-              status: event.status ?? 'running',
+              status,
               duration: event.duration ?? '00:00:00',
               summary,
+              ...(reason ? { reason } : {}),
               projectId: runContext?.projectId ?? selectedProjectId,
-              testCaseId: runContext?.testCaseId ?? selectedTestCaseId,
+              testCaseId: runContext?.testCase.id ?? selectedTestCaseId,
               ...(runContext?.documentId ? { documentId: runContext.documentId } : {}),
-              environmentId: runContext?.environmentId ?? selectedEnvironment?.id,
-              environmentName: runContext?.environmentName ?? selectedEnvironment?.name,
+              environmentId: runContext?.environment.id ?? selectedEnvironment?.id,
+              environmentName: runContext?.environment.name ?? selectedEnvironment?.name,
               startedAt: new Date().toISOString(),
             },
             ...current.filter((run) => run.id !== event.runId),
@@ -561,14 +615,21 @@ export function App() {
         }
         setRecentRuns((current) =>
           current.map((run) =>
-            run.id === event.runId
-              ? {
-                  ...run,
-                  status: event.status ?? run.status,
-                  duration: event.duration ?? run.duration,
-                  summary: event.summary ?? run.summary,
-                }
-              : run,
+            {
+              if (run.id !== event.runId) {
+                return run;
+              }
+              const status = event.status ? persistedRunStatus(event.status) : run.status;
+              const summary = event.summary ?? run.summary;
+              const reason = event.detail?.reason ?? run.reason ?? persistedRunReason(status, summary);
+              return {
+                ...run,
+                status,
+                duration: event.duration ?? run.duration,
+                summary,
+                ...(reason ? { reason } : {}),
+              };
+            },
           ),
         );
       }
@@ -1576,7 +1637,8 @@ export function App() {
   ) {
     const confirmedAt = new Date().toISOString();
     let nextSummary = '';
-    let nextStatus: RunTone = status;
+    let nextStatus: RunStatus = status;
+    let nextReason: RunReason | undefined;
 
     setRunDetails((current) =>
       current.map((detail) => {
@@ -1593,10 +1655,11 @@ export function App() {
               }
             : step,
         );
+        const remainingStep = steps.find((step) => step.status !== 'passed');
         nextStatus = steps.some((step) => step.status === 'failed')
           ? 'failed'
-          : steps.some((step) => step.status === 'neutral')
-            ? 'neutral'
+          : remainingStep
+            ? persistedRunStatus(remainingStep.status)
             : 'passed';
         nextSummary =
           nextStatus === 'failed'
@@ -1604,6 +1667,7 @@ export function App() {
             : nextStatus === 'passed'
               ? '全部步骤已完成并获得执行或人工确认。'
               : '人工检查已确认，仍有步骤等待执行。';
+        nextReason = persistedRunReason(nextStatus, nextSummary);
         const manualArtifactId = `${runId}-artifact-manual-${stepId}`;
         const manualArtifact = screenshotPath
           ? {
@@ -1676,9 +1740,10 @@ export function App() {
                   }),
               );
               const { failureReason: previousFailureReason, ...agentRunWithoutPreviousFailure } = currentAgentRun;
+              const agentStatus = agentStatusForPersistedRun(nextStatus);
               return {
                 ...agentRunWithoutPreviousFailure,
-                status: nextStatus,
+                status: agentStatus,
                 summary: nextSummary,
                 events: [
                   ...remainingEvents,
@@ -1689,7 +1754,7 @@ export function App() {
                     runId: currentAgentRun.runId,
                     type: 'agent:run-finished' as const,
                     message: nextSummary,
-                    status: nextStatus,
+                    status: agentStatus,
                     createdAt: confirmedAt,
                   },
                 ],
@@ -1701,12 +1766,17 @@ export function App() {
               };
             })()
           : undefined;
-        const { failureReason: previousFailureReason, ...detailWithoutPreviousFailure } = detail;
+        const {
+          failureReason: previousFailureReason,
+          reason: previousReason,
+          ...detailWithoutPreviousFailure
+        } = detail;
 
         return {
           ...detailWithoutPreviousFailure,
           status: nextStatus,
           summary: nextSummary,
+          ...(nextReason ? { reason: nextReason } : {}),
           logs: [
             ...detail.logs,
             `[${createTimestampLabel()}] 人工检查${status === 'passed' ? '通过' : '失败'}：${note}${screenshotPath ? '（已附加当前页面截图）' : ''}${attachmentSummary}`,
@@ -1723,15 +1793,18 @@ export function App() {
       }),
     );
     setRecentRuns((current) =>
-      current.map((run) =>
-        run.id === runId
-          ? {
-              ...run,
-              status: nextStatus,
-              summary: nextSummary,
-            }
-          : run,
-      ),
+      current.map((run) => {
+        if (run.id !== runId) {
+          return run;
+        }
+        const { reason: previousReason, ...runWithoutPreviousReason } = run;
+        return {
+          ...runWithoutPreviousReason,
+          status: nextStatus,
+          summary: nextSummary,
+          ...(nextReason ? { reason: nextReason } : {}),
+        };
+      }),
     );
   }
 
@@ -1903,16 +1976,17 @@ export function App() {
       });
       setRunId(result.runId);
       setRunTitle(result.title);
-      setRunStatus(result.agentRun.status);
+      setRunStatus(result.detail.status);
       setIsRunning(false);
       setRunDetails((current) => [result.detail, ...current.filter((run) => run.id !== result.runId)]);
       setRecentRuns((current) => [
         {
           id: result.runId,
           name: result.title,
-          status: result.agentRun.status,
+          status: result.detail.status,
           duration: result.detail.duration,
           summary: result.detail.summary,
+          ...(result.detail.reason ? { reason: result.detail.reason } : {}),
           projectId: selectedProject.id,
           testCaseId: selectedRecording.id,
           ...(result.detail.documentId ? { documentId: result.detail.documentId } : {}),
@@ -2142,6 +2216,7 @@ export function App() {
           status: detail.status,
           duration: detail.duration,
           summary: detail.summary,
+          ...(detail.reason ? { reason: detail.reason } : {}),
           projectId: selectedProject.id,
           testCaseId: detail.testCaseId,
           ...(detail.documentId ? { documentId: detail.documentId } : {}),
@@ -2256,6 +2331,8 @@ export function App() {
       ? Date.parse(agentRun.endedAt) - Date.parse(agentRun.startedAt)
       : undefined;
     const duration = formatRunDuration(agentRun.metrics?.durationMs ?? fallbackDurationMs);
+    const status = persistedRunStatus(agentRun.status);
+    const reason = persistedRunReason(status, agentRun.failureReason ?? agentRun.summary);
     const detail: RunDetail = {
       id: agentRun.runId,
       projectId,
@@ -2263,16 +2340,17 @@ export function App() {
       ...(documentId ? { documentId } : {}),
       environmentId,
       title: agentRun.plan.title,
-      status: agentRun.status,
+      status,
       startedAt: agentRun.startedAt,
       duration,
       summary: agentRun.summary,
+      ...(reason ? { reason } : {}),
       logs,
       steps: agentRun.plan.steps.map((step, index) => ({
         id: `agent-run-step-${agentRun.runId}-${index}`,
         stepId: step.id,
         title: step.title,
-        status: agentRun.status,
+        status,
         message: `${step.action}: ${step.instruction}`,
       })),
       artifacts: agentRun.artifacts,
@@ -2287,9 +2365,10 @@ export function App() {
     const summary: RunSummary = {
       id: agentRun.runId,
       name: agentRun.plan.title,
-      status: agentRun.status,
+      status,
       duration,
       summary: agentRun.summary,
+      ...(reason ? { reason } : {}),
       projectId,
       testCaseId,
       ...(documentId ? { documentId } : {}),
@@ -2461,16 +2540,17 @@ export function App() {
       });
       setRunId(result.runId);
       setRunTitle(result.title);
-      setRunStatus(result.agentRun.status);
+      setRunStatus(result.detail.status);
       setIsRunning(false);
       setRunDetails((current) => [result.detail, ...current.filter((run) => run.id !== result.runId)]);
       setRecentRuns((current) => [
         {
           id: result.runId,
           name: result.title,
-          status: result.agentRun.status,
+          status: result.detail.status,
           duration: result.detail.duration,
           summary: result.detail.summary,
+          ...(result.detail.reason ? { reason: result.detail.reason } : {}),
           projectId: selectedProject?.id,
           testCaseId: selectedWorkflow.id,
           environmentId: selectedEnvironment?.id,
@@ -2518,10 +2598,13 @@ export function App() {
     setProjectRevisionErrorProjectId(undefined);
     pendingTestCaseRunContextRef.current = {
       projectId: selectedProject.id,
-      testCaseId: testCaseToRun.id,
+      testCase: { id: testCaseToRun.id, version: testCaseToRun.version ?? 1 },
       ...(documentId ? { documentId } : {}),
-      environmentId: environmentToRun.id,
-      environmentName: environmentToRun.name,
+      environment: {
+        id: environmentToRun.id,
+        name: environmentToRun.name,
+        baseUrl: environmentToRun.url,
+      },
     };
     setRunStatus('running');
     setRunLogs([
@@ -2553,6 +2636,7 @@ export function App() {
           status: result.detail.status,
           duration: result.detail.duration,
           summary: result.detail.summary,
+          ...(result.detail.reason ? { reason: result.detail.reason } : {}),
           projectId: selectedProject.id,
           testCaseId: testCaseToRun.id,
           ...(result.detail.documentId ? { documentId: result.detail.documentId } : {}),
@@ -2583,22 +2667,82 @@ export function App() {
     }
   }
 
-  function handleRerunTestCase(run: RunDetail) {
-    if (!selectedProject || caseDraft) {
-      return;
+  async function handlePlanExactRerun(runId: string) {
+    return planHistoricalRerun(runId);
+  }
+
+  async function handleRunExactRerun(runId: string) {
+    if (isRunning) {
+      return {
+        status: 'blocked' as const,
+        runId,
+        reason: { code: 'dependencyFailed' as const, message: 'Another run is already active.' },
+        missingReferences: [],
+      };
     }
 
-    const testCaseReference = latestTestCaseReference(selectedProject, run.testCaseId);
-    const testCase = testCaseReference && findTestCaseVersion(selectedProject, testCaseReference);
-    const environment = selectedProject.environments.find((item) => item.id === run.environmentId);
-    if (!testCase || !environment) {
-      appendSystemMessage(t('app.runtime.rerunUnavailable'));
-      return;
-    }
+    setIsRunning(true);
+    try {
+      const plan = await planHistoricalRerun(runId);
+      if (plan.status === 'blocked') {
+        appendSystemMessage(plan.reason.message);
+        return plan;
+      }
 
-    setSelectedTestCaseReference({ id: testCase.id, version: testCase.version ?? 1 });
-    setSelectedGroupId(testCase.groupId);
-    void handleRunTestCase(testCase, environment);
+      const historicalRun = runDetails.find((run) => run.id === runId);
+      const historicalProvenance = historicalRun?.provenance;
+      pendingTestCaseRunContextRef.current = historicalProvenance
+        ? {
+          projectId: historicalProvenance.projectId,
+          testCase: structuredClone(historicalProvenance.testCase),
+          ...(historicalRun?.documentId ? { documentId: historicalRun.documentId } : {}),
+          environment: structuredClone(historicalProvenance.environment),
+        }
+        : null;
+
+      const result = await runHistoricalRerun(runId);
+      if (result.status === 'blocked') {
+        appendSystemMessage(result.reason.message);
+        return result;
+      }
+
+      const detail = result.response.detail;
+      const provenance = detail.provenance;
+      setRunId(result.response.runId);
+      setRunTitle(result.response.title);
+      setRunStatus(detail.status);
+      setRunDetails((current) => [detail, ...current.filter((run) => run.id !== detail.id)]);
+      setRecentRuns((current) => [
+        {
+          id: detail.id,
+          name: detail.title,
+          status: detail.status,
+          duration: detail.duration,
+          summary: detail.summary,
+          ...(detail.reason ? { reason: detail.reason } : {}),
+          projectId: detail.projectId,
+          testCaseId: detail.testCaseId,
+          ...(detail.documentId ? { documentId: detail.documentId } : {}),
+          environmentId: detail.environmentId,
+          ...(provenance ? { environmentName: provenance.environment.name } : {}),
+          startedAt: detail.startedAt,
+        },
+        ...current.filter((run) => run.id !== detail.id),
+      ]);
+      setSelectedRunId(detail.id);
+      return result;
+    } catch (error) {
+      appendSystemMessage(error instanceof Error ? error.message : t('app.runtime.caseFailed'));
+      return {
+        status: 'blocked' as const,
+        runId,
+        reason: { code: 'executorError' as const, message: error instanceof Error ? error.message : t('app.runtime.caseFailed') },
+        missingReferences: [],
+      };
+    } finally {
+      pendingTestCaseRunContextRef.current = null;
+      setIsRunning(false);
+    }
   }
 
   async function handleExportProjectReport() {
@@ -2914,7 +3058,8 @@ export function App() {
               onConfirmManualStep={handleConfirmManualStep}
               onCreateReporterFixDraft={handleCreateReporterFixDraft}
               onExportProjectReport={runtimeInfo.platform === 'desktop' ? handleExportProjectReport : undefined}
-              onRerunTestCase={handleRerunTestCase}
+              onPlanExactRerun={handlePlanExactRerun}
+              onRunExactRerun={handleRunExactRerun}
               onSelectRun={setSelectedRunId}
               project={selectedProject}
               projectAssetBinding={selectedProjectAssetBinding}

@@ -23,6 +23,7 @@ export function appendRunToStudioState(
         status: detail.status,
         duration: detail.duration,
         summary: detail.summary,
+        ...(detail.reason ? { reason: structuredClone(detail.reason) } : {}),
         projectId: detail.projectId,
         testCaseId: detail.testCaseId,
         ...(detail.documentId ? { documentId: detail.documentId } : {}),

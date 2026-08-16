@@ -42,7 +42,7 @@ const request: ChatCommandRequest = {
 };
 
 describe('browser fallback agent runtime', () => {
-  it('runs exact Suite members in stable order when the desktop bridge is unavailable', async () => {
+  it('blocks exact Suite members in stable order when the desktop bridge is unavailable', async () => {
     const project = createEmptyProject(1);
     const environment = project.environments[0]!;
     const first = {
@@ -78,11 +78,12 @@ describe('browser fallback agent runtime', () => {
     expect(response.detail.suite).toMatchObject({
       suiteId: suite.id,
       suiteVersion: suite.version,
-      status: 'neutral',
+      status: 'blocked',
+      reason: { code: 'unsupportedAction' },
       effectiveConcurrency: 1,
       results: [
-        { testCaseId: first.id, status: 'neutral' },
-        { testCaseId: second.id, status: 'neutral' },
+        { testCaseId: first.id, status: 'blocked', reason: { code: 'unsupportedAction' } },
+        { testCaseId: second.id, status: 'blocked', reason: { code: 'unsupportedAction' } },
       ],
     });
     expect(response.detail.caseDetails.map((detail) => detail.testCaseId)).toEqual([first.id, second.id]);
@@ -91,6 +92,44 @@ describe('browser fallback agent runtime', () => {
       'suite-run-fallback-case-fallback-first-attempt-1',
       'suite-run-fallback-case-fallback-second-attempt-1',
     ]);
+  });
+
+  it('blocks a missing Suite version before browser fallback execution', async () => {
+    const project = createEmptyProject(1);
+
+    const response = await runSuite({
+      runId: 'suite-run-missing',
+      project,
+      suite: { id: 'suite-missing', version: 2 },
+    });
+
+    expect(response.detail.suite).toMatchObject({
+      status: 'blocked',
+      reason: { code: 'missingAssetVersion' },
+      results: [],
+    });
+  });
+
+  it('blocks an unresolved Suite Case reference before browser fallback execution', async () => {
+    const project = createEmptyProject(1);
+    const suite = {
+      ...createEmptySuiteAsset(project, 1),
+      id: 'suite-unresolved',
+      caseReferences: [{ id: 'case-missing', version: 2, dependsOn: [] }],
+    };
+    project.suites = [suite];
+
+    const response = await runSuite({
+      runId: 'suite-run-unresolved',
+      project,
+      suite: { id: suite.id, version: suite.version },
+    });
+
+    expect(response.detail.suite).toMatchObject({
+      status: 'blocked',
+      reason: { code: 'missingAssetVersion' },
+      results: [],
+    });
   });
 
   it('delegates an exact Suite intent rather than renderer-owned project state to the desktop bridge', async () => {
@@ -157,6 +196,28 @@ describe('browser fallback agent runtime', () => {
     }
   });
 
+  it('blocks a missing Case version before browser fallback execution', async () => {
+    const project = createEmptyProject(1);
+    const environment = project.environments[0]!;
+    const missingCase = {
+      ...createEmptyTestCase(1, project.groups[0]!.id, environment.id),
+      id: 'case-missing',
+      version: 2,
+    };
+
+    const response = await runTestCase({
+      project,
+      environment,
+      testCase: missingCase,
+    });
+
+    expect(response.detail).toMatchObject({
+      status: 'blocked',
+      reason: { code: 'missingAssetVersion' },
+      steps: [],
+    });
+  });
+
   it('keeps semantic actions neutral when no Midscene runtime is connected', async () => {
     const response = await sendChatCommand(request);
 
@@ -190,7 +251,7 @@ describe('browser fallback agent runtime', () => {
     });
   });
 
-  it('keeps workflow runs neutral instead of simulating a pass', async () => {
+  it('persists browser fallback workflow runs as blocked instead of simulating a pass', async () => {
     const response = await runWorkflow({
       workflow: {
         id: 'workflow-login',
@@ -207,7 +268,11 @@ describe('browser fallback agent runtime', () => {
     });
 
     expect(response.agentRun.status).toBe('neutral');
-    expect(response.detail.status).toBe('neutral');
+    expect(response.detail).toMatchObject({
+      status: 'blocked',
+      reason: { code: 'unsupportedAction' },
+      steps: [{ status: 'blocked' }],
+    });
     expect(response.detail.agentRun).toBe(response.agentRun);
     expect(response.detail.summary).toContain('等待完成执行');
   });
@@ -238,7 +303,10 @@ describe('browser fallback agent runtime', () => {
       testCase,
     });
 
-    expect(response.detail.status).toBe('neutral');
+    expect(response.detail).toMatchObject({
+      status: 'blocked',
+      reason: { code: 'unsupportedAction' },
+    });
     expect(response.detail.documentId).toBe('doc-login');
     expect(response.detail.agentRun?.intent.source).toBe('workflow');
     expect(response.detail.agentRun?.intent.documentId).toBe('doc-login');
@@ -312,7 +380,7 @@ describe('browser fallback agent runtime', () => {
     expect(recordingResponse.detail.agentRun?.intent.source).toBe('recording');
   });
 
-  it('keeps non-Agent test cases neutral when desktop execution is unavailable', async () => {
+  it('blocks non-Agent test cases when desktop execution is unavailable', async () => {
     const project = createEmptyProject(1);
     const environment = project.environments[0];
     const testCase = {
@@ -336,8 +404,11 @@ describe('browser fallback agent runtime', () => {
       testCase,
     });
 
-    expect(response.detail.status).toBe('neutral');
-    expect(response.detail.steps[0]?.status).toBe('neutral');
+    expect(response.detail).toMatchObject({
+      status: 'blocked',
+      reason: { code: 'unsupportedAction' },
+    });
+    expect(response.detail.steps[0]?.status).toBe('blocked');
     expect(response.detail.summary).toContain('未执行');
   });
 
@@ -386,7 +457,7 @@ describe('browser fallback agent runtime', () => {
     expect(response.detail.agentRun?.intent.testCaseId).toBe('case-recording-route');
   });
 
-  it('creates a neutral recording plan when desktop replay is unavailable', async () => {
+  it('persists a blocked recording plan when desktop replay is unavailable', async () => {
     const project = createEmptyProject(1);
     const environment = project.environments[0];
     const recording = {
@@ -410,7 +481,11 @@ describe('browser fallback agent runtime', () => {
     expect(response.agentRun.status).toBe('neutral');
     expect(response.agentRun.intent.documentId).toBe('doc-recording');
     expect(response.detail.documentId).toBe('doc-recording');
-    expect(response.detail.status).toBe('neutral');
+    expect(response.detail).toMatchObject({
+      status: 'blocked',
+      reason: { code: 'unsupportedAction' },
+      steps: [],
+    });
     expect(response.detail.agentRun).toBe(response.agentRun);
   });
 

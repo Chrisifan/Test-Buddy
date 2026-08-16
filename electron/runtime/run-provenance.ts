@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import type {
   BrowserEngine,
   FixtureAsset,
+  HistoricalRerunMissingReference,
   ProjectDraft,
   ProjectEnvironment,
   RunProvenance,
@@ -34,10 +35,7 @@ export interface RunProvenanceRuntimeMetadata {
   createdAt: string;
 }
 
-export interface RerunMissingReference {
-  id: string;
-  version?: number;
-}
+export type RerunMissingReference = HistoricalRerunMissingReference;
 
 export type RerunPlan =
   | {

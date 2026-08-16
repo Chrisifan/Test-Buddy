@@ -24,7 +24,11 @@ import type {
   ImportStorageStateRequest,
   FixtureScriptTrustRequest,
   FixtureScriptTrustStatus,
+  HistoricalRerunExecutionResult,
+  HistoricalRerunPlan,
   RunDetail,
+  RunReason,
+  RunStatus,
   RuntimeProfile,
   RunEventPayload,
   RecordingCapturedEvent,
@@ -67,6 +71,18 @@ function nowLabel(): string {
 
 function emit(event: RunEventPayload) {
   listeners.forEach((listener) => listener(event));
+}
+
+function unsupportedBrowserFallbackReason(message: string): RunReason {
+  return { code: 'unsupportedAction', message };
+}
+
+function missingAssetVersionReason(message: string): RunReason {
+  return { code: 'missingAssetVersion', message };
+}
+
+function terminalBrowserFallbackStatus(status: RunStatus): Exclude<RunStatus, 'running'> {
+  return status === 'running' ? 'blocked' : status;
 }
 
 function getDesktopApi() {
@@ -584,17 +600,18 @@ export async function runWorkflow(
     ...(request.documentId ? { documentId: request.documentId } : {}),
     environmentId: request.environment?.id ?? request.targetEnvironment,
     title,
-    status: 'neutral',
+    status: 'blocked',
     startedAt: agentRun.startedAt,
     endedAt: agentRun.endedAt,
     duration: '00:00:00',
     summary: agentRun.summary,
+    reason: unsupportedBrowserFallbackReason('浏览器 fallback 只生成计划，桌面 Agent runtime 不可用。'),
     logs: agentRun.events.map((event) => `[${nowLabel()}] ${event.type}: ${event.message}`),
     steps: request.workflow.steps.map((step, index) => ({
       id: `${runId}-step-${index}`,
       stepId: step.id,
       title: step.title,
-      status: 'neutral',
+      status: 'blocked',
       message: '浏览器 fallback 只生成计划，该步骤等待桌面 Agent runtime 执行。',
     })),
     artifacts: agentRun.artifacts,
@@ -606,7 +623,7 @@ export async function runWorkflow(
     runId,
     title,
     type: 'complete',
-    status: 'neutral',
+    status: detail.status,
     duration: detail.duration,
     summary: detail.summary,
     detail,
@@ -685,6 +702,7 @@ export async function runTestCase(request: RunTestCaseRequest): Promise<RunTestC
     `[${nowLabel()}] Environment: ${request.environment.name}`,
   ];
   logs.forEach((line) => emit({ runId, title, type: 'log', line }));
+  const summary = `浏览器 legacy fallback 未执行 ${testCase.steps.length} 个步骤，结果已标记为阻塞。`;
 
   const detail: RunDetail = {
     id: runId,
@@ -693,17 +711,18 @@ export async function runTestCase(request: RunTestCaseRequest): Promise<RunTestC
     ...(documentId ? { documentId } : {}),
     environmentId: request.environment.id,
     title,
-    status: 'neutral',
+    status: 'blocked',
     startedAt: new Date().toISOString(),
     endedAt: new Date().toISOString(),
     duration: `00:00:${String(Math.max(1, testCase.steps.length * 2)).padStart(2, '0')}`,
-    summary: `浏览器 legacy fallback 未执行 ${testCase.steps.length} 个步骤，结果保持等待态。`,
+    summary,
+    reason: unsupportedBrowserFallbackReason(summary),
     logs,
     steps: testCase.steps.map((step, index) => ({
       id: `run-step-${runId}-${index}`,
       stepId: step.id,
       title: step.title,
-      status: 'neutral',
+      status: 'blocked',
       message: `步骤等待桌面执行器：${step.body}`,
     })),
     artifacts: [],
@@ -714,7 +733,7 @@ export async function runTestCase(request: RunTestCaseRequest): Promise<RunTestC
       runId,
       title,
       type: 'complete',
-      status: 'neutral',
+      status: detail.status,
       duration: detail.duration,
       summary: detail.summary,
       detail,
@@ -731,6 +750,7 @@ function createMissingLegacyCaseResponse(
   const runId = request.runId ?? `run-${Date.now().toString().slice(-5)}`;
   const now = new Date().toISOString();
   const title = `Case ${reference.id}@${reference.version}`;
+  const summary = `浏览器 legacy fallback 未找到 Case：${reference.id}@${reference.version}。`;
   return {
     runId,
     title,
@@ -740,11 +760,12 @@ function createMissingLegacyCaseResponse(
       testCaseId: reference.id,
       environmentId: request.environment.id,
       title,
-      status: 'neutral',
+      status: 'blocked',
       startedAt: now,
       endedAt: now,
       duration: '00:00:00',
-      summary: `浏览器 legacy fallback 未找到 Case：${reference.id}@${reference.version}。`,
+      summary,
+      reason: missingAssetVersionReason(summary),
       logs: [],
       steps: [],
       artifacts: [],
@@ -767,6 +788,7 @@ export async function runSuite(request: RunSuiteRequest): Promise<RunSuiteRespon
   const suite = findSuiteAsset(request.project, request.suite);
   const now = new Date().toISOString();
   if (!suite) {
+    const issue = `未找到 Suite：${request.suite.id}@${request.suite.version}。`;
     return {
       runId,
       title: `Suite ${request.suite.id}@${request.suite.version}`,
@@ -775,12 +797,13 @@ export async function runSuite(request: RunSuiteRequest): Promise<RunSuiteRespon
           suiteId: request.suite.id,
           suiteVersion: request.suite.version,
           environmentId: '',
-          status: 'neutral',
+          status: 'blocked',
+          reason: missingAssetVersionReason(issue),
           startedAt: now,
           endedAt: now,
           effectiveConcurrency: 1,
           results: [],
-          issues: [`未找到 Suite：${request.suite.id}@${request.suite.version}。`],
+          issues: [issue],
         },
         caseDetails: [],
       },
@@ -789,6 +812,8 @@ export async function runSuite(request: RunSuiteRequest): Promise<RunSuiteRespon
 
   const resolution = resolveSuiteTestCases(request.project, suite);
   if (!resolution.environment || resolution.issues.length) {
+    const issues = resolution.issues.map((issue) => issue.message);
+    const summary = issues[0] ?? 'Suite 浏览器 fallback 缺少可执行环境。';
     return {
       runId,
       title: suite.name,
@@ -797,12 +822,13 @@ export async function runSuite(request: RunSuiteRequest): Promise<RunSuiteRespon
           suiteId: suite.id,
           suiteVersion: suite.version,
           environmentId: suite.environmentId,
-          status: 'neutral',
+          status: 'blocked',
+          reason: missingAssetVersionReason(summary),
           startedAt: now,
           endedAt: new Date().toISOString(),
           effectiveConcurrency: 1,
           results: [],
-          issues: resolution.issues.map((issue) => issue.message),
+          issues,
         },
         caseDetails: [],
       },
@@ -826,12 +852,14 @@ export async function runSuite(request: RunSuiteRequest): Promise<RunSuiteRespon
   const results = caseDetails.map((detail, index) => ({
     testCaseId: detail.testCaseId,
     testCaseVersion: resolution.orderedCases[index]!.testCase.version ?? 1,
-    status: detail.status === 'running' ? 'neutral' as const : detail.status,
+    status: terminalBrowserFallbackStatus(detail.status),
     summary: detail.summary,
+    ...(detail.reason ? { reason: detail.reason } : {}),
     attempts: 1,
     flaky: false,
     runId: detail.id,
   }));
+  const firstNonPassed = results.find((result) => result.status !== 'passed');
   return {
     runId,
     title: suite.name,
@@ -840,9 +868,8 @@ export async function runSuite(request: RunSuiteRequest): Promise<RunSuiteRespon
         suiteId: suite.id,
         suiteVersion: suite.version,
         environmentId: suite.environmentId,
-        status: results.some((result) => result.status === 'failed')
-          ? 'failed'
-          : results.some((result) => result.status === 'neutral') ? 'neutral' : 'passed',
+        status: firstNonPassed?.status ?? 'passed',
+        ...(firstNonPassed?.reason ? { reason: firstNonPassed.reason } : {}),
         startedAt: now,
         endedAt: new Date().toISOString(),
         effectiveConcurrency: 1,
@@ -871,6 +898,7 @@ export async function runRecording(request: RunRecordingRequest): Promise<RunRec
     ...(documentId ? { documentId } : {}),
     runId,
   });
+  const summary = agentRun.summary;
   const detail: RunDetail = {
     id: runId,
     projectId: request.project.id,
@@ -878,17 +906,18 @@ export async function runRecording(request: RunRecordingRequest): Promise<RunRec
     ...(documentId ? { documentId } : {}),
     environmentId: request.environment.id,
     title,
-    status: 'neutral',
+    status: 'blocked',
     startedAt: agentRun.startedAt,
     endedAt: agentRun.endedAt,
     duration: '00:00:00',
-    summary: agentRun.summary,
+    summary,
+    reason: unsupportedBrowserFallbackReason('浏览器 fallback 只生成回放计划，桌面 BrowserRuntime 不可用。'),
     logs: agentRun.events.map((event) => `[${nowLabel()}] ${event.type}: ${event.message}`),
     steps: request.recording.steps.map((step, index) => ({
       id: `${runId}-step-${index}`,
       stepId: step.id,
       title: step.title,
-      status: 'neutral',
+      status: 'blocked',
       message: '浏览器 fallback 只生成回放计划，该节点等待桌面 BrowserRuntime 执行。',
     })),
     artifacts: agentRun.artifacts,
@@ -900,7 +929,7 @@ export async function runRecording(request: RunRecordingRequest): Promise<RunRec
     runId,
     title,
     type: 'complete',
-    status: 'neutral',
+    status: detail.status,
     duration: detail.duration,
     summary: detail.summary,
     detail,
@@ -916,6 +945,36 @@ export async function loadRunDetail(runId: string): Promise<RunDetail | null> {
   }
 
   return null;
+}
+
+export async function planHistoricalRerun(runId: string): Promise<HistoricalRerunPlan> {
+  const desktopApi = getDesktopApi();
+  if (desktopApi) {
+    return desktopApi.planHistoricalRerun(runId);
+  }
+
+  return unavailableHistoricalRerunPlan(runId);
+}
+
+export async function runHistoricalRerun(runId: string): Promise<HistoricalRerunExecutionResult> {
+  const desktopApi = getDesktopApi();
+  if (desktopApi) {
+    return desktopApi.runHistoricalRerun(runId);
+  }
+
+  return unavailableHistoricalRerunPlan(runId);
+}
+
+function unavailableHistoricalRerunPlan(runId: string): Extract<HistoricalRerunPlan, { status: 'blocked' }> {
+  return {
+    status: 'blocked',
+    runId,
+    reason: {
+      code: 'legacyAmbiguousNeutral',
+      message: 'Exact historical reruns require the desktop main-process runtime.',
+    },
+    missingReferences: [],
+  };
 }
 
 export function onRunEvent(listener: (event: RunEventPayload) => void): () => void {

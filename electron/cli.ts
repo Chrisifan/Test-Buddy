@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -10,15 +11,20 @@ import {
   isMidsceneConfigured,
   type BrowserSessionState,
   type ProjectEnvironment,
+  type RunProvenance,
+  type RunReason,
+  type RunStatus,
   type RunTestCaseResponse,
-  type RunTone,
+  type SuiteRunProvenance,
+  type SuiteRunRecord,
   type StudioState,
   type TestCaseDraft,
   type SuiteAsset,
   type VersionedTestAssetReference,
 } from '../shared/studio.js';
 import { nodePngImageAdapter } from './runtime/node-png-image-adapter.js';
-import { appendRunToStudioState } from './runtime/run-history.js';
+import { appendRunToStudioState, appendSuiteRunToStudioState } from './runtime/run-history.js';
+import { createRunProvenance, createSuiteRunProvenance, type RunProvenanceRuntimeMetadata } from './runtime/run-provenance.js';
 import { createRuntimeBundle } from './runtime/runtime-bundle.js';
 import { ProjectRepository, type ProjectSnapshot } from './projectRepository.js';
 import { SuiteRunner } from './runtime/suite-runner.js';
@@ -55,22 +61,26 @@ export interface CliCaseResult {
   testCaseId: string;
   environmentId: string;
   title: string;
-  status: RunTone;
+  status: Exclude<RunStatus, 'running'>;
   runId?: string;
   duration?: string;
   summary: string;
   failureReason?: string;
+  reason?: RunReason;
   artifacts: string[];
   attempts?: number;
   flaky?: boolean;
+  provenance?: RunProvenance;
 }
 
 export interface CliSuiteRunInfo {
   id: string;
   version: number;
-  status: Exclude<RunTone, 'running'>;
+  status: Exclude<RunStatus, 'running'>;
   effectiveConcurrency: number;
   issues: string[];
+  provenance: SuiteRunProvenance;
+  reason?: RunReason;
 }
 
 export interface CliRunSummary {
@@ -159,14 +169,22 @@ export function renderJUnitReport(summary: CliRunSummary): string {
         testCaseId: 'suite-preflight',
         environmentId: '',
         title: `Suite ${summary.suite.id}@${summary.suite.version} preflight`,
-        status: 'neutral' as const,
+        status: 'blocked' as const,
         summary: summary.suite.issues.join('\n'),
+        reason: summary.suite.reason ?? {
+          code: 'missingAssetVersion',
+          message: summary.suite.issues.join('\n'),
+        },
         artifacts: [],
+        provenance: suitePreflightProvenance(summary),
       } satisfies CliCaseResult]
     : [];
   const reportResults = [...summary.results, ...suitePreflight];
   const failures = reportResults.filter((result) => result.status === 'failed').length;
-  const errors = reportResults.filter((result) => result.status === 'neutral').length;
+  const errors = reportResults.filter((result) => result.status === 'error').length;
+  const skipped = reportResults.filter((result) =>
+    result.status === 'blocked' || result.status === 'skipped' || result.status === 'cancelled',
+  ).length;
   const elapsedSeconds = Math.max(
     0,
     (new Date(summary.endedAt).getTime() - new Date(summary.startedAt).getTime()) / 1_000,
@@ -174,20 +192,22 @@ export function renderJUnitReport(summary: CliRunSummary): string {
   const cases = reportResults
     .map((result) => {
       const testcase = `  <testcase classname="${escapeXml(result.projectId)}" name="${escapeXml(result.title)}" time="${durationToSeconds(result.duration).toFixed(3)}">`;
-      const reason = escapeXml(result.failureReason ?? result.summary);
+      const reason = escapeXml(result.reason?.message ?? result.failureReason ?? result.summary);
       const output = `    <system-out>${escapeXml(result.summary)}</system-out>`;
       if (result.status === 'passed') {
         return `${testcase}\n${output}\n  </testcase>`;
       }
       const outcome = result.status === 'failed'
         ? `    <failure message="${reason}">${reason}</failure>`
-        : `    <error type="incomplete" message="${reason}">${reason}</error>`;
+        : result.status === 'error'
+          ? `    <error message="${reason}">${reason}</error>`
+          : `    <skipped message="${reason}"/>`;
       return `${testcase}\n${outcome}\n${output}\n  </testcase>`;
     })
     .join('\n');
 
   return `<?xml version="1.0" encoding="UTF-8"?>
-<testsuite name="TestBuddy CLI" tests="${reportResults.length}" failures="${failures}" errors="${errors}" time="${elapsedSeconds.toFixed(3)}" timestamp="${escapeXml(summary.startedAt)}">
+<testsuite name="TestBuddy CLI" tests="${reportResults.length}" failures="${failures}" errors="${errors}" skipped="${skipped}" time="${elapsedSeconds.toFixed(3)}" timestamp="${escapeXml(summary.startedAt)}">
 ${cases}
 </testsuite>
 `;
@@ -210,21 +230,38 @@ export async function executeCliCommand(command: Exclude<ParsedCommand, { kind: 
   const results: CliCaseResult[] = [];
   let suiteInfo: CliSuiteRunInfo | undefined;
   const persistRun = createSerializedRunHistoryPersister(store, () => runtime.browserRuntime.getState());
+  const persistSuiteRun = createSerializedSuiteRunHistoryPersister(store);
 
   try {
     await runtime.ensureReady();
-    const executeSelection = async (selection: { testCase: TestCaseDraft; environment: ProjectEnvironment }): Promise<CliCaseResult> => {
+    const executeSelection = async (
+      selection: {
+        testCase: TestCaseDraft;
+        environment: ProjectEnvironment;
+        suite?: NonNullable<RunProvenance['suite']>;
+      },
+    ): Promise<CliCaseResult> => {
+      const provenance = createCliRunProvenance(
+        projectSnapshot,
+        selection.testCase,
+        selection.environment,
+        runtimeState,
+        selection.suite,
+      );
       if (isAgentRunnableTestCase(selection.testCase) && !isMidsceneConfigured(runtimeState.midsceneConfig)) {
-        return {
+        const summary = '该 Agent 用例需要已配置的 Midscene 模型，当前数据目录未包含可用模型配置。';
+        return persistSyntheticCliCaseResult({
           projectId: project.id,
           testCaseId: selection.testCase.id,
           environmentId: selection.environment.id,
           title: selection.testCase.name,
-          status: 'failed',
-          summary: '该 Agent 用例需要已配置的 Midscene 模型，当前数据目录未包含可用模型配置。',
+          status: 'blocked',
+          summary,
           failureReason: 'Midscene 模型未配置。',
+          reason: { code: 'credentialUnavailable', message: summary },
           artifacts: [],
-        };
+          provenance,
+        }, selection.environment, persistRun);
       }
       try {
         const result = await runtime.runTestCase({
@@ -242,31 +279,41 @@ export async function executeCliCommand(command: Exclude<ParsedCommand, { kind: 
           agentModelConfig: runtimeState.agentModelConfig,
           browserSession: runtimeState.browserSession,
         });
-        await persistRun(result, selection.environment);
-        return toCliCaseResult(result, selection.environment);
+        const persistedResult = normalizeTerminalRunResponse(withCliProvenance(result, provenance));
+        await persistRun(persistedResult, selection.environment);
+        return toCliCaseResult(persistedResult, selection.environment);
       } catch (error) {
-        return {
+        const message = messageFor(error);
+        const summary = `执行异常：${message}`;
+        return persistSyntheticCliCaseResult({
           projectId: project.id,
           testCaseId: selection.testCase.id,
           environmentId: selection.environment.id,
           title: selection.testCase.name,
-          status: 'failed',
-          summary: `执行异常：${messageFor(error)}`,
-          failureReason: messageFor(error),
+          status: 'error',
+          summary,
+          failureReason: message,
+          reason: { code: 'executorError', message: summary },
           artifacts: [],
-        };
+          provenance,
+        }, selection.environment, persistRun);
       }
     };
 
     if (suite) {
       const attemptedResults = new Map<string, CliCaseResult>();
+      const parentRunId = createCliSuiteRunId();
+      const environment = suiteRunEnvironment(projectSnapshot, suite);
+      const provenance = createCliSuiteRunProvenance(projectSnapshot, suite, environment, runtimeState, parentRunId);
+      const suiteMembership = provenance.suite;
       const suiteResult = await new SuiteRunner({
         execute: async ({ testCase, environment }) => {
-          const result = await executeSelection({ testCase, environment });
+          const result = await executeSelection({ testCase, environment, suite: suiteMembership });
           attemptedResults.set(`${testCase.id}@${testCase.version ?? 1}`, result);
           return {
-            status: result.status === 'running' ? 'neutral' : result.status,
+            status: result.status,
             summary: result.summary,
+            ...(result.reason ? { reason: result.reason } : {}),
             ...(result.runId ? { runId: result.runId } : {}),
           };
         },
@@ -277,16 +324,24 @@ export async function executeCliCommand(command: Exclude<ParsedCommand, { kind: 
         status: suiteResult.status,
         effectiveConcurrency: suiteResult.effectiveConcurrency,
         issues: suiteResult.issues,
+        provenance,
+        ...(suiteResult.reason ? { reason: suiteResult.reason } : {}),
       };
-      suiteResult.results.forEach((suiteCaseResult) => {
+      for (const suiteCaseResult of suiteResult.results) {
         const testCase = findTestCaseVersion(project, {
           id: suiteCaseResult.testCaseId,
           version: suiteCaseResult.testCaseVersion,
         });
-        if (!testCase) return;
+        if (!testCase) continue;
         const attempted = attemptedResults.get(`${suiteCaseResult.testCaseId}@${suiteCaseResult.testCaseVersion}`);
-        results.push(attempted
-          ? { ...attempted, summary: suiteCaseResult.summary, attempts: suiteCaseResult.attempts, flaky: suiteCaseResult.flaky }
+        const cliResult = attempted
+          ? {
+              ...attempted,
+              summary: suiteCaseResult.summary,
+              ...(suiteCaseResult.reason ? { reason: suiteCaseResult.reason } : {}),
+              attempts: suiteCaseResult.attempts,
+              flaky: suiteCaseResult.flaky,
+            }
           : {
               projectId: project.id,
               testCaseId: testCase.id,
@@ -294,12 +349,26 @@ export async function executeCliCommand(command: Exclude<ParsedCommand, { kind: 
               title: testCase.name,
               status: suiteCaseResult.status,
               summary: suiteCaseResult.summary,
-              ...(suiteCaseResult.status === 'failed' ? { failureReason: suiteCaseResult.summary } : {}),
+              ...(suiteCaseResult.status === 'failed' || suiteCaseResult.status === 'error' ? { failureReason: suiteCaseResult.summary } : {}),
+              ...(suiteCaseResult.reason ? { reason: suiteCaseResult.reason } : {}),
               artifacts: [],
               attempts: suiteCaseResult.attempts,
               flaky: suiteCaseResult.flaky,
-            });
-      });
+              provenance: createCliRunProvenance(
+                projectSnapshot,
+                testCase,
+                suiteEnvironment(projectSnapshot, suite, testCase),
+                runtimeState,
+                suiteMembership,
+              ),
+            };
+        results.push(attempted ? cliResult : await persistSyntheticCliCaseResult(
+          cliResult,
+          suiteEnvironment(projectSnapshot, suite, testCase),
+          persistRun,
+        ));
+      }
+      await persistSuiteRun(createCliSuiteRunRecord(provenance, suiteResult, results));
     } else {
       for (const selection of selections) {
         results.push(await executeSelection(selection));
@@ -317,9 +386,7 @@ export async function executeCliCommand(command: Exclude<ParsedCommand, { kind: 
   );
   const summary: CliRunSummary = {
     command: 'run',
-    status: suiteInfo
-      ? suiteInfo.status === 'passed' ? 'passed' : 'failed'
-      : results.every((result) => result.status === 'passed') ? 'passed' : 'failed',
+    status: hasCliFailures(results, suiteInfo) ? 'failed' : 'passed',
     dataDir,
     startedAt: startedAt.toISOString(),
     endedAt: endedAt.toISOString(),
@@ -345,7 +412,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     }
     const summary = await executeCliCommand(command);
     process.stdout.write(`${JSON.stringify(summary)}\n`);
-    return summary.status === 'passed' ? 0 : 1;
+    return cliExitCode(summary);
   } catch (error) {
     process.stdout.write(`${JSON.stringify({ status: 'error', error: messageFor(error) })}\n`);
     return error instanceof CliUsageError ? 2 : 1;
@@ -411,7 +478,53 @@ function createSerializedRunHistoryPersister(
   };
 }
 
+function createSerializedSuiteRunHistoryPersister(
+  store: Pick<StudioStore, 'loadExisting' | 'save'>,
+): (record: SuiteRunRecord) => Promise<void> {
+  return async (record) => {
+    const latestState = hydrateStudioState(await store.loadExisting());
+    await store.save(appendSuiteRunToStudioState(latestState, record));
+  };
+}
+
+function createCliSuiteRunRecord(
+  provenance: SuiteRunProvenance,
+  result: Pick<CliSuiteRunInfo, 'status' | 'reason'> & {
+    startedAt: string;
+    endedAt: string;
+  },
+  members: readonly CliCaseResult[],
+): SuiteRunRecord {
+  const summary: SuiteRunRecord['summary'] = {
+    passed: 0,
+    failed: 0,
+    blocked: 0,
+    skipped: 0,
+    cancelled: 0,
+    error: 0,
+  };
+  members.forEach((member) => {
+    summary[member.status] += 1;
+  });
+  return {
+    id: provenance.suite.parentRunId,
+    provenance,
+    startedAt: result.startedAt,
+    finishedAt: result.endedAt,
+    status: result.status,
+    ...(result.reason ? { reasonCode: result.reason.code } : {}),
+    memberRunIds: members.flatMap((member) => member.runId ? [member.runId] : []),
+    summary,
+  };
+}
+
 function toCliCaseResult(result: RunTestCaseResponse, environment: ProjectEnvironment): CliCaseResult {
+  if (result.detail.status === 'running' || !result.detail.provenance) {
+    throw new Error('CLI run result must be terminal and carry frozen provenance.');
+  }
+  const reason = result.detail.reason ?? (result.detail.status === 'passed'
+    ? undefined
+    : fallbackCliRunReason(result.detail.status, result.detail.summary, result.detail.failureReason));
   return {
     projectId: result.detail.projectId,
     testCaseId: result.detail.testCaseId,
@@ -422,7 +535,208 @@ function toCliCaseResult(result: RunTestCaseResponse, environment: ProjectEnviro
     duration: result.detail.duration,
     summary: result.detail.summary,
     ...(result.detail.failureReason ? { failureReason: result.detail.failureReason } : {}),
+    ...(reason ? { reason } : {}),
     artifacts: result.detail.artifacts.map((artifact) => artifact.path),
+    provenance: result.detail.provenance,
+  };
+}
+
+function normalizeTerminalRunResponse(result: RunTestCaseResponse): RunTestCaseResponse {
+  if (result.detail.status === 'running' || result.detail.status === 'passed' || result.detail.reason) {
+    return result;
+  }
+  return {
+    ...result,
+    detail: {
+      ...result.detail,
+      reason: fallbackCliRunReason(result.detail.status, result.detail.summary, result.detail.failureReason),
+    },
+  };
+}
+
+async function persistSyntheticCliCaseResult(
+  result: CliCaseResult,
+  environment: ProjectEnvironment,
+  persistRun: (result: RunTestCaseResponse, environment: ProjectEnvironment) => Promise<void>,
+): Promise<CliCaseResult> {
+  if (!result.provenance) {
+    throw new Error('CLI terminal Case result must carry frozen provenance before persistence.');
+  }
+  const provenance = result.provenance;
+  const runId = result.runId ?? `cli-run-${randomUUID()}`;
+  const reason = result.reason ?? (result.status === 'passed'
+    ? undefined
+    : fallbackCliRunReason(result.status, result.summary, result.failureReason));
+  const now = new Date().toISOString();
+  const persistedResult = {
+    ...result,
+    runId,
+    ...(reason ? { reason } : {}),
+  };
+  await persistRun({
+    runId,
+    title: persistedResult.title,
+    detail: {
+      id: runId,
+      projectId: persistedResult.projectId,
+      testCaseId: persistedResult.testCaseId,
+      testCaseVersion: provenance.testCase.version,
+      environmentId: persistedResult.environmentId,
+      title: persistedResult.title,
+      status: persistedResult.status,
+      startedAt: now,
+      endedAt: now,
+      duration: '00:00:00',
+      summary: persistedResult.summary,
+      ...(persistedResult.failureReason ? { failureReason: persistedResult.failureReason } : {}),
+      ...(reason ? { reason } : {}),
+      provenance: structuredClone(provenance),
+      logs: [],
+      steps: [],
+      artifacts: [],
+    },
+  }, environment);
+  return persistedResult;
+}
+
+function fallbackCliRunReason(
+  status: Exclude<RunStatus, 'running' | 'passed'>,
+  summary: string,
+  failureReason?: string,
+): RunReason {
+  const message = summary || failureReason || `CLI runtime reported ${status} without a structured reason.`;
+  switch (status) {
+    case 'failed':
+      return { code: 'actionFailed', message };
+    case 'blocked':
+      return { code: 'unsupportedAction', message };
+    case 'skipped':
+      return { code: 'dependencyFailed', message };
+    case 'cancelled':
+      return { code: 'userCancelled', message };
+    case 'error':
+      return { code: 'executorError', message };
+  }
+}
+
+export function cliExitCode(summary: CliRunSummary): number {
+  return hasCliFailures(summary.results, summary.suite) ? 1 : 0;
+}
+
+function hasCliFailures(
+  results: readonly Pick<CliCaseResult, 'status'>[],
+  suite?: Pick<CliSuiteRunInfo, 'status'>,
+): boolean {
+  return results.some((result) => result.status === 'failed' || result.status === 'error') ||
+    suite?.status === 'failed' || suite?.status === 'error';
+}
+
+function withCliProvenance(result: RunTestCaseResponse, provenance: RunProvenance): RunTestCaseResponse {
+  return {
+    ...result,
+    detail: {
+      ...result.detail,
+      provenance: structuredClone(provenance),
+    },
+  };
+}
+
+function createCliRunProvenance(
+  snapshot: ProjectSnapshot,
+  testCase: TestCaseDraft,
+  environment: ProjectEnvironment,
+  state: StudioState,
+  suiteMembership?: NonNullable<RunProvenance['suite']>,
+): RunProvenance {
+  const provenance = createRunProvenance(
+    snapshot,
+    { ...testCase, version: testCase.version ?? 1 },
+    environment,
+    createCliRuntimeMetadata(environment, state),
+  );
+  if (!suiteMembership) {
+    return provenance;
+  }
+  return Object.freeze({
+    ...provenance,
+    suite: Object.freeze({
+      reference: Object.freeze({ ...suiteMembership.reference }),
+      parentRunId: suiteMembership.parentRunId,
+    }),
+  });
+}
+
+function createCliSuiteRunProvenance(
+  snapshot: ProjectSnapshot,
+  suite: SuiteAsset,
+  environment: ProjectEnvironment,
+  state: StudioState,
+  parentRunId: string,
+): SuiteRunProvenance {
+  return createSuiteRunProvenance(
+    snapshot,
+    suite,
+    environment,
+    createCliRuntimeMetadata(environment, state),
+    parentRunId,
+  );
+}
+
+function createCliRuntimeMetadata(
+  environment: ProjectEnvironment,
+  state: StudioState,
+): RunProvenanceRuntimeMetadata {
+  return {
+    browserProfile: { engine: environment.browser, headless: environment.headless },
+    executor: { appVersion: 'test-buddy-cli', runnerVersion: 'runtime-bundle-v1' },
+    model: {
+      provider: 'midscene',
+      name: state.midsceneConfig.modelName,
+      endpoint: state.midsceneConfig.modelBaseUrl,
+      apiKey: state.midsceneConfig.modelApiKey,
+    },
+    createdAt: new Date().toISOString(),
+  };
+}
+
+function createCliSuiteRunId(): string {
+  return `cli-suite-run-${randomUUID()}`;
+}
+
+function suiteRunEnvironment(snapshot: ProjectSnapshot, suite: SuiteAsset): ProjectEnvironment {
+  const environment = snapshot.project.environments.find((candidate) => candidate.id === suite.environmentId);
+  if (!environment) {
+    throw new CliUsageError(`Suite ${suite.id}@${suite.version} has no exact environment.`);
+  }
+  return environment;
+}
+
+function suiteEnvironment(
+  snapshot: ProjectSnapshot,
+  suite: SuiteAsset,
+  testCase: TestCaseDraft,
+): ProjectEnvironment {
+  return snapshot.project.environments.find((environment) => environment.id === suite.environmentId)
+    ?? snapshot.project.environments.find((environment) => environment.id === testCase.environmentId)
+    ?? (() => { throw new Error(`Suite ${suite.id}@${suite.version} has no exact environment.`); })();
+}
+
+function suitePreflightProvenance(summary: CliRunSummary): RunProvenance {
+  return {
+    schemaVersion: 1,
+    projectId: 'suite',
+    projectRevision: 'unavailable',
+    source: 'legacyStudioStore',
+    reproducibility: 'legacy',
+    testCase: { id: 'suite-preflight', version: 1 },
+    fixtures: [],
+    reusableFlows: [],
+    baselines: [],
+    environment: { id: '', name: '', baseUrl: '' },
+    browserProfile: { engine: 'chromium', headless: true },
+    executor: { appVersion: 'test-buddy-cli', runnerVersion: 'runtime-bundle-v1' },
+    model: { hasKey: false },
+    createdAt: summary.startedAt,
   };
 }
 
@@ -444,7 +758,17 @@ function durationToSeconds(duration: string | undefined): number {
 }
 
 function escapeXml(value: string): string {
-  return value
+  return Array.from(value)
+    .filter((character) => {
+      const codePoint = character.codePointAt(0)!;
+      return codePoint === 0x9
+        || codePoint === 0xA
+        || codePoint === 0xD
+        || (codePoint >= 0x20 && codePoint <= 0xD7FF)
+        || (codePoint >= 0xE000 && codePoint <= 0xFFFD)
+        || (codePoint >= 0x10000 && codePoint <= 0x10FFFF);
+    })
+    .join('')
     .replaceAll('&', '&amp;')
     .replaceAll('<', '&lt;')
     .replaceAll('>', '&gt;')

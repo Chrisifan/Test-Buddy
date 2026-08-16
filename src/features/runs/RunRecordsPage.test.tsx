@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { RunRecordsPage } from './RunRecordsPage.js';
@@ -7,7 +7,7 @@ import { createStubAgentRun } from '../../../shared/agentStub.js';
 import { I18nProvider } from '../../i18n/index.js';
 
 describe('RunRecordsPage', () => {
-  it('shows the linked PRD source for a generated test run', () => {
+  it('does not resolve a historical PRD label from the current project', () => {
     const state = createDemoStudioState();
     const project = state.projects[0]!;
     const document = createPrdDocumentAsset({
@@ -54,10 +54,91 @@ describe('RunRecordsPage', () => {
       />,
     );
 
-    expect(screen.getAllByText(`PRD：${document.name}`).length).toBeGreaterThan(0);
+    expect(screen.queryAllByText(`PRD：${document.name}`)).toHaveLength(0);
   });
 
-  it('shows aggregated analysis signals for the current project', () => {
+  it('uses frozen historical Case and environment metadata for run filters', () => {
+    const state = createDemoStudioState();
+    const originalProject = state.projects[0]!;
+    const project = {
+      ...originalProject,
+      environments: [{
+        ...originalProject.environments[0]!,
+        id: 'env-current',
+        name: 'Renamed current environment',
+      }],
+      groups: [{ ...originalProject.groups[0]!, id: 'group-current', name: 'Renamed current group' }],
+      testCases: [{
+        ...originalProject.testCases[0]!,
+        id: 'case-current',
+        groupId: 'group-current',
+        environmentId: 'env-current',
+        name: 'Renamed current Case',
+      }],
+    };
+    const detail: RunDetail = {
+      id: 'run-frozen-history',
+      projectId: project.id,
+      testCaseId: 'case-historical',
+      environmentId: 'env-historical',
+      title: 'Frozen Case v2',
+      status: 'passed',
+      startedAt: new Date(0).toISOString(),
+      endedAt: new Date(0).toISOString(),
+      duration: '00:00:01',
+      summary: 'Historical run passed.',
+      provenance: {
+        schemaVersion: 1,
+        projectId: project.id,
+        projectRevision: 'c'.repeat(64),
+        source: 'projectDirectory',
+        reproducibility: 'versioned',
+        testCase: { id: 'case-historical', version: 2 },
+        fixtures: [],
+        reusableFlows: [],
+        baselines: [],
+        environment: { id: 'env-historical', name: 'Frozen staging', baseUrl: 'https://staging.example.test' },
+        browserProfile: { engine: 'chromium', headless: true },
+        executor: { appVersion: '1.0.0', runnerVersion: 'runtime-bundle-v1' },
+        model: { hasKey: true },
+        createdAt: new Date(0).toISOString(),
+      },
+      logs: [],
+      steps: [],
+      artifacts: [],
+    };
+
+    render(
+      <RunRecordsPage
+        onSelectRun={vi.fn()}
+        project={project}
+        recentRuns={[{
+          id: detail.id,
+          name: 'Frozen Case v2',
+          status: detail.status,
+          duration: detail.duration,
+          summary: detail.summary,
+          projectId: detail.projectId,
+          testCaseId: detail.testCaseId,
+          environmentId: detail.environmentId,
+        }]}
+        runDetails={[detail]}
+        selectedRunId={detail.id}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('combobox', { name: '环境' }));
+    expect(screen.getByRole('option', { name: 'Frozen staging' })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'Renamed current environment' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('option', { name: 'Frozen staging' }));
+
+    fireEvent.click(screen.getByRole('combobox', { name: '用例' }));
+    expect(screen.getByRole('option', { name: 'Frozen Case v2' })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'Renamed current Case' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('combobox', { name: '分组' })).not.toBeInTheDocument();
+  });
+
+  it('shows aggregated analysis signals without resolving a historical group from the current project', () => {
     const state = createDemoStudioState();
     const project = state.projects[0];
     const failedRunDetail: RunDetail = {
@@ -97,7 +178,7 @@ describe('RunRecordsPage', () => {
 
     expect(screen.getByText('33%')).toBeInTheDocument();
     expect(screen.getAllByText('高风险')).toHaveLength(2);
-    expect(screen.getByText('核心链路 · 1/3 失败')).toBeInTheDocument();
+    expect(screen.queryByText('核心链路 · 1/3 失败')).not.toBeInTheDocument();
     expect(screen.getByText('Staging · 1/3 失败')).toBeInTheDocument();
     expect(screen.getByText('最近失败原因：验证码遮罩导致登录按钮定位失败。')).toBeInTheDocument();
     expect(screen.getByRole('heading', { level: 1, name: '运行记录' })).toBeInTheDocument();
@@ -209,7 +290,59 @@ describe('RunRecordsPage', () => {
     expect(screen.getByText('失败率上升 · +100%')).toBeInTheDocument();
   });
 
-  it('labels unbound run history as legacy and starts a new current-Case run', () => {
+  it('treats executor errors as failure-class outcomes in run analytics', () => {
+    const state = createDemoStudioState();
+    const project = state.projects[0]!;
+    const environment = project.environments[0]!;
+    const statuses = ['passed', 'passed', 'error', 'error'] as const;
+    const summaries = statuses.map((status, index) => ({
+      ...state.recentRuns[0]!,
+      id: `run-error-analytics-${index}`,
+      projectId: project.id,
+      testCaseId: project.testCases[0]!.id,
+      environmentId: environment.id,
+      environmentName: environment.name,
+      name: `Error analytics ${index + 1}`,
+      status,
+      startedAt: new Date(index * 60_000).toISOString(),
+      summary: status === 'error' ? 'Executor stopped unexpectedly.' : 'Passed.',
+    }));
+    const errorDetails: RunDetail[] = summaries
+      .filter((summary) => summary.status === 'error')
+      .map((summary) => ({
+        id: summary.id,
+        projectId: project.id,
+        testCaseId: summary.testCaseId!,
+        environmentId: summary.environmentId!,
+        title: summary.name,
+        status: 'error',
+        startedAt: summary.startedAt!,
+        endedAt: summary.startedAt,
+        duration: '00:00:01',
+        summary: summary.summary,
+        failureReason: 'Executor stopped unexpectedly.',
+        logs: [],
+        steps: [],
+        artifacts: [],
+      }));
+
+    render(
+      <RunRecordsPage
+        onSelectRun={vi.fn()}
+        project={project}
+        recentRuns={summaries}
+        runDetails={errorDetails}
+        selectedRunId={errorDetails[0]!.id}
+      />,
+    );
+
+    expect(screen.getByText('Staging · 2/4 失败')).toBeInTheDocument();
+    expect(screen.getByText('失败率上升 · +100%')).toBeInTheDocument();
+    expect(screen.getByText('2 次')).toBeInTheDocument();
+    expect(screen.getAllByText('高风险')).toHaveLength(2);
+  });
+
+  it('renders frozen provenance and blocks an exact rerun before browser execution when history is unavailable', async () => {
     const state = createDemoStudioState();
     const project = state.projects[0]!;
     const detail: RunDetail = {
@@ -223,16 +356,40 @@ describe('RunRecordsPage', () => {
       endedAt: new Date(0).toISOString(),
       duration: '00:00:01',
       summary: '登录失败。',
+      provenance: {
+        schemaVersion: 1,
+        projectId: project.id,
+        projectRevision: 'a'.repeat(64),
+        source: 'projectDirectory',
+        reproducibility: 'versioned',
+        testCase: { id: 'case-history', version: 2 },
+        suite: { reference: { id: 'suite-release', version: 3 }, parentRunId: 'suite-run-1' },
+        fixtures: [{ id: 'fixture-login', version: 4 }],
+        reusableFlows: [{ id: 'flow-auth', version: 5 }],
+        baselines: [{ id: 'baseline-login', version: 6 }],
+        environment: { id: 'env-history', name: 'Historical staging', baseUrl: 'https://staging.example.test' },
+        browserProfile: { engine: 'chromium', headless: true },
+        executor: { appVersion: '1.0.0', runnerVersion: 'runtime-bundle-v1' },
+        model: { hasKey: true },
+        createdAt: new Date(0).toISOString(),
+      },
       logs: [],
       steps: [],
       artifacts: [],
     };
-    const onRerunTestCase = vi.fn();
+    const onPlanExactRerun = vi.fn().mockResolvedValue({
+      status: 'blocked',
+      runId: detail.id,
+      reason: { code: 'missingAssetVersion', message: 'The Case revision is gone.' },
+      missingReferences: [{ id: 'case-history', version: 2 }],
+    });
+    const onRunExactRerun = vi.fn();
 
     render(
       <I18nProvider locale="en-US">
         <RunRecordsPage
-          onRerunTestCase={onRerunTestCase}
+          onPlanExactRerun={onPlanExactRerun}
+          onRunExactRerun={onRunExactRerun}
           onSelectRun={vi.fn()}
           project={project}
           recentRuns={[{
@@ -251,12 +408,179 @@ describe('RunRecordsPage', () => {
       </I18nProvider>,
     );
 
-    expect(screen.getByText('Legacy - not reproducible')).toBeInTheDocument();
-    expect(screen.getByText('Historical replay is unavailable without run provenance.')).toBeInTheDocument();
+    await waitFor(() => expect(onPlanExactRerun).toHaveBeenCalledWith(detail.id));
 
-    fireEvent.click(screen.getByRole('button', { name: 'Run current Case (legacy)' }));
+    expect(screen.getByText('Case case-history@2')).toBeInTheDocument();
+    expect(screen.getByText('Suite suite-release@3')).toBeInTheDocument();
+    expect(screen.getByText('Fixture fixture-login@4')).toBeInTheDocument();
+    expect(screen.getByText('Flow flow-auth@5')).toBeInTheDocument();
+    expect(screen.getByText('Baseline baseline-login@6')).toBeInTheDocument();
+    expect(screen.getByText('Environment Historical staging (env-history)')).toBeInTheDocument();
+    expect(screen.getByText('Base URL https://staging.example.test')).toBeInTheDocument();
+    expect(screen.getByText('Blocked: missing asset version')).toBeInTheDocument();
 
-    expect(onRerunTestCase).toHaveBeenCalledWith(detail);
+    const rerunButton = screen.getByRole('button', { name: 'Rerun exact version' });
+    expect(rerunButton).toBeDisabled();
+    fireEvent.click(rerunButton);
+
+    expect(onRunExactRerun).not.toHaveBeenCalled();
+  });
+
+  it('runs only a ready exact rerun plan by historical run ID', async () => {
+    const state = createDemoStudioState();
+    const project = state.projects[0]!;
+    const detail: RunDetail = {
+      id: 'run-ready-rerun',
+      projectId: project.id,
+      testCaseId: 'case-history',
+      environmentId: 'env-history',
+      title: 'Frozen Case',
+      status: 'passed',
+      startedAt: new Date(0).toISOString(),
+      endedAt: new Date(0).toISOString(),
+      duration: '00:00:01',
+      summary: 'Passed.',
+      provenance: {
+        schemaVersion: 1,
+        projectId: project.id,
+        projectRevision: 'b'.repeat(64),
+        source: 'projectDirectory',
+        reproducibility: 'versioned',
+        testCase: { id: 'case-history', version: 2 },
+        fixtures: [], reusableFlows: [], baselines: [],
+        environment: { id: 'env-history', name: 'Historical staging', baseUrl: 'https://staging.example.test' },
+        browserProfile: { engine: 'chromium', headless: true },
+        executor: { appVersion: '1.0.0', runnerVersion: 'runtime-bundle-v1' },
+        model: { hasKey: true },
+        createdAt: new Date(0).toISOString(),
+      },
+      logs: [], steps: [], artifacts: [],
+    };
+    const onPlanExactRerun = vi.fn().mockResolvedValue({ status: 'ready', runId: detail.id });
+    const onRunExactRerun = vi.fn().mockResolvedValue({ status: 'completed' } as never);
+
+    render(
+      <I18nProvider locale="en-US">
+        <RunRecordsPage
+          onPlanExactRerun={onPlanExactRerun}
+          onRunExactRerun={onRunExactRerun}
+          onSelectRun={vi.fn()}
+          project={project}
+          recentRuns={[{ id: detail.id, name: detail.title, status: detail.status, duration: detail.duration, summary: detail.summary, projectId: detail.projectId, testCaseId: detail.testCaseId, environmentId: detail.environmentId }]}
+          runDetails={[detail]}
+          selectedRunId={detail.id}
+        />
+      </I18nProvider>,
+    );
+
+    const rerunButton = await screen.findByRole('button', { name: 'Rerun exact version' });
+    await waitFor(() => expect(rerunButton).toBeEnabled());
+    fireEvent.click(rerunButton);
+
+    expect(onRunExactRerun).toHaveBeenCalledWith(detail.id);
+  });
+
+  it('keeps the newly selected run ready when a previous exact rerun is blocked later', async () => {
+    const state = createDemoStudioState();
+    const project = state.projects[0]!;
+    const createHistoricalRun = (id: string, title: string): RunDetail => ({
+      id,
+      projectId: project.id,
+      testCaseId: `case-${id}`,
+      environmentId: `environment-${id}`,
+      title,
+      status: 'passed',
+      startedAt: new Date(0).toISOString(),
+      endedAt: new Date(0).toISOString(),
+      duration: '00:00:01',
+      summary: 'Passed.',
+      provenance: {
+        schemaVersion: 1,
+        projectId: project.id,
+        projectRevision: 'd'.repeat(64),
+        source: 'projectDirectory',
+        reproducibility: 'versioned',
+        testCase: { id: `case-${id}`, version: 2 },
+        fixtures: [],
+        reusableFlows: [],
+        baselines: [],
+        environment: { id: `environment-${id}`, name: `Historical ${title}`, baseUrl: 'https://staging.example.test' },
+        browserProfile: { engine: 'chromium', headless: true },
+        executor: { appVersion: '1.0.0', runnerVersion: 'runtime-bundle-v1' },
+        model: { hasKey: true },
+        createdAt: new Date(0).toISOString(),
+      },
+      logs: [],
+      steps: [],
+      artifacts: [],
+    });
+    const runA = createHistoricalRun('run-a', 'Run A');
+    const runB = createHistoricalRun('run-b', 'Run B');
+    let resolveRunA: (result: {
+      status: 'blocked';
+      runId: string;
+      reason: { code: 'missingAssetVersion'; message: string };
+      missingReferences: { id: string; version: number }[];
+    }) => void = () => undefined;
+    const pendingRunA = new Promise<{
+      status: 'blocked';
+      runId: string;
+      reason: { code: 'missingAssetVersion'; message: string };
+      missingReferences: { id: string; version: number }[];
+    }>((resolve) => {
+      resolveRunA = resolve;
+    });
+    const onPlanExactRerun = vi.fn().mockImplementation(async (runId: string) => ({ status: 'ready' as const, runId }));
+    const onRunExactRerun = vi.fn((runId: string) => (
+      runId === runA.id
+        ? pendingRunA
+        : Promise.resolve({ status: 'completed' as const, response: {} } as never)
+    ));
+    const page = (selectedRunId: string) => (
+      <I18nProvider locale="en-US">
+        <RunRecordsPage
+          onPlanExactRerun={onPlanExactRerun}
+          onRunExactRerun={onRunExactRerun}
+          onSelectRun={vi.fn()}
+          project={project}
+          recentRuns={[runA, runB].map((run) => ({
+            id: run.id,
+            name: run.title,
+            status: run.status,
+            duration: run.duration,
+            summary: run.summary,
+            projectId: run.projectId,
+            testCaseId: run.testCaseId,
+            environmentId: run.environmentId,
+          }))}
+          runDetails={[runA, runB]}
+          selectedRunId={selectedRunId}
+        />
+      </I18nProvider>
+    );
+
+    const { rerender } = render(page(runA.id));
+    const rerunButton = await screen.findByRole('button', { name: 'Rerun exact version' });
+    await waitFor(() => expect(rerunButton).toBeEnabled());
+    fireEvent.click(rerunButton);
+    expect(onRunExactRerun).toHaveBeenCalledWith(runA.id);
+
+    rerender(page(runB.id));
+    await waitFor(() => expect(onPlanExactRerun).toHaveBeenCalledWith(runB.id));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Rerun exact version' })).toBeEnabled());
+
+    await act(async () => {
+      resolveRunA({
+        status: 'blocked',
+        runId: runA.id,
+        reason: { code: 'missingAssetVersion', message: 'Run A is no longer available.' },
+        missingReferences: [{ id: 'case-run-a', version: 2 }],
+      });
+      await pendingRunA;
+    });
+
+    expect(screen.getByRole('button', { name: 'Rerun exact version' })).toBeEnabled();
+    expect(screen.queryByText('Blocked: missing asset version')).not.toBeInTheDocument();
   });
 
   it('shows cancellation only for the active desktop run and prevents repeat submissions', async () => {
@@ -496,7 +820,7 @@ describe('RunRecordsPage', () => {
     expect(screen.getByText('耗时：00:00:01 -> 00:00:02')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('combobox', { name: '用例' }));
-    fireEvent.click(screen.getByRole('option', { name: testCase.name }));
+    fireEvent.click(screen.getByRole('option', { name: current.title }));
 
     expect(screen.queryByText(otherRun.title)).not.toBeInTheDocument();
   });
@@ -592,18 +916,19 @@ describe('RunRecordsPage', () => {
       testCaseId: 'case-manual',
       environmentId: project.environments[0]!.id,
       title: '人工检查用例',
-      status: 'neutral',
+      status: 'blocked',
       startedAt: new Date(0).toISOString(),
       endedAt: new Date(0).toISOString(),
       duration: '00:00:01',
       summary: '等待人工检查。',
+      reason: { code: 'unsupportedAction', message: '等待人工检查。' },
       logs: [],
       steps: [
         {
           id: 'run-manual-step',
           stepId: 'manual-step',
           title: '审核付款页',
-          status: 'neutral',
+          status: 'blocked',
           message: '等待人工检查。',
         },
       ],
@@ -673,18 +998,19 @@ describe('RunRecordsPage', () => {
       testCaseId: 'case-manual',
       environmentId: project.environments[0]!.id,
       title: '人工检查用例',
-      status: 'neutral',
+      status: 'blocked',
       startedAt: new Date(0).toISOString(),
       endedAt: new Date(0).toISOString(),
       duration: '00:00:01',
       summary: '等待人工检查。',
+      reason: { code: 'unsupportedAction', message: '等待人工检查。' },
       logs: [],
       steps: [
         {
           id: 'run-manual-snapshot-step',
           stepId: 'manual-step',
           title: '审核付款页',
-          status: 'neutral',
+          status: 'blocked',
           message: '等待人工检查。',
         },
       ],
@@ -760,17 +1086,18 @@ describe('RunRecordsPage', () => {
       testCaseId: 'case-manual-attachment',
       environmentId: project.environments[0]!.id,
       title: '人工检查用例',
-      status: 'neutral',
+      status: 'blocked',
       startedAt: new Date(0).toISOString(),
       endedAt: new Date(0).toISOString(),
       duration: '00:00:01',
       summary: '等待人工检查。',
+      reason: { code: 'unsupportedAction', message: '等待人工检查。' },
       logs: [],
       steps: [{
         id: 'run-manual-attachment-step',
         stepId: 'manual-step',
         title: '审核付款页',
-        status: 'neutral',
+        status: 'blocked',
         message: '等待人工检查。',
       }],
       artifacts: [],
@@ -1016,11 +1343,12 @@ describe('RunRecordsPage', () => {
       testCaseId: project.testCases[0]!.id,
       environmentId: project.environments[0]!.id,
       title: agentRun.plan.title,
-      status: agentRun.status,
+      status: 'blocked',
       startedAt: agentRun.startedAt,
       endedAt: agentRun.endedAt,
       duration: '00:00:01',
       summary: agentRun.summary,
+      reason: { code: 'unsupportedAction', message: agentRun.summary },
       logs: agentRun.events.map((event) => event.message),
       steps: [],
       artifacts: agentRun.artifacts,
@@ -1036,7 +1364,7 @@ describe('RunRecordsPage', () => {
             {
               id: agentRun.runId,
               name: agentRun.plan.title,
-              status: agentRun.status,
+              status: 'blocked',
               duration: '00:00:01',
               summary: agentRun.summary,
               projectId: project.id,
