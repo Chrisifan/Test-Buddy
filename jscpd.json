@@ -1,0 +1,14 @@
+{
+  "threshold": 0,
+  "path": ["src", "electron", "shared", "scripts"],
+  "reporters": ["console", "json"],
+  "output": ".quality/jscpd",
+  "ignore": [
+    "**/*.test.ts",
+    "**/*.test.tsx",
+    "dist/**",
+    "node_modules/**",
+    ".acceptance/**",
+    ".worktrees/**"
+  ]
+}

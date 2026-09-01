@@ -3,6 +3,8 @@ dist
 .DS_Store
 .pnpm-store
 .acceptance/
+.quality/
+stats.html
 .idea
 .superpowers
 .worktrees/
