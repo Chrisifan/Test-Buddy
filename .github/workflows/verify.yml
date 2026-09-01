@@ -23,3 +23,6 @@ jobs:
       - run: pnpm check
       - run: pnpm exec node node_modules/playwright/cli.js install --with-deps chromium chromium-headless-shell
       - run: pnpm test:browser-smoke
+      # This command starts only the repository-owned loopback fixture. It does
+      # not receive external acceptance configuration or credentials.
+      - run: pnpm acceptance:local

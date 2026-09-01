@@ -287,6 +287,14 @@ TestBuddy 已具备本地工作台、受控浏览器、确定性步骤、Fixture
 - 采用已确认的 `docs/superpowers/specs/2026-08-13-reusable-flows-v1-design.md`，但将其中“Case 当前 revision”假设替换为 Wave 1 的不可变 Case 版本集合。
 - Flow 影响分析涵盖精确 Case versions、Suite references 和 frozen RunProvenance；批量升级只创建新的 Case versions 与显式 Suite upgrade proposals。
 
+**本地实施状态（2026-08-22）：** 已完成并完成本地验证。`ReusableFlowAsset` 的所有版本持久化在项目资产目录中；Case、Suite 和历史运行只解析其固定的 Flow `id@version`，缺失或无效版本会在启动浏览器前阻断。桌面 Workbench 已提供 Flow 版本草稿/发布、Case 的精确绑定排序与移除，以及从旧版本到更高同 ID 版本的影响审阅。升级需在确认对话框中逐个选择 Case，展示 Flow 差异、Fixture/Baseline/Suite 上下文和不改写既有 Suite 的显式提案；跨 Flow、降级和会生成重复 Case 版本的选择都会被拒绝。
+
+- `pnpm check`：63 个测试文件、732 条测试通过；renderer/Electron TypeScript、Vite renderer build、Electron build 和 `git diff --check` 通过。
+- `pnpm test:browser-smoke`：1 个测试文件、2 条测试通过，覆盖本地受控页面的真实 PNG 证据与 Suite 取消行为。
+- 本地 renderer 的 Flow Workbench 已在桌面和 390px 窄视口检查：空清单、可发布草稿、确定性步骤和发布校验均无重叠或截断。
+
+这些证据不代表真实模型、真实业务站点或 GitHub 托管 CI 已验收。
+
 **完成判定：** Flow v1/v2、Case v1/v2、Suite v1/v2 和历史 Run 均可按各自固定引用解释和执行。
 
 ### Wave 5：Suite parent record 与受控规模化

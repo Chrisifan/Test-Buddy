@@ -1,0 +1,84 @@
+name: protected external acceptance
+
+on:
+  workflow_dispatch:
+    inputs:
+      lane:
+        description: External acceptance lane to authorize
+        required: true
+        type: choice
+        options:
+          - staging
+          - model
+      consent:
+        description: Type RUN_EXTERNAL_ACCEPTANCE to acknowledge the protected run
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  validate-dispatch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    env:
+      ACCEPTANCE_LANE: ${{ inputs.lane }}
+      DISPATCH_CONSENT: ${{ inputs.consent }}
+    steps:
+      - name: Require a deliberate external-acceptance dispatch
+        shell: bash
+        run: |
+          case "$ACCEPTANCE_LANE" in
+            staging|model) ;;
+            *) exit 1 ;;
+          esac
+          test "$DISPATCH_CONSENT" = 'RUN_EXTERNAL_ACCEPTANCE'
+
+  external-acceptance:
+    needs: validate-dispatch
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment:
+      name: acceptance-${{ inputs.lane }}
+    concurrency:
+      group: acceptance-${{ inputs.lane }}
+      cancel-in-progress: false
+    env:
+      ACCEPTANCE_LANE: ${{ inputs.lane }}
+      TESTBUDDY_ACCEPTANCE_CONSENT: ${{ secrets.TESTBUDDY_ACCEPTANCE_CONSENT }}
+      TESTBUDDY_ACCEPTANCE_ALLOWED_ORIGIN: ${{ secrets.TESTBUDDY_ACCEPTANCE_ALLOWED_ORIGIN }}
+      TESTBUDDY_ACCEPTANCE_MODEL_SECRET_REF: ${{ inputs.lane == 'model' && secrets.TESTBUDDY_ACCEPTANCE_MODEL_SECRET_REF || '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.11.0
+          run_install: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Validate protected-lane authority without exposing configuration
+        shell: bash
+        run: |
+          test "$TESTBUDDY_ACCEPTANCE_CONSENT" = '1'
+          node -e "const value = process.env.TESTBUDDY_ACCEPTANCE_ALLOWED_ORIGIN; if (!value || /[?#@]/.test(value)) process.exit(1); try { const url = new URL(value); if (!['http:', 'https:'].includes(url.protocol) || url.origin !== value) process.exit(1); } catch { process.exit(1); }"
+          if [ "$ACCEPTANCE_LANE" = 'model' ]; then
+            test -n "$TESTBUDDY_ACCEPTANCE_MODEL_SECRET_REF"
+          fi
+      - name: Fail closed until a protected external executor writes verified evidence
+        shell: bash
+        run: |
+          pnpm acceptance -- --lane "$ACCEPTANCE_LANE" --output-dir .acceptance/external
+      - name: Retain verified external report only when an executor produced it
+        if: ${{ always() && hashFiles('.acceptance/external/acceptance-report.json') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: acceptance-${{ inputs.lane }}-report
+          path: |
+            .acceptance/external/acceptance-report.json
+            .acceptance/external/acceptance-report.junit.xml
+          if-no-files-found: error
+          retention-days: 7

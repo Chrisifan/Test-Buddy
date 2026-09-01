@@ -20,88 +20,86 @@
 
 当前视觉方向是：
 
-- 黑白极简
-- 客户端感而不是营销官网感
-- 强调结构清晰和留白
-- 减少颜色噪音，让交互重点更明确
+- 工程可观测工作台，而不是营销官网或通用 SaaS 面板
+- 中性、高密度的桌面工作区，以 `#0066ff` 建立品牌和关键操作锚点
+- 保留 macOS Native Glass Rail，并在亮暗主题中保持可控的材质与对比
+- 减少颜色噪音，让结构、执行状态、证据和下一步更容易扫描
+
+全应用改造基线见 [UI/UX 审查（2026-08-17）](./ui-ux-audit-2026-08-17.md)。
 
 ## 3. 设计原则
 
-- 首页轻，功能页重
-- 颜色少，层级清
-- CTA 强对比
-- 卡片统一圆角、边框、轻阴影
-- 不做复杂装饰性动效
+- 总览展示质量信号和下一步；编辑、运行页承载密度而不堆叠容器
+- 颜色少、层级清；除 RunState 外的图标与指标使用主色或中性色
+- CTA 使用 `#0066ff` 的强对比，而非黑色品牌替代
+- 使用 4px 控件、6px 内部面板、8px 主 Surface/弹窗；避免大圆角和同级 Surface 嵌套
+- 动效服务运行和保存状态，不做循环装饰
 
 ## 4. 色彩策略
 
 ### 主色
 
-- `#111111`
+- `#0066ff`
 
 用于：
 
 - 主按钮
 - 激活态
-- 深色日志区
+- 焦点、进度和关键链接
 
-### 背景
+深色日志区属于 Code Log，不是品牌主色使用场景。
 
-- `stone-100` 级浅灰背景
-- `white` 作为主卡片背景
-- `stone-50` 作为弱层级面板背景
+### 背景与材质
+
+- 亮色工作区、暗色工作区和 Surface 必须使用语义 token，不使用固定 `stone`/`slate` 工具色作为产品主题
+- Native Glass Rail 由 Electron vibrancy 提供模糊，并由主题 token 提供 tint、border、highlight、shade 和 foreground
+- Target-page Mock 与 Code Log 可以使用专用 token，但不能污染 Product Surface
 
 ### 文本
 
-- 主文本：黑色
-- 次文本：`black/55` 到 `black/65`
-- 辅助标签：`black/40` 到 `black/45`
+- 主文本、次文本和辅助文本必须分别使用语义 token，并在亮暗主题中通过对比检查
+- 技术元数据可以使用等宽字体；一般正文、标签和操作使用 Geist
 
 ## 5. 组件样式策略
 
 整体原则：
 
 - 优先使用 `shadcn/ui` 原子组件组合页面
-- 允许在 `className` 上做黑白极简方向的二次定制
+- 允许在 `className` 上做局部布局二次定制，但不得重新定义全局主题/材质契约
 - 避免回退到“每页一套自定义组件皮肤”
 
-### 5.1 Navbar
+### 5.1 App Shell
 
-- 白底
-- 细边框
-- 大圆角
-- 轻阴影
-- 左侧 logo，右侧 icon-only 设置按钮
-- 下方用 pill navigation 切换页面
+- 使用 Native Glass Rail、顶栏、工作区和 runtime bar 的固定桌面框架
+- Rail 需要主题控制的玻璃覆层、边界与文字对比；不使用不受主题控制的纯透明背景
+- 左侧为 Logo 和一级导航，设置位于 Rail 底部；顶栏保留资源搜索和上下文操作
 
-### 5.2 Page Card
+### 5.2 Surface
 
-- 统一大圆角
-- 白底 + 边框
-- hover 轻微上浮
+- 使用 panel、subtle、active、evidence、stat、plain 等明确语义角色
+- Surface 不嵌套视觉同级的 Surface；边界应对应真实信息层级
+- hover 只提供可感知的状态反馈，不能移动布局或制造装饰噪音
 
 ### 5.3 Primary Button
 
-- 黑底白字
+- `#0066ff` 底、白字和对应图标
 - hover 时只做轻微透明度变化
 
 ### 5.4 Secondary Button
 
-- 白底
-- 细边框
-- hover 时浅灰背景
+- 中性背景或描边，使用语义 border 与 foreground
+- hover 时使用克制的 surface/brand soft 状态
 
 ### 5.5 Inputs
 
-- 白底
-- 统一圆角
-- 细边框
-- focus 用浅黑色 outline
+- 主题 Surface 背景
+- 4px 圆角和语义边框
+- focus 使用 `#0066ff` ring
 
 ### 5.6 Status Pill
 
-- 当前仍可统一用黑白高对比风格
-- 尽量不用过多彩色标签
+- 使用 RunState 词汇和统一的颜色、图标、动效与可访问文案
+- 彩色只用于实际运行状态、风险或危险操作，不能作为资产类别装饰
 
 ## 6. Tailwind 使用约束
 
@@ -119,30 +117,29 @@
 
 ## 7. 全局样式边界
 
-`src/index.css` 只负责：
+单一全局 token source 负责：
 
 - `@import "tailwindcss"`
-- body 背景
-- 字体族
+- 主题 token、body 背景与字体角色
 - input / textarea / select 基础样式
 - focus 可访问性基线
 - scrollbar 基础规则
 
-页面布局、卡片、按钮、栅格、间距尽量直接在组件中用 Tailwind 实现。
+页面布局、栅格与局部间距尽量直接在组件中用 Tailwind 实现。不得通过第二份 final-cascade 全局样式覆盖同一 token 或组件契约。
 
 ## 8. 后续演进建议
 
 当页面数量继续增加时，建议优先基于 `shadcn/ui` 继续抽出基础组件：
 
 - `AppShell`
-- `PageCard`
+- `Surface`
 - `SectionTitle`
 - `PrimaryButton`
 - `SecondaryButton`
-- `StatusPill`
+- `RunState`
 - `SettingsModal`
 
 这样既能保持 Tailwind 的开发效率，也能避免 JSX 类名越来越长。
-## 7. 字体
+## 9. 字体
 
-全应用使用 `--font-sans` 作为唯一字体族。标签、状态、技术元数据和标题保持各自的字号、字重与字距层级，但不再切换等宽或衬线字体。
+一般界面使用 Geist。运行 ID、命令、日志、时间戳及其他技术元数据可以使用等宽字体；不得把等宽字体用于普通正文、标签或按钮。
