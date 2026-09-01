@@ -6,6 +6,7 @@ import {
   MonitorSmartphone,
   MousePointerClick,
 } from 'lucide-react';
+import { useRef, useState } from 'react';
 
 import type { MidsceneConfig } from '../../../shared/studio.js';
 import { createTranslator, type SupportedLocale } from '@/i18n';
@@ -47,6 +48,7 @@ export function StartupPage({
   midsceneConfig,
   midsceneReady,
   onComplete,
+  onSaveMidsceneModelSecret,
   onSkip,
   onUpdateMidsceneConfig,
 }: {
@@ -55,15 +57,57 @@ export function StartupPage({
   midsceneConfig: MidsceneConfig;
   midsceneReady: boolean;
   onComplete: () => void;
+  onSaveMidsceneModelSecret: (value: string) => Promise<void>;
   onSkip: () => void;
   onUpdateMidsceneConfig: (patch: Partial<MidsceneConfig>) => void;
 }) {
   const t = createTranslator(locale);
+  const modelApiKeyInputRef = useRef<HTMLInputElement>(null);
+  const [hasPendingModelSecret, setHasPendingModelSecret] = useState(false);
+  const [isSavingModelSecret, setIsSavingModelSecret] = useState(false);
+  const [modelSecretSaveError, setModelSecretSaveError] = useState<string | null>(null);
   const startupFeatures = [
     [FileText, t('startup.feature.prd'), t('startup.feature.prdDescription')],
     [Bot, t('startup.feature.nl'), t('startup.feature.nlDescription')],
     [MousePointerClick, t('startup.feature.recording'), t('startup.feature.recordingDescription')],
   ];
+  const hasModelConfiguration = Boolean(
+    midsceneConfig.modelBaseUrl.trim() &&
+      midsceneConfig.modelName.trim() &&
+      midsceneConfig.modelFamily.trim(),
+  );
+  const canComplete = hasModelConfiguration && (midsceneConfig.modelSecret.hasKey || hasPendingModelSecret);
+
+  async function completeStartupSetup() {
+    if (!hasModelConfiguration || isSavingModelSecret) {
+      return;
+    }
+
+    const modelApiKeyInput = modelApiKeyInputRef.current;
+    const modelApiKey = modelApiKeyInput?.value ?? '';
+    const hasSubmittedModelSecret = Boolean(modelApiKey.trim());
+    if (!midsceneConfig.modelSecret.hasKey && !hasSubmittedModelSecret) {
+      setModelSecretSaveError('请先输入模型 API Key。');
+      return;
+    }
+
+    setIsSavingModelSecret(true);
+    setModelSecretSaveError(null);
+    try {
+      if (hasSubmittedModelSecret) {
+        await onSaveMidsceneModelSecret(modelApiKey);
+        if (modelApiKeyInput) {
+          modelApiKeyInput.value = '';
+        }
+        setHasPendingModelSecret(false);
+      }
+      onComplete();
+    } catch (error) {
+      setModelSecretSaveError(error instanceof Error ? error.message : '模型密钥保存失败，请重试。');
+    } finally {
+      setIsSavingModelSecret(false);
+    }
+  }
 
   return (
     <section aria-label={t('startup.aria.screen')} className="startup-shell">
@@ -95,9 +139,11 @@ export function StartupPage({
                 <span>{t('startup.midscene.description')}</span>
               </div>
               <div className="startup-midscene-meta">
-                <span className={`home-midscene-state ${midsceneReady ? 'is-ready' : ''}`}>
-                  {midsceneReady ? t('startup.midscene.state.ready') : t('startup.midscene.state.required')}
-                </span>
+                {midsceneReady && (
+                  <span className="home-midscene-state is-ready">
+                    {t('startup.midscene.state.ready')}
+                  </span>
+                )}
                 <a className="startup-help-link" href="https://midscenejs.com" rel="noreferrer" target="_blank">View Docs</a>
               </div>
             </div>
@@ -112,12 +158,16 @@ export function StartupPage({
                 />
               </div>
               <div className="home-midscene-field">
-                <Label>MIDSCENE_MODEL_API_KEY</Label>
+                <Label htmlFor="startup-midscene-model-api-key">MIDSCENE_MODEL_API_KEY</Label>
                 <Input
-                  onChange={(event) => onUpdateMidsceneConfig({ modelApiKey: event.target.value })}
+                  id="startup-midscene-model-api-key"
+                  onChange={(event) => {
+                    setModelSecretSaveError(null);
+                    setHasPendingModelSecret(Boolean(event.target.value.trim()));
+                  }}
                   placeholder="sk-..."
+                  ref={modelApiKeyInputRef}
                   type="password"
-                  value={midsceneConfig.modelApiKey}
                 />
               </div>
               <div className="home-midscene-field">
@@ -149,17 +199,14 @@ export function StartupPage({
 
             <div className="startup-midscene-footer">
               <div className="home-midscene-actions">
-                <Button className="rounded-[4px]" disabled={!midsceneReady} onClick={onComplete} type="button">
+                <Button className="rounded-[4px]" disabled={!canComplete || isSavingModelSecret} onClick={completeStartupSetup} type="button">
                   {t('startup.midscene.save')}
                 </Button>
                 <Button className="rounded-[4px]" onClick={onSkip} type="button" variant="ghost">
                   {t('startup.midscene.skip')}
                 </Button>
               </div>
-              <div className="home-midscene-note">
-                <KeyRound className="h-4 w-4" />
-                <span>{t('startup.midscene.note')}</span>
-              </div>
+              {modelSecretSaveError && <p role="alert">{modelSecretSaveError}</p>}
             </div>
           </aside>
 

@@ -9,7 +9,7 @@ describe('i18n', () => {
 
     expect(zh('settings.title')).toBe('应用设置');
     expect(en('settings.title')).toBe('Application Settings');
-    expect(en('settings.midscene.requiredHint')).toContain('Model service URL');
+    expect(en('settings.midscene.connectionConfiguration')).toBe('Check the required model configuration.');
     expect(zh('settings.unknown.key')).toBe('settings.unknown.key');
   });
 

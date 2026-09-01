@@ -130,9 +130,11 @@ function createStructuredAssertionCase(
 function CasePageHarness({
   initialProject = project,
   initialTestCase = selectedTestCase,
+  onUpdated = vi.fn(),
 }: {
   initialProject?: typeof project;
   initialTestCase?: typeof selectedTestCase;
+  onUpdated?: (testCase: TestCaseDraft) => void;
 }) {
   const [testCase, setTestCase] = React.useState(initialTestCase);
   const nextStepId = React.useRef(1);
@@ -161,7 +163,11 @@ function CasePageHarness({
         onRetrySave={vi.fn()}
         onRunTestCase={vi.fn()}
         onSelectTestCase={vi.fn()}
-        onUpdateTestCase={(updater) => setTestCase((current) => updater(current))}
+        onUpdateTestCase={(updater) => setTestCase((current) => {
+          const next = updater(current);
+          onUpdated(next);
+          return next;
+        })}
         project={{ ...initialProject, testCases: [testCase] }}
         runStatus="neutral"
         saveStatus="idle"
@@ -656,6 +662,42 @@ describe('TestCaseManagementPage', () => {
     fireEvent.click(remove);
 
     expect(await screen.findByText('当前用例没有绑定 Fixture。')).toBeInTheDocument();
+  });
+
+  it('attaches, reorders, and removes exact Flow references from a Case draft', async () => {
+    const loginV1 = { schemaVersion: 1 as const, id: 'flow-login', version: 1, name: '登录准备', description: '', tags: [], steps: [], createdAt: '2026-08-21T00:00:00.000Z', updatedAt: '2026-08-21T00:00:00.000Z' };
+    const loginV2 = { ...loginV1, version: 2, name: '登录准备 v2' };
+    const checkoutV3 = { ...loginV1, id: 'flow-checkout', version: 3, name: '结算准备' };
+    const testCase: TestCaseDraft = {
+      ...selectedTestCase,
+      assetReferences: { fixtures: [], reusableFlows: [{ id: loginV1.id, version: loginV1.version }, { id: loginV2.id, version: loginV2.version }] },
+    };
+    const onUpdated = vi.fn();
+
+    render(
+      <CasePageHarness
+        initialProject={{ ...project, reusableFlows: [loginV1, loginV2, checkoutV3] }}
+        initialTestCase={testCase}
+        onUpdated={onUpdated}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: '用例设置' }));
+    fireEvent.click(screen.getByRole('combobox', { name: '复用 Flow' }));
+    fireEvent.click(await screen.findByRole('option', { name: '结算准备 v3' }));
+    expect(onUpdated).toHaveBeenLastCalledWith(expect.objectContaining({
+      assetReferences: { fixtures: [], reusableFlows: [{ id: 'flow-login', version: 1 }, { id: 'flow-login', version: 2 }, { id: 'flow-checkout', version: 3 }] },
+    }));
+
+    fireEvent.click(screen.getByRole('button', { name: '上移 结算准备' }));
+    expect(onUpdated).toHaveBeenLastCalledWith(expect.objectContaining({
+      assetReferences: { fixtures: [], reusableFlows: [{ id: 'flow-login', version: 1 }, { id: 'flow-checkout', version: 3 }, { id: 'flow-login', version: 2 }] },
+    }));
+
+    fireEvent.click(screen.getByRole('button', { name: '解除 登录准备 v1 绑定' }));
+    expect(onUpdated).toHaveBeenLastCalledWith(expect.objectContaining({
+      assetReferences: { fixtures: [], reusableFlows: [{ id: 'flow-checkout', version: 3 }, { id: 'flow-login', version: 2 }] },
+    }));
   });
 
   it('uses English labels for the editor controls', async () => {

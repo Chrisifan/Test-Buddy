@@ -30,8 +30,8 @@ describe('HomePage', () => {
     expect(screen.getByRole('button', { name: /可视化录制/ })).toBeInTheDocument();
     expect(screen.getByLabelText('平台能力')).toBeInTheDocument();
     expect(screen.getByText('支持 Electron 与 Web')).toBeInTheDocument();
-    expect(screen.getByText('系统在线')).toBeInTheDocument();
-    expect(screen.getByText('工作区：默认')).toBeInTheDocument();
+    expect(screen.queryByText('系统在线')).not.toBeInTheDocument();
+    expect(screen.queryByText('工作区：默认')).not.toBeInTheDocument();
   });
 
   it('shows workspace-wide dashboard framing cues when projects exist', () => {
@@ -56,8 +56,8 @@ describe('HomePage', () => {
     expect(screen.getByText('工作区资产')).toBeInTheDocument();
     expect(screen.getByText('整体健康')).toBeInTheDocument();
     expect(screen.getByText('覆盖指数')).toBeInTheDocument();
-    expect(screen.getAllByTestId('home-summary-icon')).toHaveLength(6);
-    expect(screen.getByText('录制')).toBeInTheDocument();
+    expect(screen.getAllByTestId('home-summary-icon')).toHaveLength(4);
+    expect(screen.getByText('覆盖指数')).toBeInTheDocument();
     expect(screen.getByText('汇总 2 个项目的运行结果')).toBeInTheDocument();
     expect(screen.getByText('测试入口')).toBeInTheDocument();
     expect(screen.getByText('自然语言测试')).toBeInTheDocument();

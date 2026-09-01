@@ -7,6 +7,190 @@ import { createStubAgentRun } from '../../../shared/agentStub.js';
 import { I18nProvider } from '../../i18n/index.js';
 
 describe('RunRecordsPage', () => {
+  it('reviews retention candidates and requires an explicit confirmation before deletion', async () => {
+    const state = createDemoStudioState();
+    const project = state.projects[0]!;
+    const planRetention = vi.fn().mockResolvedValue({
+      id: 'retention-review-1',
+      plannedAt: '2026-02-01T00:00:00.000Z',
+      maxBytes: 1024,
+      keepDays: 14,
+      totalByteCount: 2048,
+      projectedByteCount: 512,
+      protectedCount: 1,
+      candidateCount: 1,
+      entries: [
+        {
+          id: 'candidate-evidence',
+          contentHash: 'a'.repeat(64),
+          retentionClass: 'standard' as const,
+          evidenceKind: 'report' as const,
+          byteCount: 1536,
+          createdAt: '2026-01-01T00:00:00.000Z',
+          timestamps: { createdAt: '2026-01-01T00:00:00.000Z' },
+          deletionCandidate: true,
+          reason: 'overByteBudgetAfterKeepDays' as const,
+          protectedReasons: [],
+        },
+        {
+          id: 'protected-evidence',
+          contentHash: 'b'.repeat(64),
+          retentionClass: 'protected' as const,
+          evidenceKind: 'attachment' as const,
+          byteCount: 512,
+          createdAt: '2026-01-01T00:00:00.000Z',
+          timestamps: { createdAt: '2026-01-01T00:00:00.000Z' },
+          deletionCandidate: false,
+          reason: 'protected' as const,
+          protectedReasons: ['persistedRunDetail'],
+        },
+      ],
+    });
+    const confirmRetention = vi.fn().mockResolvedValue({
+      planId: 'retention-review-1',
+      confirmedAt: '2026-02-01T00:01:00.000Z',
+      deleted: [],
+    });
+
+    render(
+      <RunRecordsPage
+        onConfirmArtifactRetention={confirmRetention}
+        onPlanArtifactRetention={planRetention}
+        onSelectRun={vi.fn()}
+        project={project}
+        recentRuns={state.recentRuns}
+        runDetails={state.runDetails}
+        selectedRunId={state.recentRuns[0]!.id}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: '查看保留计划' }));
+    await screen.findByText('候选删除项');
+    expect(screen.getByText('保留 14 天')).toBeInTheDocument();
+    expect(screen.getByText('candidate-evidence')).toBeInTheDocument();
+    expect(screen.getAllByText('2026-01-01T00:00:00.000Z')).toHaveLength(2);
+    expect(screen.getByText(/persistedRunDetail/)).toBeInTheDocument();
+    expect(confirmRetention).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: '确认删除 1 项' }));
+    await waitFor(() => expect(confirmRetention).toHaveBeenCalledWith('retention-review-1'));
+  });
+
+  it('clears the reviewed retention plan when a later review fails', async () => {
+    const state = createDemoStudioState();
+    const project = state.projects[0]!;
+    const planRetention = vi.fn()
+      .mockResolvedValueOnce({
+        id: 'retention-review-stale',
+        plannedAt: '2026-02-01T00:00:00.000Z',
+        maxBytes: 1024,
+        keepDays: 14,
+        totalByteCount: 2048,
+        projectedByteCount: 512,
+        protectedCount: 0,
+        candidateCount: 1,
+        entries: [{
+          id: 'stale-candidate',
+          contentHash: 'c'.repeat(64),
+          retentionClass: 'standard' as const,
+          evidenceKind: 'report' as const,
+          byteCount: 1536,
+          createdAt: '2026-01-01T00:00:00.000Z',
+          timestamps: { createdAt: '2026-01-01T00:00:00.000Z' },
+          deletionCandidate: true,
+          reason: 'overByteBudgetAfterKeepDays' as const,
+          protectedReasons: [],
+        }],
+      })
+      .mockRejectedValueOnce(new Error('retention review unavailable'));
+    const confirmRetention = vi.fn();
+
+    render(
+      <RunRecordsPage
+        onConfirmArtifactRetention={confirmRetention}
+        onPlanArtifactRetention={planRetention}
+        onSelectRun={vi.fn()}
+        project={project}
+        recentRuns={state.recentRuns}
+        runDetails={state.runDetails}
+        selectedRunId={state.recentRuns[0]!.id}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: '查看保留计划' }));
+    await screen.findByRole('button', { name: '确认删除 1 项' });
+
+    fireEvent.click(screen.getByRole('button', { name: '查看保留计划' }));
+
+    await waitFor(() => expect(planRetention).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.queryByRole('button', { name: '确认删除 1 项' })).not.toBeInTheDocument());
+    expect(confirmRetention).not.toHaveBeenCalled();
+  });
+
+  it('opens a persisted Suite parent without fabricating a Case detail and can navigate to a linked child', () => {
+    const state = createDemoStudioState();
+    const project = state.projects[0]!;
+    const child: RunDetail = {
+      id: 'case-parent-child-run',
+      projectId: project.id,
+      testCaseId: project.testCases[0]!.id,
+      testCaseVersion: project.testCases[0]!.version,
+      environmentId: project.environments[0]!.id,
+      title: project.testCases[0]!.name,
+      status: 'cancelled',
+      startedAt: '2026-08-18T00:00:00.000Z',
+      endedAt: '2026-08-18T00:00:00.000Z',
+      duration: '00:00:00',
+      summary: 'Suite cancelled before this Case started.',
+      reason: { code: 'userCancelled', message: 'Suite cancelled before this Case started.' },
+      logs: [],
+      steps: [],
+      artifacts: [],
+    };
+    const onSelectRun = vi.fn();
+    render(
+      <RunRecordsPage
+        onSelectRun={onSelectRun}
+        project={project}
+        recentRuns={state.recentRuns}
+        runDetails={[child]}
+        selectedRunId="suite-parent-run"
+        suiteRunRecords={[{
+          id: 'suite-parent-run',
+          status: 'cancelled',
+          startedAt: '2026-08-18T00:00:00.000Z',
+          finishedAt: '2026-08-18T00:00:03.000Z',
+          reasonCode: 'userCancelled',
+          memberRunIds: [child.id],
+          summary: { passed: 0, failed: 0, blocked: 0, skipped: 0, cancelled: 1, error: 0 },
+          provenance: {
+            schemaVersion: 1, projectId: project.id, projectRevision: 'a'.repeat(64), source: 'projectDirectory', reproducibility: 'versioned',
+            suite: { reference: { id: 'suite-release', version: 2 }, parentRunId: 'suite-parent-run' }, fixtures: [], reusableFlows: [], baselines: [],
+            environment: { id: project.environments[0]!.id, name: project.environments[0]!.name, baseUrl: project.environments[0]!.url },
+            browserProfile: { engine: 'chromium', headless: true }, executor: { appVersion: 'test', runnerVersion: 'test' }, model: { hasKey: false }, createdAt: '2026-08-18T00:00:00.000Z',
+          },
+          members: [{
+            testCaseId: child.testCaseId, testCaseVersion: child.testCaseVersion ?? 1, status: 'cancelled',
+            summary: 'Suite cancelled before this Case started.', reason: { code: 'userCancelled', message: 'Suite cancelled before this Case started.' }, attempts: 0, flaky: false, runId: child.id,
+            provenance: {
+              schemaVersion: 1, projectId: project.id, projectRevision: 'a'.repeat(64), source: 'projectDirectory', reproducibility: 'versioned',
+              testCase: { id: child.testCaseId, version: child.testCaseVersion ?? 1 }, suite: { reference: { id: 'suite-release', version: 2 }, parentRunId: 'suite-parent-run' },
+              fixtures: [], reusableFlows: [{ id: 'flow-history', version: 2 }], baselines: [],
+              environment: { id: project.environments[0]!.id, name: project.environments[0]!.name, baseUrl: project.environments[0]!.url }, browserProfile: { engine: 'chromium', headless: true }, executor: { appVersion: 'test', runnerVersion: 'test' }, model: { hasKey: false }, createdAt: '2026-08-18T00:00:00.000Z',
+            },
+          }],
+        }]}
+      />,
+    );
+
+    expect(screen.getAllByText('Suite suite-release@2').length).toBeGreaterThan(1);
+    expect(screen.getByText('Suite cancelled before this Case started.')).toBeInTheDocument();
+    expect(screen.getByText('Flow flow-history@2')).toBeInTheDocument();
+    expect(screen.queryByText('步骤日志')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: `打开 ${child.testCaseId}@${child.testCaseVersion}` }));
+    expect(onSelectRun).toHaveBeenCalledWith(child.id);
+  });
+
   it('does not resolve a historical PRD label from the current project', () => {
     const state = createDemoStudioState();
     const project = state.projects[0]!;

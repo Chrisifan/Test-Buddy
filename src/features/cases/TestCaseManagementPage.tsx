@@ -324,6 +324,7 @@ function CaseSettingsDialog({
   const groupLabelId = useId();
   const environmentLabelId = useId();
   const fixtureLabelId = useId();
+  const flowLabelId = useId();
   const businessGoalId = useId();
   const preconditionsId = useId();
   const successCriteriaId = useId();
@@ -391,6 +392,27 @@ function CaseSettingsDialog({
           )),
         },
       };
+    }, 'immediate');
+  }
+
+  const boundFlowReferences = testCase.assetReferences?.reusableFlows ?? [];
+  const boundFlowIds = new Set(boundFlowReferences.map((flow) => flow.id));
+  const availableFlows = project.reusableFlows.filter((flow) => !boundFlowIds.has(flow.id));
+
+  function attachReusableFlow(value: string) {
+    const flow = project.reusableFlows.find((candidate) => `${candidate.id}@${candidate.version}` === value);
+    if (!flow) return;
+    onUpdateTestCase((item) => {
+      const assetReferences = item.assetReferences ?? { fixtures: [], reusableFlows: [] };
+      if ((assetReferences.reusableFlows ?? []).some((reference) => reference.id === flow.id)) return item;
+      return { ...item, assetReferences: { ...assetReferences, reusableFlows: [...(assetReferences.reusableFlows ?? []), { id: flow.id, version: flow.version }] } };
+    }, 'immediate');
+  }
+
+  function updateReusableFlowBindings(updater: (references: VersionedTestAssetReference[]) => VersionedTestAssetReference[]) {
+    onUpdateTestCase((item) => {
+      const assetReferences = item.assetReferences ?? { fixtures: [], reusableFlows: [] };
+      return { ...item, assetReferences: { ...assetReferences, reusableFlows: updater(assetReferences.reusableFlows ?? []) } };
     }, 'immediate');
   }
 
@@ -482,6 +504,24 @@ function CaseSettingsDialog({
                 })}
               </div>
             ) : <p className="text-sm leading-6 text-muted-foreground">{t('cases.fixture.noBound')}</p>}
+          </div>
+          <div className="grid gap-2">
+            <Label id={flowLabelId}>{t('cases.flow.title')}</Label>
+            <Select onValueChange={attachReusableFlow}>
+              <SelectTrigger aria-labelledby={flowLabelId} disabled={!availableFlows.length}>
+                <SelectValue placeholder={availableFlows.length ? t('cases.flow.choose') : t('cases.flow.noAvailable')} />
+              </SelectTrigger>
+              <SelectContent>
+                {availableFlows.map((flow) => <SelectItem key={`${flow.id}@${flow.version}`} value={`${flow.id}@${flow.version}`}>{flow.name} v{flow.version}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            {boundFlowReferences.length ? <div className="grid gap-2 rounded-[4px] border border-border bg-muted/20 p-3">
+              {boundFlowReferences.map((reference, index) => {
+                const flow = project.reusableFlows.find((candidate) => candidate.id === reference.id && candidate.version === reference.version);
+                const name = flow?.name ?? reference.id;
+                return <div className="flex items-center justify-between gap-2" key={`${reference.id}@${reference.version}`}><span className="min-w-0 flex-1 truncate text-sm">{name} <span className="text-muted-foreground">v{reference.version}</span></span><Button aria-label={t('cases.flow.moveUp', { name })} disabled={!index} onClick={() => updateReusableFlowBindings((items) => { const next = [...items]; [next[index - 1], next[index]] = [next[index]!, next[index - 1]!]; return next; })} size="icon" type="button" variant="ghost"><ArrowUp className="size-4" /></Button><Button aria-label={t('cases.flow.moveDown', { name })} disabled={index === boundFlowReferences.length - 1} onClick={() => updateReusableFlowBindings((items) => { const next = [...items]; [next[index], next[index + 1]] = [next[index + 1]!, next[index]!]; return next; })} size="icon" type="button" variant="ghost"><ArrowDown className="size-4" /></Button><Button aria-label={t('cases.flow.remove', { name, version: reference.version })} onClick={() => updateReusableFlowBindings((items) => items.filter((item) => item.id !== reference.id || item.version !== reference.version))} size="icon" type="button" variant="ghost"><Unlink className="size-4" /></Button></div>;
+              })}
+            </div> : <p className="text-sm leading-6 text-muted-foreground">{t('cases.flow.noBound')}</p>}
           </div>
           <div className="grid gap-2">
             <Label htmlFor={businessGoalId}>{t('cases.intent.businessGoal')}</Label>

@@ -4,6 +4,7 @@ import '@fontsource-variable/geist';
 
 import { App } from './App';
 import './index.css';
+import './styles/design-tokens.css';
 import './styles/luminous-precision.css';
 
 ReactDOM.createRoot(document.getElementById('root')!).render(

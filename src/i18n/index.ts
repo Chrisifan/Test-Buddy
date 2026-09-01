@@ -13,6 +13,32 @@ type MessageKey =
   | 'app.nav.cases'
   | 'app.nav.suites'
   | 'app.nav.runs'
+  | 'app.nav.maintenance'
+  | 'maintenance.kicker'
+  | 'maintenance.title'
+  | 'maintenance.count'
+  | 'maintenance.empty'
+  | 'maintenance.diff.source'
+  | 'maintenance.diff.candidate'
+  | 'maintenance.impact'
+  | 'maintenance.none'
+  | 'maintenance.evidence'
+  | 'maintenance.evidence.open'
+  | 'maintenance.audit'
+  | 'maintenance.audit.created'
+  | 'maintenance.audit.accepted'
+  | 'maintenance.audit.rejected'
+  | 'maintenance.audit.stale'
+  | 'maintenance.confirmRevision'
+  | 'maintenance.approve'
+  | 'maintenance.reject'
+  | 'maintenance.reject.rationale'
+  | 'maintenance.status.draft'
+  | 'maintenance.status.accepted'
+  | 'maintenance.status.rejected'
+  | 'maintenance.status.stale'
+  | 'maintenance.outcome.stale'
+  | 'maintenance.error.action'
   | 'app.nav.naturalLanguage'
   | 'app.nav.workflow'
   | 'app.nav.recording'
@@ -46,7 +72,6 @@ type MessageKey =
   | 'settings.nav.execution'
   | 'settings.nav.runtime'
   | 'settings.nav.endpoint'
-  | 'settings.appearance.section'
   | 'settings.appearance.title'
   | 'settings.appearance.description'
   | 'settings.appearance.currentTheme'
@@ -64,20 +89,15 @@ type MessageKey =
   | 'settings.language.enDescription'
   | 'settings.language.system'
   | 'settings.language.systemDescription'
-  | 'settings.midscene.section'
   | 'settings.midscene.title'
+  | 'settings.modelSecret.save'
+  | 'settings.modelSecret.replace'
+  | 'settings.modelSecret.clear'
+  | 'settings.modelSecret.stored'
   | 'settings.midscene.baseUrlHint'
   | 'settings.midscene.familyHint'
   | 'settings.midscene.contextLabel'
   | 'settings.midscene.contextPlaceholder'
-  | 'settings.midscene.unlockedTitle'
-  | 'settings.midscene.feature.nl'
-  | 'settings.midscene.feature.nlDescription'
-  | 'settings.midscene.feature.workflow'
-  | 'settings.midscene.feature.workflowDescription'
-  | 'settings.midscene.feature.recording'
-  | 'settings.midscene.feature.recordingDescription'
-  | 'settings.midscene.requiredHint'
   | 'settings.midscene.connectionTitle'
   | 'settings.midscene.connectionTest'
   | 'settings.midscene.connectionTesting'
@@ -86,7 +106,6 @@ type MessageKey =
   | 'settings.midscene.connectionHttp'
   | 'settings.midscene.connectionNetwork'
   | 'settings.midscene.connectionResponse'
-  | 'settings.agent.section'
   | 'settings.agent.title'
   | 'settings.agent.description'
   | 'settings.agent.planner'
@@ -101,7 +120,6 @@ type MessageKey =
   | 'settings.agent.reuseMidscene'
   | 'settings.agent.independentModel'
   | 'settings.agent.inheritedModel'
-  | 'settings.runtime.section'
   | 'settings.runtime.title'
   | 'settings.runtime.browserEngine'
   | 'settings.runtime.viewport'
@@ -142,7 +160,6 @@ type MessageKey =
   | 'startup.midscene.title'
   | 'startup.midscene.description'
   | 'startup.midscene.state.ready'
-  | 'startup.midscene.state.required'
   | 'startup.midscene.contextLabel'
   | 'startup.midscene.contextPlaceholder'
   | 'startup.midscene.save'
@@ -177,8 +194,35 @@ export const zhCN: Record<string, string> = {
   'app.nav.projects': '项目',
   'app.nav.documents': '需求文档',
   'app.nav.cases': '用例',
+  'app.nav.flows': '复用 Flow',
   'app.nav.suites': '套件',
   'app.nav.runs': '运行记录',
+  'app.nav.maintenance': '维护审核',
+  'maintenance.kicker': '维护',
+  'maintenance.title': '审核队列',
+  'maintenance.count': '{count} 条草案',
+  'maintenance.empty': '暂无维护草案。',
+  'maintenance.diff.source': '原始版本',
+  'maintenance.diff.candidate': '候选版本',
+  'maintenance.impact': '影响范围',
+  'maintenance.none': '无',
+  'maintenance.evidence': '证据',
+  'maintenance.evidence.open': '打开证据 {artifact}',
+  'maintenance.audit': '审计',
+  'maintenance.audit.created': '已创建',
+  'maintenance.audit.accepted': '已批准',
+  'maintenance.audit.rejected': '已拒绝',
+  'maintenance.audit.stale': '已过期',
+  'maintenance.confirmRevision': '确认 revision {revision}',
+  'maintenance.approve': '批准草案',
+  'maintenance.reject': '拒绝草案',
+  'maintenance.reject.rationale': '拒绝理由',
+  'maintenance.status.draft': '草案',
+  'maintenance.status.accepted': '已批准',
+  'maintenance.status.rejected': '已拒绝',
+  'maintenance.status.stale': '已过期',
+  'maintenance.outcome.stale': '版本已过期',
+  'maintenance.error.action': '无法完成维护审核操作。',
   'app.nav.naturalLanguage': '自然语言',
   'app.nav.workflow': '工作流',
   'app.nav.recording': '录制回放',
@@ -239,6 +283,57 @@ export const zhCN: Record<string, string> = {
   'app.runtime.runCancelFailed': '取消运行失败。',
   'app.runtime.environmentMissing': '未配置环境',
   'suite.header.title': '测试套件',
+  'flows.header.title': '可复用 Flow',
+  'flows.empty.title': '需要先选择项目',
+  'flows.empty.description': 'Flow 作为项目内的不可变版本资产保存。',
+  'flows.empty.openProjects': '打开项目',
+  'flows.action.create': '新建 Flow',
+  'flows.action.editVersion': '编辑为新版本',
+  'flows.action.publish': '发布 Flow 版本',
+  'flows.action.addNavigate': '添加导航步骤',
+  'flows.action.removeStep': '移除 {title}',
+  'flows.meta.draft': ' 草稿',
+  'flows.inventory.title': '版本清单',
+  'flows.inventory.description': '每次绑定都精确指向一个版本。',
+  'flows.inventory.steps': '步骤',
+  'flows.inventory.empty': '还没有发布的 Flow。',
+  'flows.form.name': 'Flow 名称',
+  'flows.form.description': '说明',
+  'flows.steps.title': '确定性步骤',
+  'flows.steps.description': '只允许已确认的动作与显式断言。',
+  'flows.steps.empty': '添加一个导航步骤以开始。',
+  'flows.step.navigateTitle': '打开页面',
+  'flows.step.navigateBody': '打开项目默认页面。',
+  'flows.editor.empty.title': '选择一个 Flow',
+  'flows.editor.empty.description': '选择已发布版本，或新建一个版本化 Flow。',
+  'flows.validation.title': '发布校验',
+  'flows.validation.description': '发布后内容不可修改。',
+  'flows.validation.blocked': '不可发布',
+  'flows.validation.ready': '可发布',
+  'flows.validation.pinned': '引用此版本的 Case 不会随未来编辑改变。',
+  'flows.impact.title': '影响分析',
+  'flows.impact.description': '查看绑定旧版本的 Case；Suite 不会自动改写。',
+  'flows.impact.source': '源 Flow',
+  'flows.impact.target': '目标 Flow 版本',
+  'flows.impact.flowDiff': '{source} -> {target}',
+  'flows.impact.fixtures': 'Fixture 引用',
+  'flows.impact.noFixtures': '没有 Fixture 引用。',
+  'flows.impact.baseline': '基线',
+  'flows.impact.noBaseline': '没有基线。',
+  'flows.impact.suites': 'Suite 引用',
+  'flows.impact.noSuites': '没有 Suite 引用。',
+  'flows.impact.noNewerTarget': '当前 Flow 没有可升级到的更高版本。',
+  'flows.impact.none': '没有直接绑定此版本的 Case。',
+  'flows.impact.upgrade': '为受影响 Case 生成新版本',
+  'flows.upgrade.title': '确认升级 Case',
+  'flows.upgrade.description': '将选中的 Case 从 {source} 升级至 {target}，并生成新版本。',
+  'flows.upgrade.case': '升级 {name} v{version}',
+  'flows.upgrade.suitesTitle': 'Suite 升级建议',
+  'flows.upgrade.suitesImmutable': 'Suite 不会自动改写。',
+  'flows.upgrade.suitesNone': '所选 Case 没有 Suite 升级建议。',
+  'flows.upgrade.selectionBlocked': '当前选择无法确认。',
+  'flows.upgrade.cancel': '取消',
+  'flows.upgrade.confirm': '确认升级 Case',
   'suite.action.create': '新建 Suite',
   'suite.action.editVersion': '编辑为新版本',
   'suite.action.publish': '发布版本',
@@ -273,11 +368,17 @@ export const zhCN: Record<string, string> = {
   'suite.preflight.description': '使用已固定的成员版本检查依赖和环境。',
   'suite.preflight.ready': '预检通过，可以运行此版本。',
   'suite.preflight.requestedConcurrency': '保存的请求并发：{count}',
-  'suite.preflight.effectiveConcurrency': '桌面端实际并发：1（受控浏览器会话）',
+  'suite.preflight.effectiveConcurrency': '实际并发将在运行完成后报告；未验证容量时串行执行。',
+  'suite.preflight.effectiveConcurrencyMeasured': '最近一次实际并发：{count}',
   'suite.results.title': '最近一次结果',
   'suite.results.attempt': '第 {count} 次尝试',
   'suite.results.openRun': '查看 {name} 运行',
   'suite.results.open': '查看运行',
+  'suite.records.title': '持久化运行记录',
+  'suite.records.startedAt': '开始时间',
+  'suite.records.finishedAt': '结束时间',
+  'suite.records.count': '{status} {count}',
+  'suite.records.open': '打开 Suite 运行',
   'suite.meta.draft': '（草稿）',
   'common.close': '关闭',
   'common.notConfigured': '未配置',
@@ -301,7 +402,6 @@ export const zhCN: Record<string, string> = {
   'settings.nav.execution': '执行环境',
   'settings.nav.runtime': '运行环境',
   'settings.nav.endpoint': '入口地址',
-  'settings.appearance.section': '01 / 显示',
   'settings.appearance.title': '外观',
   'settings.appearance.description': '选择 TestBuddy 在当前系统上的展示方式。',
   'settings.appearance.currentTheme': '当前生效',
@@ -319,20 +419,15 @@ export const zhCN: Record<string, string> = {
   'settings.language.enDescription': 'English UI labels',
   'settings.language.system': '跟随系统',
   'settings.language.systemDescription': '按系统语言自动选择',
-  'settings.midscene.section': '02 / 引擎',
   'settings.midscene.title': 'MidScene 配置',
+  'settings.modelSecret.save': '保存密钥',
+  'settings.modelSecret.replace': '替换密钥',
+  'settings.modelSecret.clear': '清除密钥',
+  'settings.modelSecret.stored': '已安全保存',
   'settings.midscene.baseUrlHint': 'OpenAI 兼容模型服务地址，例如 OpenAI、Qwen、Doubao、Azure OpenAI 或自建代理。',
   'settings.midscene.familyHint': '用于告诉 MidScene 当前模型的能力族；不同模型供应商需要填写对应 family。',
   'settings.midscene.contextLabel': '项目默认上下文',
   'settings.midscene.contextPlaceholder': '例如：这是一个图表和表格密集的管理后台，优先定位筛选器、表格行和图表数据。',
-  'settings.midscene.unlockedTitle': '配置完成后可进入',
-  'settings.midscene.feature.nl': '自然语言测试',
-  'settings.midscene.feature.nlDescription': '直接对页面发指令，适合快速探索与临时验证。',
-  'settings.midscene.feature.workflow': '流程编排测试',
-  'settings.midscene.feature.workflowDescription': '把有效指令沉淀为多步骤可回归流程。',
-  'settings.midscene.feature.recording': '录制回放',
-  'settings.midscene.feature.recordingDescription': '录制真实操作并转成后续可维护的测试资产。',
-  'settings.midscene.requiredHint': '至少需要填写模型服务地址、API Key、模型名称和模型族，才能启用自然语言、流程编排和录制回放入口。',
   'settings.midscene.connectionTitle': '模型连接',
   'settings.midscene.connectionTest': '测试连接',
   'settings.midscene.connectionTesting': '测试中',
@@ -341,7 +436,6 @@ export const zhCN: Record<string, string> = {
   'settings.midscene.connectionHttp': '模型服务返回 HTTP {status}。',
   'settings.midscene.connectionNetwork': '未能建立请求，请检查网络、代理或服务地址。',
   'settings.midscene.connectionResponse': '模型服务响应格式无效。',
-  'settings.agent.section': '03 / Agent 大脑',
   'settings.agent.title': 'Agent 模型',
   'settings.agent.description': '为自动化测试 Agent 的规划、执行、校验和报告角色预留模型配置。默认复用 MidScene，后续需要更强规划或报告能力时，可为单个角色接入独立 OpenAI 兼容模型。',
   'settings.agent.planner': '规划器',
@@ -358,7 +452,6 @@ export const zhCN: Record<string, string> = {
   'settings.agent.inheritedModel': '继承模型：{model}',
   'settings.agent.modelNameLabel': '{role} 模型名称',
   'settings.agent.modelFamilyLabel': '{role} 模型族',
-  'settings.runtime.section': '04 / 执行',
   'settings.runtime.title': '运行环境配置',
   'settings.runtime.browserEngine': '浏览器引擎',
   'settings.runtime.viewport': '视口设置',
@@ -397,9 +490,8 @@ export const zhCN: Record<string, string> = {
   'startup.feature.recordingDescription': '把真实路径沉淀为用例',
   'startup.midscene.section': 'STEP 01 / 引擎',
   'startup.midscene.title': '配置 MidScene',
-  'startup.midscene.description': '填写 OpenAI 兼容模型参数后，保存进入工作台。必填项包含服务地址、API Key、模型名称和模型族。',
+  'startup.midscene.description': '可现在配置，也可稍后补充；首次使用相关能力前，需要填写服务地址、API Key、模型名称和模型族。',
   'startup.midscene.state.ready': '就绪',
-  'startup.midscene.state.required': '必填',
   'startup.midscene.contextLabel': '默认上下文',
   'startup.midscene.contextPlaceholder': '例如：这是一个图表和表格密集的管理后台。',
   'startup.midscene.save': '保存并进入工作台',
@@ -783,6 +875,13 @@ export const zhCN: Record<string, string> = {
   'runs.provenance.browser': '浏览器',
   'runs.provenance.headless': '无头',
   'runs.provenance.headed': '有界面',
+  'runs.suite.parent': 'Suite 父运行',
+  'runs.suite.title': 'Suite {reference}',
+  'runs.suite.startedAt': '开始时间',
+  'runs.suite.finishedAt': '结束时间',
+  'runs.suite.members': '成员用例',
+  'runs.suite.count': '{status} {count}',
+  'runs.suite.openMember': '打开 {name}',
   'runs.reason.label': '原因',
   'runs.reason.assertionFailed': '断言失败',
   'runs.reason.actionFailed': '操作失败',
@@ -796,6 +895,21 @@ export const zhCN: Record<string, string> = {
   'runs.reason.legacyAmbiguousNeutral': '传统记录无法精确复现',
   'runs.exportProjectReport': '导出项目报告',
   'runs.exportProjectReportWorking': '正在导出',
+  'runs.retention.review': '查看保留计划',
+  'runs.retention.reviewing': '正在生成计划',
+  'runs.retention.title': '证据保留审阅',
+  'runs.retention.candidates': '候选删除项',
+  'runs.retention.candidate': '候选删除',
+  'runs.retention.candidateCount': '候选 {count}',
+  'runs.retention.protected': '已保护',
+  'runs.retention.protectedCount': '已保护 {count}',
+  'runs.retention.empty': '当前计划没有可删除的证据。',
+  'runs.retention.createdAt': '创建时间',
+  'runs.retention.keepDays': '保留 {count} 天',
+  'runs.retention.confirm': '确认删除 {count} 项',
+  'runs.retention.confirming': '正在确认删除',
+  'runs.retention.confirmed': '已删除 {count} 项证据。',
+  'runs.retention.error': '证据保留操作失败。',
   'runs.cancelRun': '取消运行',
   'runs.cancelRunWorking': '正在取消',
   'runs.list.eyebrow': '运行列表',
@@ -1057,6 +1171,13 @@ export const zhCN: Record<string, string> = {
   'cases.fixture.noAvailable': '当前环境没有可绑定的 Fixture 版本。',
   'cases.fixture.noBound': '当前用例没有绑定 Fixture。',
   'cases.fixture.remove': '解除 {name} v{version} 绑定',
+  'cases.flow.title': '复用 Flow',
+  'cases.flow.choose': '绑定具体 Flow 版本',
+  'cases.flow.noAvailable': '没有可绑定的 Flow 版本。',
+  'cases.flow.noBound': '当前用例没有绑定复用 Flow。',
+  'cases.flow.remove': '解除 {name} v{version} 绑定',
+  'cases.flow.moveUp': '上移 {name}',
+  'cases.flow.moveDown': '下移 {name}',
   'cases.intent.businessGoal': '业务目标',
   'cases.intent.preconditions': '前置条件',
   'cases.intent.successCriteria': '成功标准',
@@ -1260,8 +1381,35 @@ export const enUS: Messages = {
   'app.nav.projects': 'Projects',
   'app.nav.documents': 'Requirements',
   'app.nav.cases': 'Cases',
+  'app.nav.flows': 'Reusable Flows',
   'app.nav.suites': 'Suites',
   'app.nav.runs': 'Run Records',
+  'app.nav.maintenance': 'Maintenance',
+  'maintenance.kicker': 'Maintenance',
+  'maintenance.title': 'Review queue',
+  'maintenance.count': '{count} drafts',
+  'maintenance.empty': 'No maintenance drafts.',
+  'maintenance.diff.source': 'Source',
+  'maintenance.diff.candidate': 'Candidate',
+  'maintenance.impact': 'Impact',
+  'maintenance.none': 'None',
+  'maintenance.evidence': 'Evidence',
+  'maintenance.evidence.open': 'Open evidence {artifact}',
+  'maintenance.audit': 'Audit',
+  'maintenance.audit.created': 'created',
+  'maintenance.audit.accepted': 'accepted',
+  'maintenance.audit.rejected': 'rejected',
+  'maintenance.audit.stale': 'stale',
+  'maintenance.confirmRevision': 'Confirm revision {revision}',
+  'maintenance.approve': 'Approve draft',
+  'maintenance.reject': 'Reject draft',
+  'maintenance.reject.rationale': 'Reject rationale',
+  'maintenance.status.draft': 'draft',
+  'maintenance.status.accepted': 'accepted',
+  'maintenance.status.rejected': 'rejected',
+  'maintenance.status.stale': 'stale',
+  'maintenance.outcome.stale': 'Stale revision',
+  'maintenance.error.action': 'Could not complete the maintenance review action.',
   'app.nav.naturalLanguage': 'Natural Language',
   'app.nav.workflow': 'Workflow',
   'app.nav.recording': 'Record and Replay',
@@ -1309,6 +1457,57 @@ export const enUS: Messages = {
   'app.runtime.commandFailed': 'Could not send the command. Verify that the desktop runtime is running.',
   'app.runtime.suiteFailed': 'Suite execution failed. Verify that the desktop runtime is available.',
   'suite.header.title': 'Test Suites',
+  'flows.header.title': 'Reusable Flows',
+  'flows.empty.title': 'Select a Project First',
+  'flows.empty.description': 'Flows are immutable versioned assets within a project.',
+  'flows.empty.openProjects': 'Open Projects',
+  'flows.action.create': 'New Flow',
+  'flows.action.editVersion': 'Edit as New Version',
+  'flows.action.publish': 'Publish Flow Version',
+  'flows.action.addNavigate': 'Add Navigation Step',
+  'flows.action.removeStep': 'Remove {title}',
+  'flows.meta.draft': ' Draft',
+  'flows.inventory.title': 'Versions',
+  'flows.inventory.description': 'Each binding targets one exact version.',
+  'flows.inventory.steps': 'steps',
+  'flows.inventory.empty': 'No Flow versions have been published.',
+  'flows.form.name': 'Flow Name',
+  'flows.form.description': 'Description',
+  'flows.steps.title': 'Deterministic Steps',
+  'flows.steps.description': 'Only confirmed actions and explicit assertions are allowed.',
+  'flows.steps.empty': 'Add a navigation step to begin.',
+  'flows.step.navigateTitle': 'Open Page',
+  'flows.step.navigateBody': 'Open the project default page.',
+  'flows.editor.empty.title': 'Select a Flow',
+  'flows.editor.empty.description': 'Select a published version or create a versioned Flow.',
+  'flows.validation.title': 'Publish Validation',
+  'flows.validation.description': 'Published contents cannot be edited.',
+  'flows.validation.blocked': 'Blocked',
+  'flows.validation.ready': 'Ready',
+  'flows.validation.pinned': 'Cases bound here remain unchanged when newer versions are published.',
+  'flows.impact.title': 'Impact Analysis',
+  'flows.impact.description': 'Review Cases bound to this version; Suites are never rewritten automatically.',
+  'flows.impact.source': 'Source Flow',
+  'flows.impact.target': 'Target Flow Version',
+  'flows.impact.flowDiff': '{source} -> {target}',
+  'flows.impact.fixtures': 'Fixture References',
+  'flows.impact.noFixtures': 'No Fixture references.',
+  'flows.impact.baseline': 'Baseline',
+  'flows.impact.noBaseline': 'No baseline.',
+  'flows.impact.suites': 'Suite References',
+  'flows.impact.noSuites': 'No Suite references.',
+  'flows.impact.noNewerTarget': 'No newer version is available for this Flow.',
+  'flows.impact.none': 'No Cases directly bind this version.',
+  'flows.impact.upgrade': 'Create New Case Versions',
+  'flows.upgrade.title': 'Confirm Case Upgrade',
+  'flows.upgrade.description': 'Create next Case versions from {source} to {target}.',
+  'flows.upgrade.case': 'Upgrade {name} v{version}',
+  'flows.upgrade.suitesTitle': 'Suite Upgrade Proposals',
+  'flows.upgrade.suitesImmutable': 'Suites are not rewritten automatically.',
+  'flows.upgrade.suitesNone': 'No Suite upgrade proposals for the selected Cases.',
+  'flows.upgrade.selectionBlocked': 'Cannot confirm this selection.',
+  'flows.upgrade.cancel': 'Cancel',
+  'flows.upgrade.confirm': 'Confirm Case Upgrade',
   'suite.action.create': 'New Suite',
   'suite.action.editVersion': 'Edit as New Version',
   'suite.action.publish': 'Publish Version',
@@ -1343,11 +1542,17 @@ export const enUS: Messages = {
   'suite.preflight.description': 'Checks the pinned member versions, dependencies, and environment.',
   'suite.preflight.ready': 'Preflight passed. This version can run.',
   'suite.preflight.requestedConcurrency': 'Saved requested concurrency: {count}',
-  'suite.preflight.effectiveConcurrency': 'Desktop effective concurrency: 1 (controlled browser session)',
+  'suite.preflight.effectiveConcurrency': 'Effective concurrency is reported after the run; unverified capacity runs serially.',
+  'suite.preflight.effectiveConcurrencyMeasured': 'Most recent effective concurrency: {count}',
   'suite.results.title': 'Latest Results',
   'suite.results.attempt': 'Attempt {count}',
   'suite.results.openRun': 'Open run for {name}',
   'suite.results.open': 'Open Run',
+  'suite.records.title': 'Persisted Runs',
+  'suite.records.startedAt': 'Started',
+  'suite.records.finishedAt': 'Finished',
+  'suite.records.count': '{status} {count}',
+  'suite.records.open': 'Open Suite Run',
   'suite.meta.draft': ' (draft)',
   'app.runtime.sessionToggleFailed': 'Could not change the session state. Try again later.',
   'app.runtime.workflowFailed': 'Could not dispatch the workflow. Verify that the Electron main-process runtime is available.',
@@ -1384,7 +1589,6 @@ export const enUS: Messages = {
   'settings.nav.execution': 'Execution',
   'settings.nav.runtime': 'Runtime',
   'settings.nav.endpoint': 'Endpoint',
-  'settings.appearance.section': '01 / Visuals',
   'settings.appearance.title': 'Appearance',
   'settings.appearance.description': 'Choose how TestBuddy is displayed on this system.',
   'settings.appearance.currentTheme': 'Current',
@@ -1402,20 +1606,15 @@ export const enUS: Messages = {
   'settings.language.enDescription': 'English interface',
   'settings.language.system': 'Follow System',
   'settings.language.systemDescription': 'Use system language',
-  'settings.midscene.section': '02 / Engine',
   'settings.midscene.title': 'MidScene Configuration',
+  'settings.modelSecret.save': 'Save key',
+  'settings.modelSecret.replace': 'Replace key',
+  'settings.modelSecret.clear': 'Clear key',
+  'settings.modelSecret.stored': 'Securely stored',
   'settings.midscene.baseUrlHint': 'OpenAI-compatible model service URL, such as OpenAI, Qwen, Doubao, Azure OpenAI, or a self-hosted proxy.',
   'settings.midscene.familyHint': 'Tells MidScene the model capability family. Different providers require the matching family value.',
   'settings.midscene.contextLabel': 'Default Project Context',
   'settings.midscene.contextPlaceholder': 'Example: This is a chart and table-heavy admin console. Prioritize filters, table rows, and chart data.',
-  'settings.midscene.unlockedTitle': 'Available after configuration',
-  'settings.midscene.feature.nl': 'Natural Language Testing',
-  'settings.midscene.feature.nlDescription': 'Send commands directly to the page for fast exploration and ad-hoc validation.',
-  'settings.midscene.feature.workflow': 'Workflow Testing',
-  'settings.midscene.feature.workflowDescription': 'Turn valid instructions into multi-step regression flows.',
-  'settings.midscene.feature.recording': 'Record and Replay',
-  'settings.midscene.feature.recordingDescription': 'Record real operations and convert them into maintainable test assets.',
-  'settings.midscene.requiredHint': 'Model service URL, API Key, model name, and model family are required to enable natural language, workflow, and record-and-replay features.',
   'settings.midscene.connectionTitle': 'Model Connection',
   'settings.midscene.connectionTest': 'Test Connection',
   'settings.midscene.connectionTesting': 'Testing',
@@ -1424,7 +1623,6 @@ export const enUS: Messages = {
   'settings.midscene.connectionHttp': 'Model service returned HTTP {status}.',
   'settings.midscene.connectionNetwork': 'Could not establish a request. Check the network, proxy, or service URL.',
   'settings.midscene.connectionResponse': 'Model service returned an invalid response format.',
-  'settings.agent.section': '03 / Agent Brain',
   'settings.agent.title': 'Agent Models',
   'settings.agent.description': 'Configure model routing for the automated testing Agent roles: planning, execution, verification, and reporting. Roles reuse MidScene by default, and can switch to independent OpenAI-compatible models when needed.',
   'settings.agent.planner': 'Planner',
@@ -1441,7 +1639,6 @@ export const enUS: Messages = {
   'settings.agent.inheritedModel': 'Inherited model: {model}',
   'settings.agent.modelNameLabel': '{role} Model Name',
   'settings.agent.modelFamilyLabel': '{role} Model Family',
-  'settings.runtime.section': '04 / Execution',
   'settings.runtime.title': 'Runtime Configuration',
   'settings.runtime.browserEngine': 'Browser Engine',
   'settings.runtime.viewport': 'Viewport Settings',
@@ -1480,9 +1677,8 @@ export const enUS: Messages = {
   'startup.feature.recordingDescription': 'Turn real paths into cases',
   'startup.midscene.section': 'STEP 01 / ENGINE',
   'startup.midscene.title': 'Configure MidScene',
-  'startup.midscene.description': 'Fill in OpenAI-compatible model parameters, then save to enter the workbench. Required fields include service URL, API Key, model name, and model family.',
+  'startup.midscene.description': 'Configure now or later; the service URL, API key, model name, and model family are needed before using related capabilities.',
   'startup.midscene.state.ready': 'Ready',
-  'startup.midscene.state.required': 'Required',
   'startup.midscene.contextLabel': 'Default Context',
   'startup.midscene.contextPlaceholder': 'Example: This is a chart and table-heavy admin console.',
   'startup.midscene.save': 'Save and Enter Workbench',
@@ -1866,6 +2062,13 @@ export const enUS: Messages = {
   'runs.provenance.browser': 'Browser',
   'runs.provenance.headless': 'headless',
   'runs.provenance.headed': 'headed',
+  'runs.suite.parent': 'Suite Parent Run',
+  'runs.suite.title': 'Suite {reference}',
+  'runs.suite.startedAt': 'Started',
+  'runs.suite.finishedAt': 'Finished',
+  'runs.suite.members': 'Case Members',
+  'runs.suite.count': '{status} {count}',
+  'runs.suite.openMember': 'Open {name}',
   'runs.reason.label': 'Reason',
   'runs.reason.assertionFailed': 'assertion failed',
   'runs.reason.actionFailed': 'action failed',
@@ -1879,6 +2082,21 @@ export const enUS: Messages = {
   'runs.reason.legacyAmbiguousNeutral': 'legacy run is not exactly reproducible',
   'runs.exportProjectReport': 'Export project report',
   'runs.exportProjectReportWorking': 'Exporting',
+  'runs.retention.review': 'Review retention plan',
+  'runs.retention.reviewing': 'Preparing plan',
+  'runs.retention.title': 'Evidence Retention Review',
+  'runs.retention.candidates': 'Deletion Candidates',
+  'runs.retention.candidate': 'Deletion candidate',
+  'runs.retention.candidateCount': '{count} candidates',
+  'runs.retention.protected': 'Protected',
+  'runs.retention.protectedCount': '{count} protected',
+  'runs.retention.empty': 'This plan has no deletable evidence.',
+  'runs.retention.createdAt': 'Created',
+  'runs.retention.keepDays': 'Keep {count} days',
+  'runs.retention.confirm': 'Delete {count} entries',
+  'runs.retention.confirming': 'Confirming deletion',
+  'runs.retention.confirmed': 'Deleted {count} evidence entries.',
+  'runs.retention.error': 'Evidence retention operation failed.',
   'runs.cancelRun': 'Cancel run',
   'runs.cancelRunWorking': 'Cancelling',
   'runs.list.eyebrow': 'Runs',
@@ -2140,6 +2358,13 @@ export const enUS: Messages = {
   'cases.fixture.noAvailable': 'No fixture versions are available for the current environment.',
   'cases.fixture.noBound': 'No fixtures are bound to this case.',
   'cases.fixture.remove': 'Remove {name} v{version}',
+  'cases.flow.title': 'Reusable Flows',
+  'cases.flow.choose': 'Bind a specific Flow version',
+  'cases.flow.noAvailable': 'No Flow versions are available to bind.',
+  'cases.flow.noBound': 'No reusable Flows are bound to this Case.',
+  'cases.flow.remove': 'Remove {name} v{version}',
+  'cases.flow.moveUp': 'Move {name} up',
+  'cases.flow.moveDown': 'Move {name} down',
   'cases.intent.businessGoal': 'Business Goal',
   'cases.intent.preconditions': 'Preconditions',
   'cases.intent.successCriteria': 'Success Criteria',

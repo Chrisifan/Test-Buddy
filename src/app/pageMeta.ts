@@ -3,14 +3,16 @@ export type AppPage =
   | 'projects'
   | 'documents'
   | 'cases'
+  | 'flows'
   | 'suites'
   | 'runs'
+  | 'maintenance'
   | 'nl'
   | 'workflow'
   | 'recording';
 
 export const pageMeta: Record<
-  Exclude<AppPage, 'home' | 'projects' | 'documents' | 'cases' | 'suites' | 'runs'>,
+  Exclude<AppPage, 'home' | 'projects' | 'documents' | 'cases' | 'flows' | 'suites' | 'runs'>,
   {
     title: string;
     description: string;
@@ -31,5 +33,10 @@ export const pageMeta: Record<
     title: '操作录制回放',
     description: '录制浏览器操作并回放，后续可转译成可维护测试资产。',
     cta: '进入录制回放',
+  },
+  maintenance: {
+    title: '维护审核',
+    description: '审核基于运行证据生成的版本化用例维护建议。',
+    cta: '查看维护审核',
   },
 };

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Check, CircleAlert, Link2, PencilLine, Play, Plus, RotateCcw, Unlink, X } from 'lucide-react';
 
-import type { ProjectDraft, SuiteAsset, SuiteRunDetail, VersionedTestAssetReference } from '../../../shared/studio.js';
+import type { ProjectDraft, SuiteAsset, SuiteRunDetail, SuiteRunRecord, VersionedTestAssetReference } from '../../../shared/studio.js';
 import { createEmptySuiteAsset, findSuiteAsset, findTestCaseVersion, listLatestTestCaseVersions, resolveSuiteTestCases } from '../../../shared/studio.js';
 import { StatusPill } from '../../components/StatusPill.js';
 import { Badge } from '../../components/ui/badge.js';
@@ -29,6 +29,7 @@ export function SuiteManagementPage({
   isRunning,
   activeRunId,
   lastRun,
+  suiteRunRecords = [],
   onSelectSuite,
   onPublishSuite,
   onRunSuite,
@@ -41,6 +42,7 @@ export function SuiteManagementPage({
   isRunning: boolean;
   activeRunId?: string;
   lastRun?: SuiteRunDetail;
+  suiteRunRecords?: SuiteRunRecord[];
   onSelectSuite: (reference: VersionedTestAssetReference) => void;
   onPublishSuite: (suite: SuiteAsset) => void;
   onRunSuite: (reference: VersionedTestAssetReference) => void;
@@ -54,6 +56,12 @@ export function SuiteManagementPage({
     : undefined;
   const [draft, setDraft] = useState<SuiteAsset>();
   const editorSuite = draft ?? selectedSuite;
+  const durableRuns = editorSuite
+    ? suiteRunRecords.filter((record) =>
+      record.provenance.suite.reference.id === editorSuite.id &&
+      record.provenance.suite.reference.version === editorSuite.version,
+    )
+    : [];
   const resolution = project && editorSuite ? resolveSuiteTestCases(project, editorSuite) : undefined;
   const preflightMessages = resolution?.issues.map((issue) => issue.message) ?? [];
   const isSavedVersion = Boolean(selectedSuite && !draft);
@@ -173,6 +181,9 @@ export function SuiteManagementPage({
 
   const selectedReferences = new Set(editorSuite?.caseReferences.map((reference) => reference.id) ?? []);
   const requestedConcurrency = editorSuite?.execution.concurrency ?? 1;
+  const lastEffectiveConcurrency = editorSuite && lastRun?.suite.suiteId === editorSuite.id && lastRun.suite.suiteVersion === editorSuite.version
+    ? lastRun.suite.effectiveConcurrency
+    : undefined;
 
   return (
     <PageShell>
@@ -357,7 +368,11 @@ export function SuiteManagementPage({
               {editorSuite ? (
                 <div className="mt-4 border-t border-border pt-3">
                   <p className="text-xs text-muted-foreground">{t('suite.preflight.requestedConcurrency', { count: requestedConcurrency })}</p>
-                  <p className="mt-1 text-xs font-medium text-foreground">{t('suite.preflight.effectiveConcurrency')}</p>
+                  <p className="mt-1 text-xs font-medium text-foreground">
+                    {lastEffectiveConcurrency === undefined
+                      ? t('suite.preflight.effectiveConcurrency')
+                      : t('suite.preflight.effectiveConcurrencyMeasured', { count: lastEffectiveConcurrency })}
+                  </p>
                 </div>
               ) : null}
               <Button className="mt-4 w-full" disabled={!canRun} onClick={() => editorSuite && onRunSuite({ id: editorSuite.id, version: editorSuite.version })} type="button">
@@ -374,6 +389,9 @@ export function SuiteManagementPage({
             {lastRun && editorSuite && lastRun.suite.suiteId === editorSuite.id && lastRun.suite.suiteVersion === editorSuite.version ? (
               <SuiteRunSummary lastRun={lastRun} onOpenRun={onOpenRun} project={project} />
             ) : null}
+            {durableRuns.map((record) => (
+              <SuiteRunRecordSummary key={record.id} onOpenRun={onOpenRun} project={project} record={record} />
+            ))}
           </aside>
         </div>
       </PageBody>
@@ -433,6 +451,57 @@ function SuiteRunSummary({ lastRun, onOpenRun, project }: { lastRun: SuiteRunDet
                 {result.attempts > 1 ? <Badge variant="outline">{t('suite.results.attempt', { count: result.attempts })}</Badge> : null}
                 {result.flaky ? <Badge variant="outline">Flaky</Badge> : null}
                 {result.runId ? <Button aria-label={t('suite.results.openRun', { name: testCase?.name ?? result.testCaseId })} onClick={() => onOpenRun(result.runId!)} size="sm" type="button" variant="ghost"><RotateCcw className="size-3.5" />{t('suite.results.open')}</Button> : null}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </Surface>
+  );
+}
+
+function SuiteRunRecordSummary({ onOpenRun, project, record }: {
+  onOpenRun: (runId: string) => void;
+  project: ProjectDraft;
+  record: SuiteRunRecord;
+}) {
+  const { t } = useI18n();
+  const counts = Object.entries(record.summary)
+    .filter(([, count]) => count > 0)
+    .map(([status, count]) => ({ status, count }));
+  return (
+    <Surface className="p-4" variant="panel">
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-sm font-semibold">{t('suite.records.title')}</p>
+        <StatusPill tone={record.status} />
+      </div>
+      <div className="mt-3 grid gap-1 text-xs leading-5 text-muted-foreground">
+        <p>{t('suite.records.startedAt')}: <span>{record.startedAt}</span></p>
+        {record.finishedAt ? <p>{t('suite.records.finishedAt')}: <span>{record.finishedAt}</span></p> : null}
+      </div>
+      <div className="mt-3 flex flex-wrap gap-1.5">
+        {counts.map(({ status, count }) => (
+          <Badge key={status} variant="outline">{t('suite.records.count', { status: t(`common.status.${status}`), count })}</Badge>
+        ))}
+      </div>
+      <Button aria-label={t('suite.records.open')} className="mt-3 w-full" onClick={() => onOpenRun(record.id)} size="sm" type="button" variant="outline">
+        <RotateCcw className="size-3.5" />
+        {t('suite.records.open')}
+      </Button>
+      <div className="mt-3 grid gap-2 border-t border-border pt-3">
+        {(record.members ?? []).map((member) => {
+          const testCase = findTestCaseVersion(project, { id: member.testCaseId, version: member.testCaseVersion });
+          return (
+            <div className="border-t border-border pt-2 first:border-t-0 first:pt-0" key={`${member.testCaseId}@${member.testCaseVersion}`}>
+              <div className="flex items-center justify-between gap-2">
+                <span className="min-w-0 truncate text-xs font-medium">{testCase?.name ?? member.testCaseId}</span>
+                <StatusPill tone={member.status} />
+              </div>
+              <p className="mt-1 text-xs leading-5 text-muted-foreground">{member.summary}</p>
+              <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                {member.attempts > 1 ? <Badge variant="outline">{t('suite.results.attempt', { count: member.attempts })}</Badge> : null}
+                {member.flaky ? <Badge variant="outline">Flaky</Badge> : null}
+                {member.runId ? <Button aria-label={t('suite.results.openRun', { name: testCase?.name ?? member.testCaseId })} onClick={() => onOpenRun(member.runId!)} size="sm" type="button" variant="ghost"><RotateCcw className="size-3.5" />{t('suite.results.open')}</Button> : null}
               </div>
             </div>
           );

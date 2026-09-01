@@ -19,12 +19,28 @@ const {
   runSuite,
   runTestCase,
   runWorkflow,
+  saveModelSecret,
   selectProjectAssetDirectory,
   sendChatCommand,
   testMidsceneConnection,
+  clearModelSecret,
+  confirmArtifactRetention,
+  planArtifactRetention,
+  canReviewMaintenanceDrafts,
+  listMaintenanceDrafts,
+  createMaintenanceDraft,
+  acceptMaintenanceDraft,
+  rejectMaintenanceDraft,
   updateProjectAssetSnapshot,
   writeProjectAssetSnapshot,
 } = runtime;
+
+const openMaintenanceEvidence = (runtime as unknown as {
+  openMaintenanceEvidence: (request: {
+    draftId: string;
+    citation: { runId: string; artifactId: string; contentHash: string };
+  }) => Promise<void>;
+}).openMaintenanceEvidence;
 
 const request: ChatCommandRequest = {
   mode: 'ai',
@@ -42,6 +58,120 @@ const request: ChatCommandRequest = {
 };
 
 describe('browser fallback agent runtime', () => {
+  it('does not expose maintenance review capability without the desktop bridge', () => {
+    const originalDesktopApi = window.desktopApi;
+    window.desktopApi = undefined;
+
+    try {
+      expect(canReviewMaintenanceDrafts()).toBe(false);
+    } finally {
+      window.desktopApi = originalDesktopApi;
+    }
+  });
+
+  it('requires controlled evidence opening before enabling maintenance review', () => {
+    const originalDesktopApi = window.desktopApi;
+    window.desktopApi = {
+      acceptMaintenanceDraft: vi.fn(),
+      rejectMaintenanceDraft: vi.fn(),
+    } as unknown as DesktopApi;
+
+    try {
+      expect(canReviewMaintenanceDrafts()).toBe(false);
+    } finally {
+      window.desktopApi = originalDesktopApi;
+    }
+  });
+
+  it('keeps maintenance review operations on the desktop bridge', async () => {
+    const originalDesktopApi = window.desktopApi;
+    const project = createEmptyProject(1);
+    const candidate = {
+      ...createEmptyTestCase(1, project.groups[0]!.id, project.environments[0]!.id),
+      id: 'case-login',
+      version: 1,
+    };
+    const request = {
+      runId: 'run-login',
+      target: { kind: 'case' as const, id: 'case-login', version: 1 },
+      proposedCase: candidate,
+      citations: [{ artifactId: 'artifact-login', contentHash: 'a'.repeat(64) }],
+    };
+    const draft = { id: 'maintenance-login', status: 'draft' as const };
+    const openMaintenanceEvidenceMock = vi.fn().mockResolvedValue(undefined);
+    const desktopApi = {
+      listMaintenanceDrafts: vi.fn().mockResolvedValue([draft]),
+      createMaintenanceDraft: vi.fn().mockResolvedValue(draft),
+      acceptMaintenanceDraft: vi.fn().mockResolvedValue({ status: 'accepted', draft, published: { id: 'case-login', version: 2 } }),
+      rejectMaintenanceDraft: vi.fn().mockResolvedValue({ ...draft, status: 'rejected' }),
+      openMaintenanceEvidence: openMaintenanceEvidenceMock,
+    } as unknown as DesktopApi;
+    window.desktopApi = desktopApi;
+
+    try {
+      await expect(listMaintenanceDrafts()).resolves.toEqual([draft]);
+      await expect(createMaintenanceDraft(request)).resolves.toBe(draft);
+      await expect(acceptMaintenanceDraft({ draftId: draft.id, expectedRevision: 'b'.repeat(64) })).resolves.toMatchObject({ status: 'accepted' });
+      await expect(rejectMaintenanceDraft({
+        draftId: draft.id,
+        rationale: 'The cited failure does not reproduce in the pinned environment.',
+      } as never)).resolves.toMatchObject({ status: 'rejected' });
+      await expect(openMaintenanceEvidence({
+        draftId: draft.id,
+        citation: { runId: 'run-login', artifactId: 'artifact-login', contentHash: 'a'.repeat(64) },
+      })).resolves.toBeUndefined();
+
+      expect(desktopApi.listMaintenanceDrafts).toHaveBeenCalledWith();
+      expect(desktopApi.createMaintenanceDraft).toHaveBeenCalledWith(request);
+      expect(desktopApi.acceptMaintenanceDraft).toHaveBeenCalledWith({ draftId: draft.id, expectedRevision: 'b'.repeat(64) });
+      expect(desktopApi.rejectMaintenanceDraft).toHaveBeenCalledWith({
+        draftId: draft.id,
+        rationale: 'The cited failure does not reproduce in the pinned environment.',
+      });
+      expect(openMaintenanceEvidenceMock).toHaveBeenCalledWith({
+        draftId: draft.id,
+        citation: { runId: 'run-login', artifactId: 'artifact-login', contentHash: 'a'.repeat(64) },
+      });
+    } finally {
+      window.desktopApi = originalDesktopApi;
+    }
+  });
+
+  it('requires only the desktop maintenance operation being invoked', async () => {
+    const originalDesktopApi = window.desktopApi;
+    const desktopApi = {
+      acceptMaintenanceDraft: vi.fn().mockResolvedValue({
+        status: 'stale',
+        draft: { id: 'maintenance-login', status: 'stale' },
+      }),
+    } as unknown as DesktopApi;
+    window.desktopApi = desktopApi;
+
+    try {
+      await expect(acceptMaintenanceDraft({
+        draftId: 'maintenance-login',
+        expectedRevision: 'a'.repeat(64),
+      })).resolves.toMatchObject({ status: 'stale' });
+      expect(desktopApi.acceptMaintenanceDraft).toHaveBeenCalledOnce();
+    } finally {
+      window.desktopApi = originalDesktopApi;
+    }
+  });
+
+  it('forwards retention review and explicit confirmation only through the desktop bridge', async () => {
+    const originalDesktopApi = window.desktopApi;
+    const desktopApi = {
+      planArtifactRetention: vi.fn().mockResolvedValue({ id: 'retention-1', entries: [] }),
+      confirmArtifactRetention: vi.fn().mockResolvedValue({ planId: 'retention-1', deleted: [] }),
+    } as unknown as DesktopApi;
+    window.desktopApi = desktopApi;
+    await expect(planArtifactRetention()).resolves.toEqual({ id: 'retention-1', entries: [] });
+    await expect(confirmArtifactRetention('retention-1')).resolves.toEqual({ planId: 'retention-1', deleted: [] });
+    expect(desktopApi.planArtifactRetention).toHaveBeenCalledWith();
+    expect(desktopApi.confirmArtifactRetention).toHaveBeenCalledWith('retention-1');
+    window.desktopApi = originalDesktopApi;
+  });
+
   it('blocks exact Suite members in stable order when the desktop bridge is unavailable', async () => {
     const project = createEmptyProject(1);
     const environment = project.environments[0]!;
@@ -714,7 +844,7 @@ describe('browser fallback agent runtime', () => {
     await expect(
       testMidsceneConnection({
         modelBaseUrl: 'https://models.example.test/v1',
-        modelApiKey: 'test-key',
+        modelSecret: { id: 'midscene', hasKey: true, updatedAt: '2026-08-17T00:00:00.000Z' },
         modelName: 'ui-agent-model',
         modelFamily: 'openai',
         preferredLanguage: 'Chinese',
@@ -725,6 +855,24 @@ describe('browser fallback agent runtime', () => {
     ).resolves.toEqual(result);
 
     expect(desktopApi.testMidsceneConnection).toHaveBeenCalledOnce();
+    window.desktopApi = originalDesktopApi;
+  });
+
+  it('uses the desktop bridge for model secret refs without retaining the submitted key', async () => {
+    const originalDesktopApi = window.desktopApi;
+    const savedReference = { id: 'midscene', hasKey: true, updatedAt: '2026-08-17T00:00:00.000Z' };
+    const clearedReference = { id: 'midscene', hasKey: false, updatedAt: '2026-08-17T00:01:00.000Z' };
+    const desktopApi = {
+      saveModelSecret: vi.fn().mockResolvedValue(savedReference),
+      clearModelSecret: vi.fn().mockResolvedValue(clearedReference),
+    } as unknown as DesktopApi;
+    window.desktopApi = desktopApi;
+
+    await expect(saveModelSecret({ scope: 'midscene', value: 'sk-runtime-only' })).resolves.toEqual(savedReference);
+    await expect(clearModelSecret({ scope: 'midscene' })).resolves.toEqual(clearedReference);
+
+    expect(desktopApi.saveModelSecret).toHaveBeenCalledWith({ scope: 'midscene', value: 'sk-runtime-only' });
+    expect(desktopApi.clearModelSecret).toHaveBeenCalledWith({ scope: 'midscene' });
     window.desktopApi = originalDesktopApi;
   });
 });

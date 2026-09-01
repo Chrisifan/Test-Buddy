@@ -98,24 +98,15 @@ function DashboardCard({
 
 function StatGlyph({
   children,
-  tone = 'cyan',
+  tone = 'neutral',
   testId,
 }: {
   children: ReactNode;
-  tone?: 'cyan' | 'pink' | 'blue' | 'amber';
+  tone?: 'neutral' | 'primary' | 'risk';
   testId?: string;
 }) {
-  const toneClass =
-    tone === 'pink'
-      ? 'border-red-200 bg-red-50 text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-200'
-      : tone === 'blue'
-        ? 'border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-900/60 dark:bg-blue-950/30 dark:text-blue-200'
-        : tone === 'amber'
-          ? 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200'
-          : 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-200';
-
   return (
-    <span className={`home-glyph flex h-9 w-9 shrink-0 items-center justify-center rounded-[4px] border ${toneClass}`} data-testid={testId}>
+    <span className={`home-glyph home-glyph-${tone} flex h-9 w-9 shrink-0 items-center justify-center rounded-[4px] border`} data-testid={testId}>
       {children}
     </span>
   );
@@ -227,20 +218,6 @@ export function HomePage({
             })}
           </section>
         </main>
-        <footer className="home-empty-status">
-          <div className="flex items-center gap-4">
-            <span className="flex items-center gap-2">
-              <span className="h-2 w-2 rounded-full bg-emerald-500" />
-              {t('home.empty.online')}
-            </span>
-            <span>|</span>
-            <span>{t('home.empty.workspace')}</span>
-          </div>
-          <div className="flex items-center gap-4">
-            <span>V2.4.0-stable</span>
-            <TerminalSquare className="h-3.5 w-3.5" />
-          </div>
-        </footer>
       </section>
     );
   }
@@ -289,13 +266,13 @@ export function HomePage({
       icon: <ScanSearch className="h-6 w-6" />,
       title: t('home.optimization.chart.title'),
       description: t('home.optimization.chart.description'),
-      tone: 'pink' as const,
+      tone: 'primary' as const,
     },
     {
       icon: <Clock3 className="h-6 w-6" />,
       title: t('home.optimization.duration.title'),
       description: latestRun ? `${latestRun.name} · ${latestRun.duration}` : t('home.optimization.duration.description'),
-      tone: 'blue' as const,
+      tone: 'neutral' as const,
     },
     {
       icon: <CheckCircle2 className="h-6 w-6" />,
@@ -304,7 +281,7 @@ export function HomePage({
         cases: workspaceAssets.testCases,
         recordings: workspaceAssets.recordings,
       }),
-      tone: 'cyan' as const,
+      tone: 'neutral' as const,
     },
   ];
   const metricCards = [
@@ -317,21 +294,14 @@ export function HomePage({
         documents: workspaceAssets.documents,
       }),
       Icon: DatabaseZap,
-      tone: 'cyan' as const,
+      tone: 'neutral' as const,
     },
     {
       label: t('home.health.title'),
       value: signal.badge,
       description: t('home.health.projectCount', { count: projects.length }),
       Icon: ShieldCheck,
-      tone: 'blue' as const,
-    },
-    {
-      label: t('home.asset.cases'),
-      value: `${workspaceAssets.testCases}`,
-      description: t('home.asset.casesDescription'),
-      Icon: FileText,
-      tone: 'blue' as const,
+      tone: signal.failed > signal.passed ? 'risk' as const : 'primary' as const,
     },
     {
       label: t('home.health.passRate'),
@@ -341,21 +311,14 @@ export function HomePage({
         cases: workspaceAssets.testCases,
       }),
       Icon: CheckCircle2,
-      tone: 'cyan' as const,
-    },
-    {
-      label: t('home.asset.recordings'),
-      value: `${workspaceAssets.recordings}`,
-      description: t('home.asset.recordingsDescription'),
-      Icon: MousePointerClick,
-      tone: 'amber' as const,
+      tone: 'primary' as const,
     },
     {
       label: t('home.health.coverage'),
       value: `${coverageIndex}`,
       description: t('home.asset.pathsDescription'),
       Icon: ScanSearch,
-      tone: 'pink' as const,
+      tone: 'primary' as const,
     },
   ];
   const recentRunHistory = recentRuns.slice(0, 3);
@@ -366,7 +329,7 @@ export function HomePage({
 
       <PageBody>
         <section aria-label={t('home.aria.workbench')} className="home-dashboard-layout figma-overview-canvas">
-          <div className="home-summary-grid home-metric-grid grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-6">
+          <div className="home-summary-grid home-metric-grid grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-4">
             {metricCards.map(({ label, value, description, Icon, tone }) => (
               <DashboardCard className="home-summary-card home-metric-card p-4" key={label}>
                 <div className="flex items-start justify-between gap-3">
@@ -415,7 +378,7 @@ export function HomePage({
               >
                 <div className="home-risk-summary flex flex-col gap-4 border-b border-border pb-4 sm:flex-row sm:items-center sm:justify-between">
                   <div className="flex min-w-0 items-center gap-3">
-                    <StatGlyph tone="amber"><ShieldCheck className="h-5 w-5" /></StatGlyph>
+                    <StatGlyph tone={signal.failed > signal.passed ? 'risk' : 'primary'}><ShieldCheck className="h-5 w-5" /></StatGlyph>
                     <div className="min-w-0">
                       <h2 className="home-text text-sm font-semibold">{t('home.baseline.title')}</h2>
                       <p className="home-muted mt-1 line-clamp-2 text-xs leading-5">{signal.description}</p>

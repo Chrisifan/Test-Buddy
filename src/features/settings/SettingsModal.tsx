@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type {
   AgentModelConfig,
   AgentModelRole,
@@ -7,11 +7,12 @@ import type {
   LocaleMode,
   MidsceneConfig,
   MidsceneConnectionTestResult,
+  ModelSecretScope,
   RuntimeProfile,
   ThemeMode,
 } from '../../../shared/studio.js';
 
-import { Bot, BrainCircuit, ChevronDown, CircleCheck, CircleHelp, CircleX, LoaderCircle, Moon, MonitorCog, MousePointerClick, Palette, PlayCircle, Settings2, Sun, Waypoints, Wifi, Workflow } from 'lucide-react';
+import { BrainCircuit, ChevronDown, CircleCheck, CircleHelp, CircleX, LoaderCircle, Moon, MonitorCog, Palette, PlayCircle, PlugZap, Settings2, Sun, Waypoints, Wifi } from 'lucide-react';
 import { createTranslator, type SupportedLocale } from '@/i18n';
 
 import { Badge } from '@/components/ui/badge';
@@ -166,6 +167,110 @@ function FieldLabel({ label, hint }: { label: string; hint?: string }) {
   );
 }
 
+function ModelSecretInput({
+  id,
+  label,
+  scope,
+  hasStoredKey,
+  isSaving,
+  error,
+  onSave,
+  onClear,
+  t,
+}: {
+  id: string;
+  label: string;
+  scope: ModelSecretScope;
+  hasStoredKey: boolean;
+  isSaving: boolean;
+  error?: string;
+  onSave: (scope: ModelSecretScope, value: string) => Promise<boolean>;
+  onClear: (scope: ModelSecretScope) => void;
+  t: ReturnType<typeof createTranslator>;
+}) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [hasPendingValue, setHasPendingValue] = useState(false);
+  const [isReplacing, setIsReplacing] = useState(false);
+  const isEditing = !hasStoredKey || isReplacing;
+
+  async function save() {
+    const value = inputRef.current?.value ?? '';
+    if (!value.trim()) {
+      return;
+    }
+
+    if (await onSave(scope, value)) {
+      const input = inputRef.current;
+      if (input) {
+        input.value = '';
+      }
+      setHasPendingValue(false);
+      setIsReplacing(false);
+    }
+  }
+
+  return (
+    <>
+      <Label htmlFor={isEditing ? id : undefined}>{label}</Label>
+      {isEditing ? (
+        <div className="flex flex-wrap gap-2">
+          <Input
+            id={id}
+            onChange={(event) => setHasPendingValue(Boolean(event.target.value.trim()))}
+            placeholder="sk-..."
+            ref={inputRef}
+            type="password"
+          />
+          <Button
+            className="shrink-0 rounded-[4px]"
+            disabled={!hasPendingValue || isSaving}
+            onClick={() => void save()}
+            type="button"
+            variant="outline"
+          >
+            {t('settings.modelSecret.save')}
+          </Button>
+          {hasStoredKey ? (
+            <Button
+              className="shrink-0 rounded-[4px]"
+              disabled={isSaving}
+              onClick={() => onClear(scope)}
+              type="button"
+              variant="ghost"
+            >
+              {t('settings.modelSecret.clear')}
+            </Button>
+          ) : null}
+        </div>
+      ) : (
+        <div className="flex min-h-[var(--density-control-height)] flex-wrap items-center gap-2 rounded-[4px] border border-emerald-500/35 bg-emerald-500/10 px-3" role="status">
+          <CircleCheck aria-hidden="true" className="h-4 w-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
+          <span className="mr-auto text-sm font-medium text-foreground">{t('settings.modelSecret.stored')}</span>
+          <Button
+            className="shrink-0 rounded-[4px]"
+            disabled={isSaving}
+            onClick={() => setIsReplacing(true)}
+            type="button"
+            variant="outline"
+          >
+            {t('settings.modelSecret.replace')}
+          </Button>
+          <Button
+            className="shrink-0 rounded-[4px]"
+            disabled={isSaving}
+            onClick={() => onClear(scope)}
+            type="button"
+            variant="ghost"
+          >
+            {t('settings.modelSecret.clear')}
+          </Button>
+        </div>
+      )}
+      {error ? <p className="form-hint text-destructive" role="alert">{error}</p> : null}
+    </>
+  );
+}
+
 export function SettingsModal({
   open,
   initialSection = 'appearance',
@@ -178,7 +283,9 @@ export function SettingsModal({
   effectiveTheme,
   locale,
   onClose,
+  onClearModelSecret,
   onSave,
+  onSaveModelSecret,
   onTestMidsceneConnection,
   onUpdateAppearance,
   onUpdateAgentModelConfig,
@@ -196,7 +303,9 @@ export function SettingsModal({
   effectiveTheme: 'light' | 'dark';
   locale: SupportedLocale;
   onClose: () => void;
+  onClearModelSecret: (scope: ModelSecretScope) => Promise<void>;
   onSave: () => void;
+  onSaveModelSecret: (scope: ModelSecretScope, value: string) => Promise<void>;
   onTestMidsceneConnection: (config: MidsceneConfig) => Promise<MidsceneConnectionTestResult>;
   onUpdateAppearance: (patch: Partial<AppearanceConfig>) => void;
   onUpdateAgentModelConfig: (role: AgentModelRole, patch: Partial<AgentRoleModelConfig>) => void;
@@ -207,19 +316,58 @@ export function SettingsModal({
   const [expandedAgentRole, setExpandedAgentRole] = useState<AgentModelRole>();
   const [isTestingMidsceneConnection, setIsTestingMidsceneConnection] = useState(false);
   const [midsceneConnectionResult, setMidsceneConnectionResult] = useState<MidsceneConnectionTestResult>();
+  const [modelSecretErrors, setModelSecretErrors] = useState<Partial<Record<ModelSecretScope, string>>>({});
+  const [activeModelSecretScope, setActiveModelSecretScope] = useState<ModelSecretScope>();
 
   useEffect(() => {
     setMidsceneConnectionResult(undefined);
-  }, [midsceneConfig.modelApiKey, midsceneConfig.modelBaseUrl, midsceneConfig.modelFamily, midsceneConfig.modelName]);
+  }, [midsceneConfig.modelSecret.updatedAt, midsceneConfig.modelBaseUrl, midsceneConfig.modelFamily, midsceneConfig.modelName]);
 
   useEffect(() => {
     if (!open) {
+      setModelSecretErrors({});
       return;
     }
 
     setActiveSection(initialSection);
     setExpandedAgentRole(undefined);
   }, [initialSection, open]);
+
+  async function saveModelSecret(scope: ModelSecretScope, value: string): Promise<boolean> {
+    if (!value.trim()) {
+      return false;
+    }
+
+    setActiveModelSecretScope(scope);
+    setModelSecretErrors((current) => ({ ...current, [scope]: undefined }));
+    try {
+      await onSaveModelSecret(scope, value);
+      return true;
+    } catch (error) {
+      setModelSecretErrors((current) => ({
+        ...current,
+        [scope]: error instanceof Error ? error.message : '模型密钥保存失败，请重试。',
+      }));
+      return false;
+    } finally {
+      setActiveModelSecretScope(undefined);
+    }
+  }
+
+  async function clearModelSecret(scope: ModelSecretScope) {
+    setActiveModelSecretScope(scope);
+    setModelSecretErrors((current) => ({ ...current, [scope]: undefined }));
+    try {
+      await onClearModelSecret(scope);
+    } catch (error) {
+      setModelSecretErrors((current) => ({
+        ...current,
+        [scope]: error instanceof Error ? error.message : '模型密钥清除失败，请重试。',
+      }));
+    } finally {
+      setActiveModelSecretScope(undefined);
+    }
+  }
 
   if (!open) {
     return null;
@@ -352,12 +500,6 @@ export function SettingsModal({
         <main className="settings-dialog-scroll min-h-0 flex-1 overflow-y-auto p-4">
           {activeSection === 'appearance' ? (
               <section id="appearance">
-                <div className="mb-3 flex items-center gap-2">
-                  <span className="font-mono text-[11px] font-semibold uppercase tracking-[0.16em] text-primary">
-                    {t('settings.appearance.section')}
-                  </span>
-                  <div className="h-px flex-1 bg-border" />
-                </div>
                 <h2 className="text-lg font-semibold">{t('settings.appearance.title')}</h2>
                 <p className="mt-2 text-sm text-muted-foreground">
                   {t('settings.appearance.currentTheme')}：{currentThemeLabel}。{t('settings.appearance.description')}
@@ -423,12 +565,6 @@ export function SettingsModal({
 
           {activeSection === 'midscene' ? (
               <section id="midscene">
-                <div className="mb-3 flex items-center gap-2">
-                  <span className="font-mono text-[11px] font-semibold uppercase tracking-[0.16em] text-primary">
-                    {t('settings.midscene.section')}
-                  </span>
-                  <div className="h-px flex-1 bg-border" />
-                </div>
                 <h2 className="text-lg font-semibold">{t('settings.midscene.title')}</h2>
                 <div className="mt-4 grid gap-4">
                   <div className="form-field is-url">
@@ -441,12 +577,16 @@ export function SettingsModal({
                   </div>
                   <div className="form-grid">
                     <div className="form-field">
-                      <Label>MIDSCENE_MODEL_API_KEY</Label>
-                      <Input
-                        onChange={(event) => onUpdateMidsceneConfig({ modelApiKey: event.target.value })}
-                        placeholder="sk-..."
-                        type="password"
-                        value={midsceneConfig.modelApiKey}
+                      <ModelSecretInput
+                        error={modelSecretErrors.midscene}
+                        hasStoredKey={midsceneConfig.modelSecret.hasKey}
+                        id="settings-midscene-model-api-key"
+                        isSaving={activeModelSecretScope === 'midscene'}
+                        label="MIDSCENE_MODEL_API_KEY"
+                        onClear={clearModelSecret}
+                        onSave={saveModelSecret}
+                        scope="midscene"
+                        t={t}
                       />
                     </div>
                     <div className="form-field">
@@ -515,7 +655,7 @@ export function SettingsModal({
                     {isTestingMidsceneConnection ? (
                       <LoaderCircle aria-hidden="true" className="h-4 w-4 animate-spin" />
                     ) : (
-                      <Wifi aria-hidden="true" className="h-4 w-4" />
+                      <PlugZap aria-hidden="true" className="h-4 w-4" />
                     )}
                     {isTestingMidsceneConnection
                       ? t('settings.midscene.connectionTesting')
@@ -537,41 +677,11 @@ export function SettingsModal({
                     </div>
                   ) : null}
                 </div>
-                <div className="mt-4 rounded-[6px] border border-border bg-muted p-3">
-                  <h3 className="text-sm font-semibold">{t('settings.midscene.unlockedTitle')}</h3>
-                  <div className="mt-2.5 grid gap-2 md:grid-cols-3">
-                    {[
-                      [Bot, t('settings.midscene.feature.nl'), t('settings.midscene.feature.nlDescription')],
-                      [Workflow, t('settings.midscene.feature.workflow'), t('settings.midscene.feature.workflowDescription')],
-                      [MousePointerClick, t('settings.midscene.feature.recording'), t('settings.midscene.feature.recordingDescription')],
-                    ].map(([Icon, title, description]) => {
-                      const FeatureIcon = Icon as typeof Bot;
-                      return (
-                        <div className="rounded-[4px] border border-border bg-card p-2.5" key={title as string}>
-                          <FeatureIcon className="h-4 w-4 text-primary" />
-                          <p className="mt-2 text-sm font-semibold">{title as string}</p>
-                          <p className="mt-1 text-xs leading-5 text-muted-foreground">{description as string}</p>
-                        </div>
-                      );
-                    })}
-                  </div>
-                  {!midsceneReady ? (
-                    <p className="mt-3 text-xs leading-5 text-muted-foreground">
-                      {t('settings.midscene.requiredHint')}
-                    </p>
-                  ) : null}
-                </div>
               </section>
           ) : null}
 
           {activeSection === 'agentModels' ? (
               <section id="agentModels">
-                <div className="mb-3 flex items-center gap-2">
-                  <span className="font-mono text-[11px] font-semibold uppercase tracking-[0.16em] text-primary">
-                    {t('settings.agent.section')}
-                  </span>
-                  <div className="h-px flex-1 bg-border" />
-                </div>
                 <h2 className="text-lg font-semibold">{t('settings.agent.title')}</h2>
                 <p className="mt-2 text-sm leading-6 text-muted-foreground">
                   {t('settings.agent.description')}
@@ -666,15 +776,16 @@ export function SettingsModal({
                               />
                             </div>
                             <div className="form-field">
-                              <Label htmlFor={`${roleFieldPrefix}-api-key`}>{roleTitle} API Key</Label>
-                              <Input
+                              <ModelSecretInput
+                                error={modelSecretErrors[`agent:${roleOption.role}`]}
+                                hasStoredKey={roleConfig.modelSecret.hasKey}
                                 id={`${roleFieldPrefix}-api-key`}
-                                onChange={(event) =>
-                                  onUpdateAgentModelConfig(roleOption.role, { modelApiKey: event.target.value })
-                                }
-                                placeholder="sk-..."
-                                type="password"
-                                value={roleConfig.modelApiKey}
+                                isSaving={activeModelSecretScope === `agent:${roleOption.role}`}
+                                label={`${roleTitle} API Key`}
+                                onClear={clearModelSecret}
+                                onSave={saveModelSecret}
+                                scope={`agent:${roleOption.role}`}
+                                t={t}
                               />
                             </div>
                             <div className="form-field">
@@ -732,12 +843,6 @@ export function SettingsModal({
           {activeSection === 'runtime' ? (
             <>
               <section id="runtime">
-                <div className="mb-3 flex items-center gap-2">
-                  <span className="font-mono text-[11px] font-semibold uppercase tracking-[0.16em] text-primary">
-                    {t('settings.runtime.section')}
-                  </span>
-                  <div className="h-px flex-1 bg-border" />
-                </div>
                 <h2 className="text-lg font-semibold">{t('settings.runtime.title')}</h2>
                 <div className="mt-4 grid gap-4">
                   <div className="grid gap-2">

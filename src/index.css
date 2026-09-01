@@ -7,8 +7,8 @@
   --font-sans:
     "Geist", "Avenir Next", "PingFang SC", "Hiragino Sans GB", "Helvetica Neue",
     sans-serif;
-  /* Use one typeface across product UI, including labels and metadata. */
-  --font-mono: var(--font-sans);
+  --font-mono: "SFMono-Regular", "Cascadia Code", "Roboto Mono", Menlo, Monaco, Consolas,
+    monospace;
   --font-serif: var(--font-sans);
 
   --color-background: var(--background);
@@ -33,110 +33,6 @@
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
-}
-
-:root {
-  --background: #ffffff;
-  --foreground: #191b24;
-  --card: #ffffff;
-  --card-foreground: #191b24;
-  --popover: #ffffff;
-  --popover-foreground: #191b24;
-  --primary: #0050cb;
-  --primary-foreground: #ffffff;
-  --secondary: #0f766e;
-  --secondary-foreground: #ffffff;
-  --muted: #f1f4f9;
-  --muted-foreground: #697386;
-  --accent: #eef4ff;
-  --accent-foreground: #191b24;
-  --destructive: #c92a2a;
-  --border: #d8d9e6;
-  --input: #c2c6d8;
-  --ring: #0050cb;
-  --success: #10b981;
-  --success-foreground: #047857;
-  --radius: 0.25rem;
-  /* Compact desktop workbench scale. Individual controls can still opt into lg. */
-  --font-size-body: 0.875rem;
-  --font-size-control: 0.8125rem;
-  --font-size-label: 0.75rem;
-  --font-size-meta: 0.6875rem;
-  --line-height-body: 1.5;
-  --density-page-x: clamp(0.75rem, 1.25vw, 1.25rem);
-  --density-page-y: 0.5rem;
-  --density-control-height: 2rem;
-  --density-control-height-sm: 1.625rem;
-  --density-control-height-lg: 2.25rem;
-  --density-control-icon: 2rem;
-  --density-panel-padding: 0.75rem;
-  --density-gap: 0.5rem;
-  --density-section-gap: 1.25rem;
-  --density-card-padding: 0.75rem;
-  --workbench-shell: #ffffff;
-  --workbench-shell-2: #ffffff;
-  --workbench-sidebar: #f7f9fc;
-  --workbench-panel: #ffffff;
-  --workbench-panel-2: #f1f4f9;
-  --workbench-card: #ffffff;
-  --workbench-card-strong: #ffffff;
-  --workbench-card-text: #191b24;
-  --workbench-card-muted: #697386;
-  --workbench-card-faint: rgba(105, 115, 134, 0.7);
-  --workbench-card-border: #d8d9e6;
-  --workbench-card-shadow: rgba(28, 39, 68, 0.06);
-  --workbench-dashboard-a: #ffffff;
-  --workbench-dashboard-b: #ffffff;
-  --workbench-dashboard-c: #eef4ff;
-  --workbench-accent-soft: rgba(0, 80, 203, 0.08);
-  --workbench-accent-line: rgba(0, 80, 203, 0.32);
-  --workbench-accent-glow: rgba(0, 80, 203, 0.12);
-  --motion-duration-fast: 160ms;
-  --motion-duration-base: 240ms;
-  --motion-duration-page: 360ms;
-  --motion-ease-standard: cubic-bezier(0.2, 0.8, 0.2, 1);
-  --motion-ease-emphasized: cubic-bezier(0.16, 1, 0.3, 1);
-}
-
-.dark {
-  --background: #101827;
-  --foreground: #edf2fb;
-  --card: #172033;
-  --card-foreground: #edf2fb;
-  --popover: #1d2940;
-  --popover-foreground: #edf2fb;
-  --primary: #62a0ff;
-  --primary-foreground: #071b45;
-  --secondary: #2dd4bf;
-  --secondary-foreground: #042f2e;
-  --muted: #202c42;
-  --muted-foreground: #9eabc2;
-  --accent: #1c2b45;
-  --accent-foreground: #edf2fb;
-  --destructive: #ff8b8b;
-  --border: rgba(185, 202, 231, 0.16);
-  --input: rgba(185, 202, 231, 0.28);
-  --ring: #62a0ff;
-  --success: #34d399;
-  --success-foreground: #6ee7b7;
-  --workbench-shell: #101827;
-  --workbench-shell-2: #131d2e;
-  --workbench-sidebar: #121b2a;
-  --workbench-panel: #172033;
-  --workbench-panel-2: #1d2940;
-  --workbench-card: #172033;
-  --workbench-card-strong: #1d2940;
-  --workbench-card-text: #edf2fb;
-  --workbench-card-muted: #9eabc2;
-  --workbench-card-faint: rgba(190, 204, 229, 0.62);
-  --workbench-card-border: rgba(185, 202, 231, 0.16);
-  --workbench-card-shadow: rgba(0, 0, 0, 0.28);
-  --workbench-dashboard-a: #172033;
-  --workbench-dashboard-b: #121b2a;
-  --workbench-dashboard-c: #1c2b45;
-  --workbench-accent-soft: rgba(98, 160, 255, 0.12);
-  --workbench-accent-line: rgba(98, 160, 255, 0.4);
-  --workbench-accent-glow: rgba(98, 160, 255, 0.18);
 }
 
 @layer base {
@@ -3603,19 +3499,6 @@
     text-transform: uppercase;
   }
 
-  .home-empty-status {
-    display: flex;
-    min-height: 2rem;
-    align-items: center;
-    justify-content: space-between;
-    border-top: 1px solid var(--border);
-    background: var(--muted);
-    padding-inline: 1.5rem;
-    color: var(--muted-foreground);
-    font-family: var(--font-mono);
-    font-size: 0.625rem;
-  }
-
   .startup-shell {
     height: 100vh;
     min-height: 0;
@@ -3816,17 +3699,6 @@
     line-height: 1rem;
   }
 
-  .startup-shell .home-empty-status {
-    width: min(100%, 1180px);
-    min-height: 1.75rem;
-    flex: 0 0 auto;
-    margin: 0 auto;
-    border: 0;
-    border-radius: 0.45rem;
-    background: color-mix(in oklch, var(--card) 80%, transparent);
-    padding-inline: 0.85rem;
-  }
-
   @media (max-height: 760px) {
     .startup-shell {
       padding-block: 2rem 0.55rem;
@@ -3893,15 +3765,10 @@
       grid-template-columns: 1fr;
     }
 
-    .home-empty-trust,
-    .home-empty-status {
+    .home-empty-trust {
       align-items: flex-start;
       flex-direction: column;
       gap: 0.875rem;
-    }
-
-    .home-empty-status {
-      padding-block: 0.75rem;
     }
 
     .startup-main {
@@ -3927,11 +3794,6 @@
       grid-row: auto;
     }
 
-    .startup-shell .home-empty-status {
-      width: calc(100% - 1.7rem);
-      margin-bottom: 0.85rem;
-      padding-block: 0.65rem;
-    }
   }
 
   .home-stat-card {
@@ -4072,11 +3934,6 @@
   }
 
   .signal-dot {
-    box-shadow: none;
-  }
-
-  .dark .app-rail {
-    background: var(--workbench-sidebar);
     box-shadow: none;
   }
 

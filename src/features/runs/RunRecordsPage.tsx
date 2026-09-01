@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   canCreateReporterFixDraft,
   deriveRunCoverageRisk,
+  type ArtifactRetentionAudit,
+  type ArtifactRetentionPlan,
   type HistoricalRerunExecutionResult,
   type HistoricalRerunPlan,
   type ProjectAssetBinding,
@@ -11,11 +13,13 @@ import {
   type RunSummary,
   type RunStatus,
   type RunTone,
+  type SuiteRunRecord,
 } from '../../../shared/studio.js';
 import type { AgentArtifact, AgentExecutionMetrics, AgentReporterSummary, AgentRunEvent, AgentRunResult } from '../../../shared/agent.js';
 
 import {
   AlertTriangle,
+  Archive,
   BarChart3,
   BrainCircuit,
   Camera,
@@ -36,6 +40,7 @@ import {
   Paperclip,
   RefreshCcw,
   ShieldAlert,
+  ShieldCheck,
   Table2,
   TerminalSquare,
   TrendingDown,
@@ -277,15 +282,24 @@ function getEvidencePreviewPath(event: AgentRunEvent, artifacts: AgentArtifact[]
   return artifacts.find((artifact) => artifact.type === 'screenshot' || artifact.type === 'snapshot')?.path;
 }
 
+function formatArtifactBytes(byteCount: number): string {
+  if (byteCount < 1024) return `${byteCount} B`;
+  if (byteCount < 1024 * 1024) return `${(byteCount / 1024).toFixed(1)} KB`;
+  return `${(byteCount / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 export function RunRecordsPage({
   project,
   projectAssetBinding,
   recentRuns,
   runDetails,
+  suiteRunRecords = [],
   selectedRunId,
   onSelectRun,
   onCreateReporterFixDraft,
   onExportProjectReport,
+  onPlanArtifactRetention,
+  onConfirmArtifactRetention,
   onCancelRun,
   onPlanExactRerun,
   onRunExactRerun,
@@ -298,10 +312,13 @@ export function RunRecordsPage({
   projectAssetBinding?: ProjectAssetBinding;
   recentRuns: RunSummary[];
   runDetails: RunDetail[];
+  suiteRunRecords?: SuiteRunRecord[];
   selectedRunId: string;
   onSelectRun: (runId: string) => void;
   onCreateReporterFixDraft?: (run: RunDetail, reporter: AgentReporterSummary) => void;
   onExportProjectReport?: () => Promise<void>;
+  onPlanArtifactRetention?: () => Promise<ArtifactRetentionPlan | undefined>;
+  onConfirmArtifactRetention?: (planId: string) => Promise<ArtifactRetentionAudit | undefined>;
   onCancelRun?: (runId: string) => Promise<void>;
   onPlanExactRerun?: (runId: string) => Promise<HistoricalRerunPlan>;
   onRunExactRerun?: (runId: string) => Promise<HistoricalRerunExecutionResult>;
@@ -331,6 +348,11 @@ export function RunRecordsPage({
   const [attachingManualEvidence, setAttachingManualEvidence] = useState<Record<string, boolean>>({});
   const [capturingManualEvidence, setCapturingManualEvidence] = useState<Record<string, boolean>>({});
   const [isExportingProjectReport, setIsExportingProjectReport] = useState(false);
+  const [retentionPlan, setRetentionPlan] = useState<ArtifactRetentionPlan>();
+  const [retentionAudit, setRetentionAudit] = useState<ArtifactRetentionAudit>();
+  const [retentionError, setRetentionError] = useState('');
+  const [isPlanningRetention, setIsPlanningRetention] = useState(false);
+  const [isConfirmingRetention, setIsConfirmingRetention] = useState(false);
   const [cancellingRunId, setCancellingRunId] = useState<string>('');
   const [rerunPlan, setRerunPlan] = useState<HistoricalRerunPlan>();
   const [isPlanningExactRerun, setIsPlanningExactRerun] = useState(false);
@@ -339,6 +361,9 @@ export function RunRecordsPage({
   const projectRuns = project
     ? recentRuns.filter((run) => !run.projectId || run.projectId === project.id)
     : recentRuns;
+  const projectSuiteRuns = project
+    ? suiteRunRecords.filter((record) => record.provenance.projectId === project.id)
+    : suiteRunRecords;
   const runDetailsById = useMemo(
     () => new Map(runDetails.map((detail) => [detail.id, detail])),
     [runDetails],
@@ -374,11 +399,25 @@ export function RunRecordsPage({
       }),
     [environmentFilter, projectRuns, runDetailsById, statusFilter, testCaseFilter],
   );
+  const visibleSuiteRuns = useMemo(
+    () => projectSuiteRuns.filter((record) => {
+      if (statusFilter !== 'all' && record.status !== statusFilter) {
+        return false;
+      }
+      if (environmentFilter !== 'all' && record.provenance.environment.id !== environmentFilter) {
+        return false;
+      }
+      return true;
+    }),
+    [environmentFilter, projectSuiteRuns, statusFilter],
+  );
+  const selectedSuiteRun = projectSuiteRuns.find((record) => record.id === selectedRunId);
   const selectedRun =
-    runDetails.find((run) => run.id === selectedRunId) ??
+    (selectedSuiteRun ? undefined : runDetails.find((run) => run.id === selectedRunId)) ??
     runDetails.find((run) => run.id === visibleRuns[0]?.id);
   selectedRunIdRef.current = selectedRun?.id ?? '';
-  const activeRun = projectRuns.find((run) => run.status === 'running');
+  const activeRun = projectSuiteRuns.find((record) => record.status === 'running') ??
+    projectRuns.find((run) => run.status === 'running');
   const isRunningExactRerun = runningExactRerunId === selectedRun?.id;
   useEffect(() => {
     let active = true;
@@ -516,12 +555,39 @@ export function RunRecordsPage({
     () => (project ? deriveRunCoverageRisk(project, recentRuns) : undefined),
     [project, recentRuns],
   );
+  const reviewArtifactRetention = () => {
+    if (!onPlanArtifactRetention) return;
+    setIsPlanningRetention(true);
+    setRetentionPlan(undefined);
+    setRetentionError('');
+    setRetentionAudit(undefined);
+    void onPlanArtifactRetention()
+      .then((plan) => {
+        setRetentionPlan(plan);
+      })
+      .catch((error: unknown) => {
+        setRetentionPlan(undefined);
+        setRetentionError(error instanceof Error ? error.message : t('runs.retention.error'));
+      })
+      .finally(() => setIsPlanningRetention(false));
+  };
+  const confirmReviewedRetention = () => {
+    if (!onConfirmArtifactRetention || !retentionPlan) return;
+    setIsConfirmingRetention(true);
+    setRetentionError('');
+    void onConfirmArtifactRetention(retentionPlan.id)
+      .then((audit) => {
+        if (audit) setRetentionAudit(audit);
+      })
+      .catch((error: unknown) => setRetentionError(error instanceof Error ? error.message : t('runs.retention.error')))
+      .finally(() => setIsConfirmingRetention(false));
+  };
 
   return (
     <PageShell>
       <PageHeader
         action={
-          onExportProjectReport || (activeRun && onCancelRun) || (selectedRun && onPlanExactRerun && onRunExactRerun) ? (
+          onExportProjectReport || onPlanArtifactRetention || (activeRun && onCancelRun) || (selectedRun && onPlanExactRerun && onRunExactRerun) ? (
             <div className="flex items-center gap-2">
               {onExportProjectReport ? (
                 <button
@@ -537,6 +603,19 @@ export function RunRecordsPage({
                 >
                   <Download className="h-3.5 w-3.5" />
                   {isExportingProjectReport ? t('runs.exportProjectReportWorking') : t('runs.exportProjectReport')}
+                </button>
+              ) : null}
+              {onPlanArtifactRetention ? (
+                <button
+                  aria-label={t('runs.retention.review')}
+                  className="inline-flex h-8 items-center gap-1.5 rounded-[4px] border border-border px-2.5 text-xs font-medium text-foreground transition-colors hover:bg-accent disabled:pointer-events-none disabled:opacity-45"
+                  disabled={isPlanningRetention || isConfirmingRetention}
+                  onClick={reviewArtifactRetention}
+                  title={t('runs.retention.review')}
+                  type="button"
+                >
+                  <Archive className="h-3.5 w-3.5" />
+                  {isPlanningRetention ? t('runs.retention.reviewing') : t('runs.retention.review')}
                 </button>
               ) : null}
               {activeRun && onCancelRun ? (
@@ -658,14 +737,30 @@ export function RunRecordsPage({
                 <span className="mt-1 block line-clamp-2 text-xs leading-5 text-muted-foreground">{run.summary}</span>
               </button>
             ))}
-            {!visibleRuns.length ? (
+            {visibleSuiteRuns.map((record) => (
+              <button
+                className={`designer-case-row ${record.id === selectedRunId ? 'is-active' : ''}`}
+                key={record.id}
+                onClick={() => onSelectRun(record.id)}
+                type="button"
+              >
+                <span className="flex items-center justify-between gap-3">
+                  <span className="truncate text-sm font-semibold">{t('runs.suite.title', { reference: `${record.provenance.suite.reference.id}@${record.provenance.suite.reference.version}` })}</span>
+                  <StatusPill tone={record.status} />
+                </span>
+                <span className="mt-1 block line-clamp-2 text-xs leading-5 text-muted-foreground">
+                  {Object.entries(record.summary).filter(([, count]) => count > 0).map(([status, count]) => t('runs.suite.count', { status: t(`common.status.${status}`), count })).join(' · ')}
+                </span>
+              </button>
+            ))}
+            {!visibleRuns.length && !visibleSuiteRuns.length ? (
               <EvidenceCard title={t('runs.empty.title')} description={t('runs.empty.description')} />
             ) : null}
           </div>
         </aside>
 
         <section className="designer-panel designer-detail-stage run-detail-stage min-w-0">
-          <div className="run-quality-grid grid gap-3">
+          <section aria-label={t('runs.quality.eyebrow')} className="run-quality-grid grid gap-3">
             <Surface className="run-quality-primary p-5" variant="stat">
               <div className="flex items-start justify-between gap-4">
                 <div>
@@ -682,7 +777,7 @@ export function RunRecordsPage({
             <MetricTile label={t('runs.metric.total')} value={`${runStats.total}`} />
             <MetricTile label={t('runs.metric.failed')} value={`${runStats.failed}`} tone={runStats.failed ? 'failed' : 'neutral'} />
             <MetricTile label={t('runs.metric.health')} value={runAnalytics.healthLabel} tone={runStats.failed ? 'failed' : 'passed'} />
-          </div>
+          </section>
           {project && coverageRisk ? (
             <Surface aria-label={t('runs.coverage.title')} className="mt-5 p-4" variant="subtle">
               <div className="flex flex-wrap items-start justify-between gap-3">
@@ -733,7 +828,67 @@ export function RunRecordsPage({
               )}
             </Surface>
           ) : null}
-          {selectedRun ? (
+          {retentionError && !retentionPlan ? <p className="mt-3 text-sm text-destructive" role="alert">{retentionError}</p> : null}
+          {retentionPlan ? (
+            <Surface aria-label={t('runs.retention.title')} className="mt-5 p-4" variant="subtle">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <p className="inline-flex items-center gap-2 text-xs font-medium text-primary">
+                    <Archive className="h-3.5 w-3.5" />
+                    {t('runs.retention.title')}
+                  </p>
+                  <h3 className="mt-1 text-sm font-semibold">{t('runs.retention.candidates')}</h3>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Badge variant="outline">{t('runs.retention.keepDays', { count: retentionPlan.keepDays })}</Badge>
+                  <Badge variant="outline">{t('runs.retention.candidateCount', { count: retentionPlan.candidateCount })}</Badge>
+                  <Badge variant="outline">{t('runs.retention.protectedCount', { count: retentionPlan.protectedCount })}</Badge>
+                </div>
+              </div>
+              <div className="mt-3 grid gap-2">
+                {retentionPlan.entries.map((entry) => (
+                  <div className="flex min-w-0 items-start justify-between gap-3 border-t border-border/70 pt-2 first:border-t-0 first:pt-0" key={entry.id}>
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium text-foreground">{entry.id}</p>
+                      <p className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">{entry.contentHash}</p>
+                      <p className="mt-1 text-xs text-muted-foreground">{t('runs.retention.createdAt')}: <span>{entry.createdAt}</span></p>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {entry.retentionClass} · {entry.evidenceKind} · {formatArtifactBytes(entry.byteCount)} · {entry.deletionCandidate ? entry.reason : entry.protectedReasons.join(', ')}
+                      </p>
+                    </div>
+                    <Badge className={`shrink-0 ${entry.deletionCandidate ? 'border-destructive/35 text-destructive' : ''}`} variant="outline">
+                      {entry.deletionCandidate ? t('runs.retention.candidate') : t('runs.retention.protected')}
+                    </Badge>
+                  </div>
+                ))}
+                {!retentionPlan.entries.length ? <p className="text-sm text-muted-foreground">{t('runs.retention.empty')}</p> : null}
+              </div>
+              {retentionError ? <p className="mt-3 text-sm text-destructive" role="alert">{retentionError}</p> : null}
+              {retentionAudit ? (
+                <p className="mt-3 inline-flex items-center gap-2 text-sm text-muted-foreground">
+                  <ShieldCheck className="h-4 w-4 text-primary" />
+                  {t('runs.retention.confirmed', { count: retentionAudit.deleted.length })}
+                </p>
+              ) : null}
+              {retentionPlan.candidateCount && onConfirmArtifactRetention ? (
+                <div className="mt-4 flex justify-end">
+                  <button
+                    aria-label={t('runs.retention.confirm', { count: retentionPlan.candidateCount })}
+                    className="inline-flex h-8 items-center gap-1.5 rounded-[4px] border border-destructive/35 px-2.5 text-xs font-medium text-destructive transition-colors hover:bg-destructive/10 disabled:pointer-events-none disabled:opacity-45"
+                    disabled={isConfirmingRetention || Boolean(retentionAudit)}
+                    onClick={confirmReviewedRetention}
+                    type="button"
+                  >
+                    <AlertTriangle className="h-3.5 w-3.5" />
+                    {isConfirmingRetention ? t('runs.retention.confirming') : t('runs.retention.confirm', { count: retentionPlan.candidateCount })}
+                  </button>
+                </div>
+              ) : null}
+            </Surface>
+          ) : null}
+          {selectedSuiteRun ? (
+            <SuiteRunRecordDetail onCancelRun={onCancelRun} onSelectRun={onSelectRun} record={selectedSuiteRun} />
+          ) : selectedRun ? (
             <div className="mt-5 grid gap-5">
               <div className="grid gap-3 md:grid-cols-3">
                   <InsightCard
@@ -1349,7 +1504,7 @@ export function RunRecordsPage({
                   </Surface>
                 </section>
               ) : null}
-              <div className="grid gap-3">
+              <section aria-label={t('runs.debugLog')} className="run-step-diagnostics grid gap-3">
                 {selectedRun.steps.map((step) => {
                   const manualEvidence = selectedRun.manualEvidence?.find((evidence) => evidence.stepId === step.stepId);
                   const isManualStep = manualStepIds.has(step.stepId);
@@ -1562,8 +1717,8 @@ export function RunRecordsPage({
                   </article>
                   );
                 })}
-              </div>
-              <div className="designer-terminal p-4">
+              </section>
+              <section aria-label={t('runs.debugLog')} className="designer-terminal p-4">
                 <p className="text-sm font-medium text-white">{t('runs.debugLog')}</p>
                 <div className="mt-3 grid gap-2">
                   {selectedRun.logs.map((line) => (
@@ -1572,7 +1727,7 @@ export function RunRecordsPage({
                     </code>
                   ))}
                 </div>
-              </div>
+              </section>
             </div>
           ) : (
             <div className="mt-5">
@@ -1619,6 +1774,86 @@ export function RunRecordsPage({
       </section>
       </PageBody>
     </PageShell>
+  );
+}
+
+function SuiteRunRecordDetail({ onCancelRun, onSelectRun, record }: {
+  onCancelRun?: (runId: string) => Promise<void>;
+  onSelectRun: (runId: string) => void;
+  record: SuiteRunRecord;
+}) {
+  const { t } = useI18n();
+  const counts = Object.entries(record.summary).filter(([, count]) => count > 0);
+  return (
+    <div className="mt-5 grid gap-5">
+      <Surface className="p-4" variant="panel">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-xs font-medium text-primary">{t('runs.suite.parent')}</p>
+            <h2 className="mt-1 truncate text-base font-semibold">{t('runs.suite.title', { reference: `${record.provenance.suite.reference.id}@${record.provenance.suite.reference.version}` })}</h2>
+          </div>
+          <StatusPill tone={record.status} />
+        </div>
+        <dl className="mt-4 grid gap-x-5 gap-y-2 text-xs leading-5 md:grid-cols-2">
+          <ProvenanceRow label={t('runs.provenance.suite')}>{record.provenance.suite.reference.id}@{record.provenance.suite.reference.version}</ProvenanceRow>
+          <ProvenanceRow label={t('runs.provenance.environment')}>{record.provenance.environment.name} ({record.provenance.environment.id})</ProvenanceRow>
+          <ProvenanceRow label={t('runs.suite.startedAt')}>{record.startedAt}</ProvenanceRow>
+          {record.finishedAt ? <ProvenanceRow label={t('runs.suite.finishedAt')}>{record.finishedAt}</ProvenanceRow> : null}
+        </dl>
+        {record.reasonCode ? <p className="mt-3 text-xs leading-5 text-muted-foreground">{t('runs.reason.label')}: {t(`runs.reason.${record.reasonCode}`)}</p> : null}
+        <div className="mt-3 flex flex-wrap gap-1.5">
+          {counts.map(([status, count]) => <Badge key={status} variant="outline">{t('runs.suite.count', { status: t(`common.status.${status}`), count })}</Badge>)}
+        </div>
+        {record.status === 'running' && onCancelRun ? (
+          <button
+            aria-label={t('runs.cancelRun')}
+            className="mt-4 inline-flex h-8 items-center gap-1.5 rounded-[4px] border border-destructive/35 px-2.5 text-xs font-medium text-destructive transition-colors hover:bg-destructive/10"
+            onClick={() => { void onCancelRun(record.id); }}
+            type="button"
+          >
+            <X className="h-3.5 w-3.5" />
+            {t('runs.cancelRun')}
+          </button>
+        ) : null}
+      </Surface>
+      <section aria-label={t('runs.suite.members')} className="grid gap-3">
+        <div className="flex items-center justify-between gap-3">
+          <h3 className="text-sm font-semibold">{t('runs.suite.members')}</h3>
+          <Badge variant="outline">{record.members?.length ?? 0}</Badge>
+        </div>
+        {(record.members ?? []).map((member) => {
+          const reference = `${member.provenance.testCase.id}@${member.provenance.testCase.version}`;
+          return (
+            <Surface className="p-4" key={reference} variant="subtle">
+              <div className="flex items-center justify-between gap-3">
+                <p className="min-w-0 truncate text-sm font-medium">{reference}</p>
+                <StatusPill tone={member.status} />
+              </div>
+              <p className="mt-2 text-sm leading-6 text-muted-foreground">{member.summary}</p>
+              <div className="mt-3 flex flex-wrap gap-1.5">
+                <Badge variant="outline">{t('suite.results.attempt', { count: member.attempts })}</Badge>
+                {member.flaky ? <Badge variant="outline">Flaky</Badge> : null}
+              </div>
+              <dl className="mt-3 grid gap-2 border-t border-border/70 pt-3 text-xs leading-5">
+                <ProvenanceReferences label={t('runs.provenance.flow')} references={member.provenance.reusableFlows} />
+                <ProvenanceReferences label={t('runs.provenance.fixture')} references={member.provenance.fixtures} />
+              </dl>
+              {member.runId ? (
+                <button
+                  aria-label={t('runs.suite.openMember', { name: reference })}
+                  className="mt-3 inline-flex h-8 items-center gap-1.5 rounded-[4px] border border-border px-2.5 text-xs font-medium text-foreground transition-colors hover:bg-accent"
+                  onClick={() => onSelectRun(member.runId!)}
+                  type="button"
+                >
+                  <ExternalLink className="h-3.5 w-3.5" />
+                  {t('runs.suite.openMember', { name: reference })}
+                </button>
+              ) : null}
+            </Surface>
+          );
+        })}
+      </section>
+    </div>
   );
 }
 

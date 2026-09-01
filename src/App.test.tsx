@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   createEmptyProject,
   createEmptyRecordingAsset,
+  createEmptyReusableFlowAsset,
   createEmptySuiteAsset,
   createEmptyTestCase,
   createInitialStudioState,
@@ -12,6 +13,7 @@ import {
   type RunDetail,
   type StudioState,
 } from '../shared/studio.js';
+import { createMaintenanceDraft, transitionMaintenanceDraft } from '../shared/maintenance.js';
 import { App } from './App.js';
 
 describe('App shell', () => {
@@ -73,7 +75,12 @@ describe('App shell', () => {
     expect(screen.getByRole('button', { name: '项目设置' })).toBeInTheDocument();
     expect(container.querySelector('.app-project-context')).toBeNull();
     expect(screen.queryByText('Connect Device')).not.toBeInTheDocument();
-    expect(container.querySelector('.app-runtimebar')).toBeInTheDocument();
+    const runtimebar = container.querySelector<HTMLElement>('.app-runtimebar');
+    expect(runtimebar).toBeInTheDocument();
+    expect(within(runtimebar!).getByText('选择项目环境后启动受控浏览器会话。')).toBeInTheDocument();
+    expect(within(runtimebar!).getByText('尚未执行')).toBeInTheDocument();
+    expect(screen.queryByText('系统在线')).not.toBeInTheDocument();
+    expect(screen.queryByText('工作区：默认')).not.toBeInTheDocument();
   });
 
   it('keeps an edited Case draft bound to its immutable source when workflow selection changes', async () => {
@@ -103,7 +110,7 @@ describe('App shell', () => {
     state.midsceneConfig = {
       ...state.midsceneConfig,
       modelBaseUrl: 'https://models.example.test/v1',
-      modelApiKey: 'test-key',
+      modelSecret: { ...state.midsceneConfig.modelSecret, hasKey: true },
       modelName: 'ui-agent',
       modelFamily: 'openai',
     };
@@ -132,6 +139,76 @@ describe('App shell', () => {
     });
   });
 
+  it('publishes the next Case version with its exact Flow bindings', async () => {
+    const project = createEmptyProject(1);
+    const environment = project.environments[0]!;
+    const loginV1 = {
+      ...createEmptyReusableFlowAsset(1),
+      id: 'flow-login',
+      version: 1,
+      name: 'Login Flow',
+      steps: [{
+        id: 'flow-login-step',
+        type: 'ai' as const,
+        title: 'Open login',
+        body: 'Open the login page.',
+        execution: {
+          schemaVersion: 2 as const,
+          intent: 'Open the login page.',
+          reviewStatus: 'confirmed' as const,
+          actionRisk: 'low' as const,
+          action: { kind: 'navigate' as const, url: project.defaultUrl },
+        },
+      }],
+    };
+    const searchV1 = { ...loginV1, id: 'flow-search', name: 'Search Flow' };
+    const checkoutV3 = { ...loginV1, id: 'flow-checkout', version: 3, name: 'Checkout Flow' };
+    const testCase = {
+      ...createEmptyTestCase(1, project.groups[0]!.id, environment.id),
+      id: 'case-flow-bindings',
+      version: 1,
+      name: 'Flow bindings Case',
+      assetReferences: { fixtures: [], reusableFlows: [{ id: loginV1.id, version: loginV1.version }, { id: searchV1.id, version: searchV1.version }] },
+    };
+    const state = createInitialStudioState();
+    state.projects = [{ ...project, reusableFlows: [loginV1, searchV1, checkoutV3], testCases: [testCase] }];
+    state.selectedProjectId = project.id;
+    state.selectedGroupId = project.groups[0]!.id;
+    state.selectedTestCaseReference = { id: testCase.id, version: testCase.version };
+    state.selectedTestCaseId = testCase.id;
+    state.selectedRecordingId = '';
+    state.startupGuide.completed = true;
+    state.appearance.localeMode = 'en-US';
+    window.localStorage.setItem('midscene-studio-state-v2', JSON.stringify(state));
+
+    render(<App />);
+
+    const navigation = await screen.findByRole('navigation', { name: 'Main Navigation' });
+    fireEvent.click(within(navigation).getByRole('button', { name: 'Cases' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit as New Version' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Case Settings' }));
+    fireEvent.click(screen.getByRole('combobox', { name: 'Reusable Flows' }));
+    fireEvent.click(await screen.findByRole('option', { name: 'Checkout Flow v3' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Move Checkout Flow up' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Login Flow v1' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Publish Version' }));
+
+    await waitFor(() => {
+      const persisted = JSON.parse(window.localStorage.getItem('midscene-studio-state-v2') ?? '{}');
+      expect(persisted.projects[0].testCases).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          id: testCase.id,
+          version: 2,
+          assetReferences: {
+            fixtures: [],
+            reusableFlows: [{ id: checkoutV3.id, version: checkoutV3.version }, { id: searchV1.id, version: searchV1.version }],
+          },
+        }),
+      ]));
+    });
+  });
+
   it('clears an open Case draft before creating and selecting a new workflow', async () => {
     const project = createEmptyProject(1);
     const environment = project.environments[0]!;
@@ -145,7 +222,7 @@ describe('App shell', () => {
     state.selectedRecordingId = '';
     state.startupGuide.completed = true;
     state.appearance.localeMode = 'en-US';
-    state.midsceneConfig = { ...state.midsceneConfig, modelBaseUrl: 'https://models.example.test/v1', modelApiKey: 'test-key', modelName: 'ui-agent', modelFamily: 'openai' };
+    state.midsceneConfig = { ...state.midsceneConfig, modelBaseUrl: 'https://models.example.test/v1', modelSecret: { ...state.midsceneConfig.modelSecret, hasKey: true }, modelName: 'ui-agent', modelFamily: 'openai' };
     window.localStorage.setItem('midscene-studio-state-v2', JSON.stringify(state));
 
     render(<App />);
@@ -188,7 +265,7 @@ describe('App shell', () => {
     state.selectedRecordingId = '';
     state.startupGuide.completed = true;
     state.appearance.localeMode = 'en-US';
-    state.midsceneConfig = { ...state.midsceneConfig, modelBaseUrl: 'https://models.example.test/v1', modelApiKey: 'test-key', modelName: 'ui-agent', modelFamily: 'openai' };
+    state.midsceneConfig = { ...state.midsceneConfig, modelBaseUrl: 'https://models.example.test/v1', modelSecret: { ...state.midsceneConfig.modelSecret, hasKey: true }, modelName: 'ui-agent', modelFamily: 'openai' };
     window.localStorage.setItem('midscene-studio-state-v2', JSON.stringify(state));
 
     render(<App />);
@@ -292,7 +369,7 @@ describe('App shell', () => {
     state.selectedRecordingId = recording.id;
     state.startupGuide.completed = true;
     state.appearance.localeMode = 'en-US';
-    state.midsceneConfig = { ...state.midsceneConfig, modelBaseUrl: 'https://models.example.test/v1', modelApiKey: 'test-key', modelName: 'ui-agent', modelFamily: 'openai' };
+    state.midsceneConfig = { ...state.midsceneConfig, modelBaseUrl: 'https://models.example.test/v1', modelSecret: { ...state.midsceneConfig.modelSecret, hasKey: true }, modelName: 'ui-agent', modelFamily: 'openai' };
     window.localStorage.setItem('midscene-studio-state-v2', JSON.stringify(state));
 
     render(<App />);
@@ -330,6 +407,255 @@ describe('App shell', () => {
     expect(screen.getByLabelText('空态首页')).toBeInTheDocument();
   });
 
+  it('persists only a Midscene secret reference after saving a key from settings', async () => {
+    const originalDesktopApi = window.desktopApi;
+    const initialState = createInitialStudioState();
+    initialState.startupGuide.completed = true;
+    const savedSecret = {
+      id: 'midscene',
+      hasKey: true,
+      updatedAt: '2026-08-17T00:00:00.000Z',
+    };
+    const desktopApi = {
+      getRuntimeInfo: vi.fn().mockResolvedValue({ platform: 'desktop', persistence: 'file' }),
+      loadStudioState: vi.fn().mockResolvedValue(initialState),
+      onRecordingEvent: vi.fn().mockReturnValue(() => undefined),
+      onRunEvent: vi.fn().mockReturnValue(() => undefined),
+      saveModelSecret: vi.fn().mockResolvedValue(savedSecret),
+      saveStudioState: vi.fn().mockResolvedValue(undefined),
+    } as unknown as DesktopApi;
+    window.desktopApi = desktopApi;
+
+    try {
+      render(<App />);
+      const navigation = await screen.findByRole('navigation', { name: '主导航' });
+      fireEvent.click(within(navigation).getByRole('button', { name: '设置' }));
+      fireEvent.click((await screen.findAllByRole('button', { name: 'MidScene' }))[0]!);
+      fireEvent.change(screen.getByLabelText('MIDSCENE_MODEL_API_KEY'), { target: { value: 'sk-app-write-only' } });
+      fireEvent.click(screen.getByRole('button', { name: '保存密钥' }));
+
+      await waitFor(() => {
+        expect(desktopApi.saveModelSecret).toHaveBeenCalledWith({ scope: 'midscene', value: 'sk-app-write-only' });
+      });
+      await waitFor(() => {
+        const persistedStates = vi.mocked(desktopApi.saveStudioState).mock.calls.map(([state]) => JSON.stringify(state));
+        expect(persistedStates.some((state) => state.includes('sk-app-write-only'))).toBe(false);
+        expect(persistedStates.some((state) => state.includes('"hasKey":true'))).toBe(true);
+      });
+    } finally {
+      window.desktopApi = originalDesktopApi;
+    }
+  });
+
+  it('reloads main-owned project, binding, and maintenance state after approving a draft', async () => {
+    const originalDesktopApi = window.desktopApi;
+    const project = createEmptyProject(1);
+    const source = {
+      ...createEmptyTestCase(1, project.groups[0]!.id, project.environments[0]!.id),
+      id: 'case-login',
+      version: 1,
+      name: 'Sign in',
+      steps: [{ id: 'step-login', type: 'manual' as const, title: 'Open form', body: 'Open the sign-in form.' }],
+    };
+    const draft = createMaintenanceDraft({
+      id: 'maintenance-login',
+      createdAt: '2026-08-25T00:00:00.000Z',
+      projectId: project.id,
+      projectRevision: 'a'.repeat(64),
+      target: { kind: 'case', id: source.id, version: source.version },
+      baseAssetHash: 'b'.repeat(64),
+      sourceCase: source,
+      proposedCase: { ...source, notes: 'Wait for the account menu.' },
+      evidence: [{ runId: 'run-login', artifactId: 'artifact-login', contentHash: 'c'.repeat(64) }],
+      impact: [],
+    });
+    const initialState = createInitialStudioState();
+    initialState.projects = [{ ...project, testCases: [source] }];
+    initialState.projectAssetBindings = [{
+      projectId: project.id,
+      projectDirectory: '/tmp/test-buddy-project',
+      revision: draft.projectRevision,
+      boundAt: '2026-08-25T00:00:00.000Z',
+    }];
+    initialState.selectedProjectId = project.id;
+    initialState.selectedGroupId = project.groups[0]!.id;
+    initialState.selectedTestCaseReference = { id: source.id, version: source.version };
+    initialState.selectedTestCaseId = source.id;
+    initialState.selectedRecordingId = '';
+    initialState.maintenanceDrafts = [draft];
+    initialState.startupGuide.completed = true;
+    const reloadedState = structuredClone(initialState);
+    reloadedState.projects = [{
+      ...project,
+      name: 'Reloaded sign-in project',
+      testCases: [source, { ...draft.candidate, version: 2 }],
+    }];
+    reloadedState.projectAssetBindings = [{
+      ...initialState.projectAssetBindings[0]!,
+      revision: 'd'.repeat(64),
+    }];
+    reloadedState.maintenanceDrafts = [transitionMaintenanceDraft(draft, 'accepted', '2026-08-25T00:01:00.000Z')];
+    const loadStudioState = vi.fn()
+      .mockResolvedValueOnce(initialState)
+      .mockResolvedValueOnce(reloadedState);
+    const saveStudioState = vi.fn().mockResolvedValue(undefined);
+    const desktopApi = {
+      getRuntimeInfo: vi.fn().mockResolvedValue({ platform: 'desktop', persistence: 'file' }),
+      loadStudioState,
+      saveStudioState,
+      acceptMaintenanceDraft: vi.fn().mockResolvedValue({
+        status: 'accepted',
+        draft: reloadedState.maintenanceDrafts[0],
+        published: { id: source.id, version: 2 },
+      }),
+      rejectMaintenanceDraft: vi.fn().mockResolvedValue(reloadedState.maintenanceDrafts[0]),
+      openMaintenanceEvidence: vi.fn().mockResolvedValue(undefined),
+      onRecordingEvent: vi.fn().mockReturnValue(() => undefined),
+      onRunEvent: vi.fn().mockReturnValue(() => undefined),
+    } as unknown as DesktopApi;
+    window.desktopApi = desktopApi;
+
+    try {
+      render(<App />);
+      const navigation = await screen.findByRole('navigation', { name: '主导航' });
+      fireEvent.click(within(navigation).getByRole('button', { name: '维护审核' }));
+      const approval = await screen.findByRole('button', { name: '批准草案' });
+      fireEvent.click(screen.getByRole('checkbox', { name: `确认 revision ${draft.projectRevision}` }));
+      fireEvent.click(approval);
+
+      await waitFor(() => {
+        expect(desktopApi.acceptMaintenanceDraft).toHaveBeenCalledWith({
+          draftId: draft.id,
+          expectedRevision: draft.projectRevision,
+        });
+      });
+      await waitFor(() => expect(loadStudioState).toHaveBeenCalledTimes(2));
+      await waitFor(() => {
+        expect(saveStudioState.mock.calls.some(([state]) => {
+          const candidate = state as StudioState;
+          return candidate.projects[0]?.name === 'Reloaded sign-in project' &&
+            candidate.projectAssetBindings[0]?.revision === 'd'.repeat(64) &&
+            candidate.maintenanceDrafts[0]?.status === 'accepted' &&
+            candidate.projects[0]?.testCases.some((testCase) => testCase.id === source.id && testCase.version === 2);
+        })).toBe(true);
+      });
+    } finally {
+      window.desktopApi = originalDesktopApi;
+    }
+  });
+
+  it('keeps the queue pending and shows an error when main-owned reload fails after approval', async () => {
+    const originalDesktopApi = window.desktopApi;
+    const project = createEmptyProject(1);
+    const source = {
+      ...createEmptyTestCase(1, project.groups[0]!.id, project.environments[0]!.id),
+      id: 'case-login',
+      version: 1,
+      name: 'Sign in',
+      steps: [{ id: 'step-login', type: 'manual' as const, title: 'Open form', body: 'Open the sign-in form.' }],
+    };
+    const draft = createMaintenanceDraft({
+      id: 'maintenance-login',
+      createdAt: '2026-08-25T00:00:00.000Z',
+      projectId: project.id,
+      projectRevision: 'a'.repeat(64),
+      target: { kind: 'case', id: source.id, version: source.version },
+      baseAssetHash: 'b'.repeat(64),
+      sourceCase: source,
+      proposedCase: { ...source, notes: 'Wait for the account menu.' },
+      evidence: [{ runId: 'run-login', artifactId: 'artifact-login', contentHash: 'c'.repeat(64) }],
+      impact: [],
+    });
+    const initialState = createInitialStudioState();
+    initialState.projects = [{ ...project, testCases: [source] }];
+    initialState.selectedProjectId = project.id;
+    initialState.selectedGroupId = project.groups[0]!.id;
+    initialState.selectedTestCaseReference = { id: source.id, version: source.version };
+    initialState.selectedTestCaseId = source.id;
+    initialState.selectedRecordingId = '';
+    initialState.maintenanceDrafts = [draft];
+    initialState.startupGuide.completed = true;
+    const loadStudioState = vi.fn()
+      .mockResolvedValueOnce(initialState)
+      .mockRejectedValueOnce(new Error('injected reload failure'));
+    const desktopApi = {
+      getRuntimeInfo: vi.fn().mockResolvedValue({ platform: 'desktop', persistence: 'file' }),
+      loadStudioState,
+      saveStudioState: vi.fn().mockResolvedValue(undefined),
+      acceptMaintenanceDraft: vi.fn().mockResolvedValue({
+        status: 'accepted',
+        draft: { ...draft, status: 'accepted' },
+        published: { id: source.id, version: 2 },
+      }),
+      rejectMaintenanceDraft: vi.fn(),
+      openMaintenanceEvidence: vi.fn().mockResolvedValue(undefined),
+      onRecordingEvent: vi.fn().mockReturnValue(() => undefined),
+      onRunEvent: vi.fn().mockReturnValue(() => undefined),
+    } as unknown as DesktopApi;
+    window.desktopApi = desktopApi;
+
+    try {
+      render(<App />);
+      const navigation = await screen.findByRole('navigation', { name: '主导航' });
+      fireEvent.click(within(navigation).getByRole('button', { name: '维护审核' }));
+      fireEvent.click(await screen.findByRole('checkbox', { name: `确认 revision ${draft.projectRevision}` }));
+      const approval = screen.getByRole('button', { name: '批准草案' });
+      fireEvent.click(approval);
+
+      expect(approval).toBeDisabled();
+      await waitFor(() => expect(desktopApi.acceptMaintenanceDraft).toHaveBeenCalledOnce());
+      expect(await screen.findByRole('alert')).toHaveTextContent('无法完成维护审核操作。');
+      expect(screen.queryByText('已批准 revision')).not.toBeInTheDocument();
+    } finally {
+      window.desktopApi = originalDesktopApi;
+    }
+  });
+
+  it('keeps maintenance review controls unavailable in the browser fallback', async () => {
+    const originalDesktopApi = window.desktopApi;
+    const project = createEmptyProject(1);
+    const source = {
+      ...createEmptyTestCase(1, project.groups[0]!.id, project.environments[0]!.id),
+      id: 'case-login',
+      version: 1,
+    };
+    const draft = createMaintenanceDraft({
+      id: 'maintenance-login',
+      createdAt: '2026-08-25T00:00:00.000Z',
+      projectId: project.id,
+      projectRevision: 'a'.repeat(64),
+      target: { kind: 'case', id: source.id, version: source.version },
+      baseAssetHash: 'b'.repeat(64),
+      sourceCase: source,
+      proposedCase: { ...source, notes: 'Wait for the account menu.' },
+      evidence: [{ runId: 'run-login', artifactId: 'artifact-login', contentHash: 'c'.repeat(64) }],
+      impact: [],
+    });
+    const state = createInitialStudioState();
+    state.projects = [{ ...project, testCases: [source] }];
+    state.selectedProjectId = project.id;
+    state.selectedGroupId = project.groups[0]!.id;
+    state.selectedTestCaseReference = { id: source.id, version: source.version };
+    state.selectedTestCaseId = source.id;
+    state.selectedRecordingId = '';
+    state.maintenanceDrafts = [draft];
+    state.startupGuide.completed = true;
+    window.localStorage.setItem('midscene-studio-state-v2', JSON.stringify(state));
+    window.desktopApi = undefined;
+
+    try {
+      render(<App />);
+      const navigation = await screen.findByRole('navigation', { name: '主导航' });
+      fireEvent.click(within(navigation).getByRole('button', { name: '维护审核' }));
+
+      expect(await screen.findByRole('checkbox', { name: `确认 revision ${draft.projectRevision}` })).toBeDisabled();
+      expect(screen.getByRole('button', { name: '批准草案' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: '拒绝草案' })).toBeDisabled();
+    } finally {
+      window.desktopApi = originalDesktopApi;
+    }
+  });
+
   it('uses an in-app confirmation dialog when deleting a project', async () => {
     const nativeConfirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
 
@@ -362,7 +688,7 @@ describe('App shell', () => {
     state.midsceneConfig = {
       ...state.midsceneConfig,
       modelBaseUrl: 'https://models.example.test/v1',
-      modelApiKey: 'test-key',
+      modelSecret: { ...state.midsceneConfig.modelSecret, hasKey: true },
       modelName: 'ui-agent',
       modelFamily: 'openai',
     };
@@ -507,6 +833,190 @@ describe('App shell', () => {
       ]));
       expect(persisted.runDetails.some((detail: { id: string }) => /^suite-run-\d+$/u.test(detail.id))).toBe(false);
     });
+  });
+
+  it('retains the main-persisted Suite parent when the renderer saves completed Case state', async () => {
+    const originalDesktopApi = window.desktopApi;
+    const project = createEmptyProject(1);
+    const environment = project.environments[0]!;
+    const testCase = {
+      ...createEmptyTestCase(1, project.groups[0]!.id, environment.id),
+      id: 'case-main-persisted-parent',
+      name: 'Main persisted child',
+    };
+    const suite = {
+      ...createEmptySuiteAsset(project, 1),
+      id: 'suite-main-persisted-parent',
+      name: 'Main persisted Suite',
+      environmentId: environment.id,
+      caseReferences: [{ id: testCase.id, version: testCase.version ?? 1, dependsOn: [] }],
+    };
+    project.testCases = [testCase];
+    project.suites = [suite];
+    const state = createInitialStudioState();
+    state.projects = [project];
+    state.selectedProjectId = project.id;
+    state.selectedGroupId = project.groups[0]!.id;
+    state.selectedTestCaseId = testCase.id;
+    state.selectedRecordingId = '';
+    state.startupGuide.completed = true;
+    const suiteParent = {
+      id: 'suite-main-persisted-run',
+      provenance: {
+        schemaVersion: 1,
+        projectId: project.id,
+        projectRevision: 'a'.repeat(64),
+        source: 'legacyStudioStore',
+        reproducibility: 'legacy',
+        suite: { reference: { id: suite.id, version: suite.version }, parentRunId: 'suite-main-persisted-run' },
+        fixtures: [],
+        reusableFlows: [],
+        baselines: [],
+        environment: { id: environment.id, name: environment.name, baseUrl: environment.url },
+        browserProfile: { engine: 'chromium', headless: true },
+        executor: { appVersion: 'test', runnerVersion: 'test' },
+        model: { hasKey: false },
+        createdAt: '2026-08-23T00:00:00.000Z',
+      },
+      startedAt: '2026-08-23T00:00:00.000Z',
+      finishedAt: '2026-08-23T00:00:01.000Z',
+      status: 'passed',
+      memberRunIds: [],
+      members: [],
+      summary: { passed: 0, failed: 0, blocked: 0, skipped: 0, cancelled: 0, error: 0 },
+    };
+    const saveStudioState = vi.fn().mockResolvedValue(undefined);
+    const desktopApi = {
+      getRuntimeInfo: vi.fn().mockResolvedValue({ platform: 'desktop', persistence: 'file' }),
+      loadStudioState: vi.fn().mockResolvedValue(state),
+      onRecordingEvent: vi.fn().mockReturnValue(() => undefined),
+      onRunEvent: vi.fn().mockReturnValue(() => undefined),
+      runSuite: vi.fn().mockResolvedValue({
+        runId: suiteParent.id,
+        title: suite.name,
+        detail: {
+          suite: {
+            suiteId: suite.id,
+            suiteVersion: suite.version,
+            environmentId: environment.id,
+            status: 'passed',
+            startedAt: suiteParent.startedAt,
+            endedAt: suiteParent.finishedAt,
+            effectiveConcurrency: 1,
+            results: [],
+            issues: [],
+          },
+          caseDetails: [],
+        },
+        suiteRunRecord: suiteParent,
+      }),
+      saveStudioState,
+    } as unknown as DesktopApi;
+    window.desktopApi = desktopApi;
+
+    try {
+      render(<App />);
+
+      const navigation = await screen.findByRole('navigation', { name: '主导航' });
+      fireEvent.click(within(navigation).getByRole('button', { name: '套件' }));
+      fireEvent.click(await screen.findByRole('button', { name: '运行 Suite' }));
+
+      await waitFor(() => {
+        const savedStates = vi.mocked(saveStudioState).mock.calls.map(([candidate]) => candidate as StudioState);
+        expect(savedStates).toEqual(expect.arrayContaining([
+          expect.objectContaining({
+            suiteRunRecords: [expect.objectContaining({ id: suiteParent.id, status: 'passed' })],
+          }),
+        ]));
+      });
+    } finally {
+      window.desktopApi = originalDesktopApi;
+    }
+  });
+
+  it('hydrates a rejected Suite parent into the run records immediately', async () => {
+    const originalDesktopApi = window.desktopApi;
+    const dateNow = vi.spyOn(Date, 'now').mockReturnValue(1_234);
+    const project = createEmptyProject(1);
+    const environment = project.environments[0]!;
+    const testCase = {
+      ...createEmptyTestCase(1, project.groups[0]!.id, environment.id),
+      id: 'case-rejected-parent',
+      name: 'Rejected parent child',
+    };
+    const suite = {
+      ...createEmptySuiteAsset(project, 1),
+      id: 'suite-rejected-parent',
+      environmentId: environment.id,
+      caseReferences: [{ id: testCase.id, version: testCase.version ?? 1, dependsOn: [] }],
+    };
+    project.testCases = [testCase];
+    project.suites = [suite];
+    const state = createInitialStudioState();
+    state.projects = [project];
+    state.selectedProjectId = project.id;
+    state.selectedGroupId = project.groups[0]!.id;
+    state.selectedTestCaseId = testCase.id;
+    state.selectedRecordingId = '';
+    state.startupGuide.completed = true;
+    const suiteParent = {
+      id: 'suite-run-1234',
+      provenance: {
+        schemaVersion: 1,
+        projectId: project.id,
+        projectRevision: 'a'.repeat(64),
+        source: 'legacyStudioStore',
+        reproducibility: 'legacy',
+        suite: { reference: { id: suite.id, version: suite.version }, parentRunId: 'suite-run-1234' },
+        fixtures: [], reusableFlows: [], baselines: [],
+        environment: { id: environment.id, name: environment.name, baseUrl: environment.url },
+        browserProfile: { engine: 'chromium', headless: true },
+        executor: { appVersion: 'test', runnerVersion: 'test' },
+        model: { hasKey: false },
+        createdAt: '2026-08-23T00:00:00.000Z',
+      },
+      startedAt: '2026-08-23T00:00:00.000Z',
+      finishedAt: '2026-08-23T00:00:01.000Z',
+      status: 'error',
+      reasonCode: 'executorError',
+      memberRunIds: [],
+      members: [],
+      summary: { passed: 0, failed: 0, blocked: 0, skipped: 0, cancelled: 0, error: 0 },
+    };
+    const saveStudioState = vi.fn().mockResolvedValue(undefined);
+    const desktopApi = {
+      getRuntimeInfo: vi.fn().mockResolvedValue({ platform: 'desktop', persistence: 'file' }),
+      loadStudioState: vi.fn().mockResolvedValue(state),
+      onRecordingEvent: vi.fn().mockReturnValue(() => undefined),
+      onRunEvent: vi.fn().mockReturnValue(() => undefined),
+      runSuite: vi.fn().mockRejectedValue(new Error('fixture trust lookup failed')),
+      loadSuiteRunRecord: vi.fn().mockResolvedValue(suiteParent),
+      saveStudioState,
+    } as unknown as DesktopApi;
+    window.desktopApi = desktopApi;
+
+    try {
+      render(<App />);
+
+      const navigation = await screen.findByRole('navigation', { name: '主导航' });
+      fireEvent.click(within(navigation).getByRole('button', { name: '套件' }));
+      fireEvent.click(await screen.findByRole('button', { name: '运行 Suite' }));
+
+      await waitFor(() => expect(desktopApi.loadSuiteRunRecord).toHaveBeenCalledWith(suiteParent.id));
+      expect(await screen.findByRole('heading', { level: 1, name: '运行记录' })).toBeInTheDocument();
+      expect((await screen.findAllByText(`Suite ${suite.id}@${suite.version}`)).length).toBeGreaterThan(0);
+      await waitFor(() => {
+        const savedStates = vi.mocked(saveStudioState).mock.calls.map(([candidate]) => candidate as StudioState);
+        expect(savedStates).toEqual(expect.arrayContaining([
+          expect.objectContaining({
+            suiteRunRecords: [expect.objectContaining({ id: suiteParent.id, status: 'error' })],
+          }),
+        ]));
+      });
+    } finally {
+      window.desktopApi = originalDesktopApi;
+      dateNow.mockRestore();
+    }
   });
 
   it('keeps historical exact-rerun status events bound to frozen provenance', async () => {

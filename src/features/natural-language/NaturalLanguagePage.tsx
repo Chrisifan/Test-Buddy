@@ -281,7 +281,7 @@ export function NaturalLanguagePage({
             <Surface className="p-4" variant="panel">
               <p className="text-[10px] font-black uppercase tracking-[0.14em] opacity-80">{t('nl.confidence')}</p>
               <p className="mt-2 text-xl font-bold tracking-[-0.03em] text-foreground">
-                {midsceneConfig.modelApiKey ? t('settings.status.ready') : t('nl.model.pending')}
+                {midsceneConfig.modelSecret.hasKey ? t('settings.status.ready') : t('nl.model.pending')}
               </p>
               <p className="mt-3 truncate font-mono text-xs text-muted-foreground">MidScene {midsceneConfig.modelName || t('nl.model.unset')}</p>
             </Surface>

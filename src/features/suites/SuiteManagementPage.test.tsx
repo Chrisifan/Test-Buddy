@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
-import { createEmptyProject, createEmptySuiteAsset, createEmptyTestCase, type ProjectDraft, type SuiteAsset } from '../../../shared/studio.js';
+import { createEmptyProject, createEmptySuiteAsset, createEmptyTestCase, type ProjectDraft, type SuiteAsset, type SuiteRunRecord } from '../../../shared/studio.js';
 import { I18nProvider } from '../../i18n/index.js';
 import { SuiteManagementPage } from './SuiteManagementPage.js';
 
@@ -37,6 +37,7 @@ function renderPage({
   onCancelSuite = vi.fn(),
   isRunning = false,
   activeRunId,
+  suiteRunRecords = [],
 }: {
   project?: ProjectDraft;
   selectedSuiteReference?: { id: string; version: number };
@@ -46,6 +47,7 @@ function renderPage({
   onCancelSuite?: (runId: string) => void;
   isRunning?: boolean;
   activeRunId?: string;
+  suiteRunRecords?: SuiteRunRecord[];
 } = {}) {
   return {
     onOpenRun,
@@ -63,6 +65,7 @@ function renderPage({
           onSelectSuite={vi.fn()}
           project={project}
           selectedSuiteReference={selectedSuiteReference ?? (project.suites[0] ? { id: project.suites[0].id, version: project.suites[0].version } : undefined)}
+          suiteRunRecords={suiteRunRecords}
         />
       </I18nProvider>,
     ),
@@ -268,6 +271,7 @@ describe('SuiteManagementPage', () => {
     expect(screen.getByText('第 2 次尝试')).toBeInTheDocument();
     expect(screen.getByText('Flaky')).toBeInTheDocument();
     expect(screen.getByText('商品目录检查已通过。')).toBeInTheDocument();
+    expect(screen.getByText('最近一次实际并发：1')).toBeInTheDocument();
     expect(screen.getAllByText('通过').length).toBeGreaterThan(0);
     fireEvent.click(screen.getByRole('button', { name: '查看 商品目录检查 运行' }));
     expect(onOpenRun).toHaveBeenCalledWith('run-catalog');
@@ -288,6 +292,68 @@ describe('SuiteManagementPage', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '取消 Suite' }));
     expect(onCancelSuite).toHaveBeenCalledWith('suite-run-123');
+  });
+
+  it('shows a durable Suite parent record and opens only its persisted member runs', () => {
+    const project = createProject();
+    const suite = {
+      ...createEmptySuiteAsset(project, 1),
+      id: 'suite-release',
+      version: 2,
+      name: '发布回归',
+      caseReferences: [{ id: 'case-catalog', version: 3, dependsOn: [] }],
+    };
+    project.suites = [suite];
+    const onOpenRun = vi.fn();
+    renderPage({
+      project,
+      selectedSuiteReference: { id: suite.id, version: suite.version },
+      onOpenRun,
+      suiteRunRecords: [{
+        id: 'suite-parent-1',
+        status: 'cancelled',
+        startedAt: '2026-08-18T00:00:00.000Z',
+        finishedAt: '2026-08-18T00:00:03.000Z',
+        reasonCode: 'userCancelled',
+        memberRunIds: ['case-run-1'],
+        summary: { passed: 0, failed: 0, blocked: 0, skipped: 0, cancelled: 1, error: 0 },
+        provenance: {
+          schemaVersion: 1,
+          projectId: project.id,
+          projectRevision: 'a'.repeat(64),
+          source: 'projectDirectory',
+          reproducibility: 'versioned',
+          suite: { reference: { id: suite.id, version: suite.version }, parentRunId: 'suite-parent-1' },
+          fixtures: [], reusableFlows: [], baselines: [],
+          environment: { id: suite.environmentId, name: 'Staging', baseUrl: 'https://example.test' },
+          browserProfile: { engine: 'chromium', headless: true },
+          executor: { appVersion: 'test', runnerVersion: 'test' },
+          model: { hasKey: false },
+          createdAt: '2026-08-18T00:00:00.000Z',
+        },
+        members: [{
+          testCaseId: 'case-catalog', testCaseVersion: 3, status: 'cancelled',
+          summary: 'Suite 取消前未启动此用例。', reason: { code: 'userCancelled', message: 'Suite 取消前未启动此用例。' },
+          attempts: 0, flaky: false, runId: 'case-run-1',
+          provenance: {
+            schemaVersion: 1, projectId: project.id, projectRevision: 'a'.repeat(64), source: 'projectDirectory', reproducibility: 'versioned',
+            testCase: { id: 'case-catalog', version: 3 }, suite: { reference: { id: suite.id, version: suite.version }, parentRunId: 'suite-parent-1' },
+            fixtures: [], reusableFlows: [{ id: 'flow-catalog', version: 1 }], baselines: [],
+            environment: { id: suite.environmentId, name: 'Staging', baseUrl: 'https://example.test' }, browserProfile: { engine: 'chromium', headless: true },
+            executor: { appVersion: 'test', runnerVersion: 'test' }, model: { hasKey: false }, createdAt: '2026-08-18T00:00:00.000Z',
+          },
+        }],
+      }],
+    });
+
+    expect(screen.getByText('持久化运行记录')).toBeInTheDocument();
+    expect(screen.getByText('2026-08-18T00:00:00.000Z')).toBeInTheDocument();
+    expect(screen.getByText('已取消 1')).toBeInTheDocument();
+    expect(screen.getByText('Suite 取消前未启动此用例。')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '打开 Suite 运行' }));
+    expect(onOpenRun).toHaveBeenCalledWith('suite-parent-1');
+    fireEvent.click(screen.getByRole('button', { name: '查看 商品目录检查 运行' }));
+    expect(onOpenRun).toHaveBeenCalledWith('case-run-1');
   });
 
   it('selects and runs an older published Suite version by its exact reference', () => {

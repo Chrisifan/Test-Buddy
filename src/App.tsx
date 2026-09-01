@@ -8,9 +8,11 @@ import {
   MessageSquareText,
   MousePointerClick,
   PlaySquare,
+  Route,
   Search,
   Settings2,
   Trash2,
+  Wrench,
   Workflow,
 } from 'lucide-react';
 
@@ -31,6 +33,7 @@ import {
   copyTestStep,
   appendLatestTestCaseTransforms,
   createNextTestCaseVersion,
+  planReusableFlowCaseUpgrade,
   createTestStep,
   createTestCaseFromRecording,
   createTestCaseFromGeneratedPath,
@@ -58,6 +61,11 @@ import {
   type CommandMode,
   type CredentialRef,
   type MidsceneConfig,
+  type MaintenanceDraftAcceptanceRequest,
+  type MaintenanceDraftRejectionRequest,
+  type MaintenanceEvidenceOpenRequest,
+  type ModelSecretRef,
+  type ModelSecretScope,
   type AppearanceConfig,
   type PrdDocumentKind,
   type PrdCoverageTarget,
@@ -68,6 +76,7 @@ import {
   type ProjectDraft,
   type RuntimeInfo,
   type RuntimeProfile,
+  type ReusableFlowAsset,
   type RunArtifact,
   type RunDetail,
   type RunReason,
@@ -99,21 +108,30 @@ import { getRuntimeInfo, loadStudioState, saveStudioState } from './lib/persiste
 import { formatRunDuration } from './lib/duration.js';
 import {
   attachManualEvidence,
+  acceptMaintenanceDraft,
+  canReviewMaintenanceDrafts,
   analyzePrdDocument,
   captureBrowserSnapshot,
+  clearModelSecret,
   cancelRun,
+  confirmArtifactRetention,
+  rejectMaintenanceDraft,
   endSession,
   exportProjectReport,
   navigateBrowserSession,
   onRunEvent,
   onRecordingEvent,
+  openMaintenanceEvidence,
+  planArtifactRetention,
   planHistoricalRerun,
+  loadSuiteRunRecord,
   runRecording,
   runHistoricalRerun,
   runSuite,
   runTestCase,
   runWorkflow,
   saveCredential,
+  saveModelSecret,
   sendChatCommand,
   startBrowserSession,
   startSession,
@@ -136,8 +154,14 @@ const TestCaseManagementPage = lazy(() =>
 const SuiteManagementPage = lazy(() =>
   import('./features/suites/SuiteManagementPage.js').then(({ SuiteManagementPage: Page }) => ({ default: Page })),
 );
+const ReusableFlowsPage = lazy(() =>
+  import('./features/flows/ReusableFlowsPage.js').then(({ ReusableFlowsPage: Page }) => ({ default: Page })),
+);
 const RunRecordsPage = lazy(() =>
   import('./features/runs/RunRecordsPage.js').then(({ RunRecordsPage: Page }) => ({ default: Page })),
+);
+const MaintenanceQueuePage = lazy(() =>
+  import('./features/maintenance/MaintenanceQueuePage.js').then(({ MaintenanceQueuePage: Page }) => ({ default: Page })),
 );
 const NaturalLanguagePage = lazy(() =>
   import('./features/natural-language/NaturalLanguagePage.js').then(({ NaturalLanguagePage: Page }) => ({ default: Page })),
@@ -266,11 +290,13 @@ export function App() {
   const [selectedSuiteReference, setSelectedSuiteReference] = useState<VersionedTestAssetReference | undefined>(
     () => latestSuiteReference(initialState.projects[0]),
   );
+  const [selectedReusableFlowReference, setSelectedReusableFlowReference] = useState<VersionedTestAssetReference>();
   const [selectedDocumentId, setSelectedDocumentId] = useState(
     initialState.projects[0]?.documents[0]?.id ?? '',
   );
   const [runDetails, setRunDetails] = useState<RunDetail[]>(initialState.runDetails);
   const [suiteRunRecords, setSuiteRunRecords] = useState(initialState.suiteRunRecords);
+  const [maintenanceDrafts, setMaintenanceDrafts] = useState(initialState.maintenanceDrafts);
   const [selectedRunId, setSelectedRunId] = useState(initialState.recentRuns[0]?.id ?? '');
   const [recentRuns, setRecentRuns] = useState<RunSummary[]>(initialState.recentRuns);
   const [chatEntries, setChatEntries] = useState<ChatEntry[]>(initialState.chatEntries);
@@ -373,6 +399,7 @@ export function App() {
   const brandLogo = effectiveTheme === 'dark' ? testbuddyHammerBotDark : testbuddyHammerBot;
   const effectiveLocale = resolveLocale(appearance.localeMode, systemLanguage);
   const t = createTranslator(effectiveLocale);
+  const maintenanceReviewAvailable = canReviewMaintenanceDrafts();
 
   function persistLatestStudioState(mode: SaveMode) {
     if (storageLoadError || !latestStudioStateRef.current) {
@@ -412,6 +439,42 @@ export function App() {
     }
   }
 
+  function applyStudioState(state: StudioState) {
+    setProjects(state.projects);
+    setProjectAssetBindings(state.projectAssetBindings);
+    setSelectedProjectId(state.selectedProjectId);
+    setSelectedGroupId(state.selectedGroupId);
+    setSelectedTestCaseReference(
+      state.selectedTestCaseReference ?? latestTestCaseReference(
+        state.projects.find((project) => project.id === state.selectedProjectId),
+        state.selectedTestCaseId,
+      ),
+    );
+    setCaseDraft(undefined);
+    setCaseDraftSourceReference(undefined);
+    setSelectedRecordingId(state.selectedRecordingId);
+    const hydratedProject = state.projects.find((project) => project.id === state.selectedProjectId);
+    setSelectedSuiteReference(latestSuiteReference(hydratedProject));
+    setSelectedDocumentId(hydratedProject?.documents[0]?.id ?? '');
+    setRunDetails(state.runDetails);
+    setSuiteRunRecords(state.suiteRunRecords);
+    setMaintenanceDrafts(state.maintenanceDrafts);
+    setRecentRuns(state.recentRuns);
+    setSelectedRunId(state.recentRuns[0]?.id ?? '');
+    setChatEntries(state.chatEntries);
+    setRuntimeProfile(state.runtimeProfile);
+    setMidsceneConfig(state.midsceneConfig);
+    setAgentModelConfig(state.agentModelConfig);
+    setAppearance(state.appearance);
+    setStartupGuide(state.startupGuide);
+    setBrowserSession(state.browserSession);
+    setNavigateUrl(hydratedProject?.defaultUrl ?? state.runtimeProfile.baseUrl);
+  }
+
+  async function reloadMainOwnedStudioState() {
+    applyStudioState(await loadStudioState());
+  }
+
   useEffect(() => {
     const previousLocale = previousLocaleRef.current;
     if (previousLocale === effectiveLocale) {
@@ -428,34 +491,7 @@ export function App() {
       try {
         const [state, runtime] = await Promise.all([loadStudioState(), getRuntimeInfo()]);
         setRuntimeInfo(runtime);
-        setProjects(state.projects);
-        setProjectAssetBindings(state.projectAssetBindings);
-        setSelectedProjectId(state.selectedProjectId);
-        setSelectedGroupId(state.selectedGroupId);
-        setSelectedTestCaseReference(
-          state.selectedTestCaseReference ?? latestTestCaseReference(
-            state.projects.find((project) => project.id === state.selectedProjectId),
-            state.selectedTestCaseId,
-          ),
-        );
-        setCaseDraft(undefined);
-        setCaseDraftSourceReference(undefined);
-        setSelectedRecordingId(state.selectedRecordingId);
-        const hydratedProject = state.projects.find((project) => project.id === state.selectedProjectId);
-        setSelectedSuiteReference(latestSuiteReference(hydratedProject));
-        setSelectedDocumentId(hydratedProject?.documents[0]?.id ?? '');
-        setRunDetails(state.runDetails);
-        setSuiteRunRecords(state.suiteRunRecords);
-        setRecentRuns(state.recentRuns);
-        setSelectedRunId(state.recentRuns[0]?.id ?? '');
-        setChatEntries(state.chatEntries);
-        setRuntimeProfile(state.runtimeProfile);
-        setMidsceneConfig(state.midsceneConfig);
-        setAgentModelConfig(state.agentModelConfig);
-        setAppearance(state.appearance);
-        setStartupGuide(state.startupGuide);
-        setBrowserSession(state.browserSession);
-        setNavigateUrl(hydratedProject?.defaultUrl ?? state.runtimeProfile.baseUrl);
+        applyStudioState(state);
       } catch {
         setStorageLoadError(true);
       }
@@ -505,6 +541,7 @@ export function App() {
       projectAssetBindings,
       runDetails,
       suiteRunRecords,
+      maintenanceDrafts,
       recentRuns,
       chatEntries,
       runtimeProfile,
@@ -533,6 +570,7 @@ export function App() {
     recentRuns,
     runDetails,
     suiteRunRecords,
+    maintenanceDrafts,
     runtimeProfile,
     selectedGroupId,
     selectedProjectId,
@@ -737,6 +775,27 @@ export function App() {
     }));
   }
 
+  function updateModelSecretRef(scope: ModelSecretScope, modelSecret: ModelSecretRef) {
+    if (scope === 'midscene') {
+      updateMidsceneConfig({ modelSecret });
+      return;
+    }
+
+    updateAgentModelConfig(scope.slice('agent:'.length) as AgentModelRole, { modelSecret });
+  }
+
+  async function handleSaveModelSecret(scope: ModelSecretScope, value: string): Promise<void> {
+    const modelSecret = await saveModelSecret({ scope, value });
+    updateModelSecretRef(scope, modelSecret);
+    persistLatestStudioState('immediate');
+  }
+
+  async function handleClearModelSecret(scope: ModelSecretScope): Promise<void> {
+    const modelSecret = await clearModelSecret({ scope });
+    updateModelSecretRef(scope, modelSecret);
+    persistLatestStudioState('immediate');
+  }
+
   function updateAppearance(patch: Partial<AppearanceConfig>) {
     const nextAppearance = {
       ...(latestStudioStateRef.current?.appearance ?? appearance),
@@ -804,6 +863,25 @@ export function App() {
       setSelectedGroupId(preview.groupId);
     }
     setCaseDraft((current) => current ? updater(current) : current);
+  }
+
+  function handlePublishReusableFlow(flow: ReusableFlowAsset) {
+    updateSelectedProject((project) => ({
+      ...project,
+      reusableFlows: [...project.reusableFlows, flow],
+    }), 'immediate');
+    setSelectedReusableFlowReference({ id: flow.id, version: flow.version });
+  }
+
+  function handleUpgradeReusableFlowCases(source: VersionedTestAssetReference, target: VersionedTestAssetReference, selected: VersionedTestAssetReference[]) {
+    updateSelectedProject((project) => {
+      const plan = planReusableFlowCaseUpgrade(project, source, target, selected);
+      if (plan.issues.length || !plan.updatedCases.length) return project;
+      return {
+        ...project,
+        testCases: [...project.testCases, ...plan.updatedCases],
+      };
+    }, 'immediate');
   }
 
   function handleEditCaseVersion() {
@@ -1831,6 +1909,22 @@ export function App() {
     }
   }
 
+  async function handleAcceptMaintenanceDraft(request: MaintenanceDraftAcceptanceRequest) {
+    const result = await acceptMaintenanceDraft(request);
+    await reloadMainOwnedStudioState();
+    return result;
+  }
+
+  async function handleRejectMaintenanceDraft(request: MaintenanceDraftRejectionRequest) {
+    const result = await rejectMaintenanceDraft(request);
+    await reloadMainOwnedStudioState();
+    return result;
+  }
+
+  async function handleOpenMaintenanceEvidence(request: MaintenanceEvidenceOpenRequest) {
+    await openMaintenanceEvidence(request);
+  }
+
   function handleUpdateRecording(updater: (recording: RecordingAsset) => RecordingAsset) {
     if (!selectedProject || !selectedRecording) {
       return;
@@ -2205,6 +2299,12 @@ export function App() {
       setRunId(result.runId);
       setRunTitle(result.title);
       setRunStatus(result.detail.suite.status);
+      if (result.suiteRunRecord) {
+        setSuiteRunRecords((current) => [
+          result.suiteRunRecord!,
+          ...current.filter((record) => record.id !== result.suiteRunRecord!.id),
+        ]);
+      }
       setRunDetails((current) => [
         ...caseDetails,
         ...current.filter((run) => !caseDetails.some((detail) => detail.id === run.id)),
@@ -2233,6 +2333,15 @@ export function App() {
       }
     } catch (error) {
       setRunStatus('failed');
+      const persistedSuiteRun = await loadSuiteRunRecord(suiteRunId).catch(() => null);
+      if (persistedSuiteRun) {
+        setSuiteRunRecords((current) => [
+          persistedSuiteRun,
+          ...current.filter((record) => record.id !== persistedSuiteRun.id),
+        ]);
+        setSelectedRunId(persistedSuiteRun.id);
+        switchPage('runs');
+      }
       if (isStaleProjectRevisionError(error)) {
         setProjectRevisionErrorProjectId(selectedProject.id);
         appendSystemMessage(t('app.runtime.projectRevisionChanged'));
@@ -2828,10 +2937,9 @@ export function App() {
         midsceneConfig={midsceneConfig}
         midsceneReady={midsceneReady}
         onComplete={() => {
-          if (midsceneReady) {
-            completeStartupGuide('configured');
-          }
+          completeStartupGuide('configured');
         }}
+        onSaveMidsceneModelSecret={(value) => handleSaveModelSecret('midscene', value)}
         onSkip={() => completeStartupGuide('skipped')}
         onUpdateMidsceneConfig={updateMidsceneConfig}
       />
@@ -2859,8 +2967,10 @@ export function App() {
           <NavButton active={activePage === 'projects'} icon={<FolderKanban className="h-4 w-4" />} label={t('app.nav.projects')} onClick={() => goToPage('projects')} />
           <NavButton active={activePage === 'documents'} icon={<FileText className="h-4 w-4" />} label={t('app.nav.documents')} onClick={() => goToPage('documents')} />
           <NavButton active={activePage === 'cases'} icon={<ClipboardList className="h-4 w-4" />} label={t('app.nav.cases')} onClick={() => goToPage('cases')} />
+          <NavButton active={activePage === 'flows'} icon={<Route className="h-4 w-4" />} label={t('app.nav.flows')} onClick={() => goToPage('flows')} />
           <NavButton active={activePage === 'suites'} icon={<Layers3 className="h-4 w-4" />} label={t('app.nav.suites')} onClick={() => goToPage('suites')} />
           <NavButton active={activePage === 'runs'} icon={<PlaySquare className="h-4 w-4" />} label={t('app.nav.runs')} onClick={() => goToPage('runs')} />
+          <NavButton active={activePage === 'maintenance'} icon={<Wrench className="h-4 w-4" />} label={t('app.nav.maintenance')} onClick={() => goToPage('maintenance')} />
           <NavButton active={activePage === 'nl'} icon={<MessageSquareText className="h-4 w-4" />} label={t('app.nav.naturalLanguage')} onClick={() => goToPage('nl')} />
           <NavButton active={activePage === 'workflow'} icon={<Workflow className="h-4 w-4" />} label={t('app.nav.workflow')} onClick={() => goToPage('workflow')} />
           <NavButton active={activePage === 'recording'} icon={<MousePointerClick className="h-4 w-4" />} label={t('app.nav.recording')} onClick={() => goToPage('recording')} />
@@ -2895,8 +3005,10 @@ export function App() {
           <NavButton active={activePage === 'projects'} icon={<FolderKanban className="h-4 w-4" />} label={t('app.nav.projects')} onClick={() => goToPage('projects')} showLabel={false} />
           <NavButton active={activePage === 'documents'} icon={<FileText className="h-4 w-4" />} label={t('app.nav.documents')} onClick={() => goToPage('documents')} showLabel={false} />
           <NavButton active={activePage === 'cases'} icon={<ClipboardList className="h-4 w-4" />} label={t('app.nav.cases')} onClick={() => goToPage('cases')} showLabel={false} />
+          <NavButton active={activePage === 'flows'} icon={<Route className="h-4 w-4" />} label={t('app.nav.flows')} onClick={() => goToPage('flows')} showLabel={false} />
           <NavButton active={activePage === 'suites'} icon={<Layers3 className="h-4 w-4" />} label={t('app.nav.suites')} onClick={() => goToPage('suites')} showLabel={false} />
           <NavButton active={activePage === 'runs'} icon={<PlaySquare className="h-4 w-4" />} label={t('app.nav.runs')} onClick={() => goToPage('runs')} showLabel={false} />
+          <NavButton active={activePage === 'maintenance'} icon={<Wrench className="h-4 w-4" />} label={t('app.nav.maintenance')} onClick={() => goToPage('maintenance')} showLabel={false} />
           <NavButton active={activePage === 'nl'} icon={<MessageSquareText className="h-4 w-4" />} label={t('app.nav.naturalLanguage')} onClick={() => goToPage('nl')} showLabel={false} />
           <NavButton active={activePage === 'workflow'} icon={<Workflow className="h-4 w-4" />} label={t('app.nav.workflow')} onClick={() => goToPage('workflow')} showLabel={false} />
           <NavButton active={activePage === 'recording'} icon={<MousePointerClick className="h-4 w-4" />} label={t('app.nav.recording')} onClick={() => goToPage('recording')} showLabel={false} />
@@ -3030,6 +3142,17 @@ export function App() {
             />
           ) : null}
 
+          {activePage === 'flows' ? (
+            <ReusableFlowsPage
+              onOpenProjects={() => goToPage('projects')}
+              onPublishFlow={handlePublishReusableFlow}
+              onUpgradeCases={handleUpgradeReusableFlowCases}
+              onSelectFlow={setSelectedReusableFlowReference}
+              project={selectedProject}
+              selectedReference={selectedReusableFlowReference}
+            />
+          ) : null}
+
           {activePage === 'suites' ? (
             <SuiteManagementPage
               activeRunId={activeSuiteRunId}
@@ -3046,6 +3169,7 @@ export function App() {
               onSelectSuite={setSelectedSuiteReference}
               project={selectedProject}
               selectedSuiteReference={selectedSuiteReference}
+              suiteRunRecords={suiteRunRecords}
             />
           ) : null}
 
@@ -3058,7 +3182,9 @@ export function App() {
               onConfirmManualStep={handleConfirmManualStep}
               onCreateReporterFixDraft={handleCreateReporterFixDraft}
               onExportProjectReport={runtimeInfo.platform === 'desktop' ? handleExportProjectReport : undefined}
+              onConfirmArtifactRetention={runtimeInfo.platform === 'desktop' ? confirmArtifactRetention : undefined}
               onPlanExactRerun={handlePlanExactRerun}
+              onPlanArtifactRetention={runtimeInfo.platform === 'desktop' ? planArtifactRetention : undefined}
               onRunExactRerun={handleRunExactRerun}
               onSelectRun={setSelectedRunId}
               project={selectedProject}
@@ -3066,6 +3192,16 @@ export function App() {
               recentRuns={recentRuns}
               runDetails={runDetails}
               selectedRunId={selectedRunId}
+              suiteRunRecords={suiteRunRecords}
+            />
+          ) : null}
+
+          {activePage === 'maintenance' ? (
+            <MaintenanceQueuePage
+              drafts={maintenanceDrafts}
+              onAccept={maintenanceReviewAvailable ? handleAcceptMaintenanceDraft : undefined}
+              onReject={maintenanceReviewAvailable ? handleRejectMaintenanceDraft : undefined}
+              onOpenEvidence={maintenanceReviewAvailable ? handleOpenMaintenanceEvidence : undefined}
             />
           ) : null}
 
@@ -3184,7 +3320,9 @@ export function App() {
           midsceneConfig={midsceneConfig}
           midsceneReady={midsceneReady}
           onClose={closeSettings}
+          onClearModelSecret={handleClearModelSecret}
           onSave={handleSaveSettings}
+          onSaveModelSecret={handleSaveModelSecret}
           onTestMidsceneConnection={testMidsceneConnection}
           onUpdateAgentModelConfig={updateAgentModelConfig}
           onUpdateAppearance={updateAppearance}

@@ -1,5 +1,7 @@
 import type {
   BrowserNavigateRequest,
+  ArtifactRetentionAudit,
+  ArtifactRetentionPlan,
   BrowserSessionRequest,
   BrowserSessionState,
   CaptureStorageStateRequest,
@@ -8,6 +10,11 @@ import type {
   ChatEntry,
   MidsceneConfig,
   MidsceneConnectionTestResult,
+  MaintenanceDraftAcceptanceRequest,
+  MaintenanceDraftAcceptanceResult,
+  MaintenanceDraftCreationRequest,
+  MaintenanceDraftRejectionRequest,
+  MaintenanceEvidenceOpenRequest,
   PrdSemanticAnalysisRequest,
   PrdSemanticAnalysisResponse,
   ProjectAssetBinding,
@@ -38,6 +45,7 @@ import type {
   RunRecordingResponse,
   RunSuiteRequest,
   RunSuiteResponse,
+  SuiteRunRecord,
   RunWorkflowRequest,
   RunWorkflowResponse,
   SaveCredentialRequest,
@@ -45,7 +53,11 @@ import type {
   StorageStateRef,
   RunArtifact,
   SessionStartRequest,
+  ClearModelSecretRequest,
+  ModelSecretRef,
+  SaveModelSecretRequest,
 } from '../../shared/studio.js';
+import type { MaintenanceDraft } from '../../shared/maintenance.js';
 import {
   findSuiteAsset,
   findTestCaseVersion,
@@ -242,6 +254,69 @@ export async function attachManualEvidence(): Promise<RunArtifact | undefined> {
   return (await desktopApi.attachManualEvidence()) ?? undefined;
 }
 
+export async function planArtifactRetention(): Promise<ArtifactRetentionPlan | undefined> {
+  const desktopApi = getDesktopApi();
+  if (!desktopApi || typeof desktopApi.planArtifactRetention !== 'function') {
+    return undefined;
+  }
+  return desktopApi.planArtifactRetention();
+}
+
+export async function confirmArtifactRetention(planId: string): Promise<ArtifactRetentionAudit | undefined> {
+  const desktopApi = getDesktopApi();
+  if (!desktopApi || typeof desktopApi.confirmArtifactRetention !== 'function') {
+    return undefined;
+  }
+  return desktopApi.confirmArtifactRetention(planId);
+}
+
+export function canReviewMaintenanceDrafts(): boolean {
+  const desktopApi = getDesktopApi();
+  return Boolean(
+    desktopApi &&
+    typeof desktopApi.acceptMaintenanceDraft === 'function' &&
+    typeof desktopApi.rejectMaintenanceDraft === 'function' &&
+    typeof desktopApi.openMaintenanceEvidence === 'function',
+  );
+}
+
+type MaintenanceDesktopOperation =
+  | 'listMaintenanceDrafts'
+  | 'createMaintenanceDraft'
+  | 'acceptMaintenanceDraft'
+  | 'rejectMaintenanceDraft'
+  | 'openMaintenanceEvidence';
+
+function requireMaintenanceDesktopApi(operation: MaintenanceDesktopOperation) {
+  const desktopApi = getDesktopApi();
+  if (!desktopApi || typeof desktopApi[operation] !== 'function') {
+    throw new Error('Maintenance review requires the desktop main-process runtime.');
+  }
+  return desktopApi;
+}
+
+export async function listMaintenanceDrafts(): Promise<MaintenanceDraft[]> {
+  return requireMaintenanceDesktopApi('listMaintenanceDrafts').listMaintenanceDrafts();
+}
+
+export async function createMaintenanceDraft(request: MaintenanceDraftCreationRequest): Promise<MaintenanceDraft> {
+  return requireMaintenanceDesktopApi('createMaintenanceDraft').createMaintenanceDraft(request);
+}
+
+export async function acceptMaintenanceDraft(
+  request: MaintenanceDraftAcceptanceRequest,
+): Promise<MaintenanceDraftAcceptanceResult> {
+  return requireMaintenanceDesktopApi('acceptMaintenanceDraft').acceptMaintenanceDraft(request);
+}
+
+export async function rejectMaintenanceDraft(request: MaintenanceDraftRejectionRequest): Promise<MaintenanceDraft> {
+  return requireMaintenanceDesktopApi('rejectMaintenanceDraft').rejectMaintenanceDraft(request);
+}
+
+export async function openMaintenanceEvidence(request: MaintenanceEvidenceOpenRequest): Promise<void> {
+  return requireMaintenanceDesktopApi('openMaintenanceEvidence').openMaintenanceEvidence(request);
+}
+
 export async function testMidsceneConnection(config: MidsceneConfig): Promise<MidsceneConnectionTestResult> {
   const desktopApi = getDesktopApi();
   if (desktopApi) {
@@ -254,6 +329,22 @@ export async function testMidsceneConnection(config: MidsceneConfig): Promise<Mi
     durationMs: 0,
     failure: 'network',
   };
+}
+
+export async function saveModelSecret(request: SaveModelSecretRequest): Promise<ModelSecretRef> {
+  const desktopApi = getDesktopApi();
+  if (!desktopApi || typeof desktopApi.saveModelSecret !== 'function') {
+    throw new Error('模型密钥只能在桌面端安全保存。');
+  }
+  return desktopApi.saveModelSecret(request);
+}
+
+export async function clearModelSecret(request: ClearModelSecretRequest): Promise<ModelSecretRef> {
+  const desktopApi = getDesktopApi();
+  if (!desktopApi || typeof desktopApi.clearModelSecret !== 'function') {
+    throw new Error('模型密钥只能在桌面端安全清除。');
+  }
+  return desktopApi.clearModelSecret(request);
 }
 
 export async function analyzePrdDocument(
@@ -942,6 +1033,15 @@ export async function loadRunDetail(runId: string): Promise<RunDetail | null> {
   const desktopApi = getDesktopApi();
   if (desktopApi) {
     return desktopApi.loadRunDetail(runId);
+  }
+
+  return null;
+}
+
+export async function loadSuiteRunRecord(runId: string): Promise<SuiteRunRecord | null> {
+  const desktopApi = getDesktopApi();
+  if (desktopApi && typeof desktopApi.loadSuiteRunRecord === 'function') {
+    return desktopApi.loadSuiteRunRecord(runId);
   }
 
   return null;
