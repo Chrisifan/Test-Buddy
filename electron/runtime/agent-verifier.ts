@@ -43,33 +43,33 @@ export interface AgentVerifier {
   verify(request: AgentVerifierRequest): Promise<AgentVerifierResult>;
 }
 
-function completionEndpoint(baseUrl: string): string {
+const completionEndpoint =(baseUrl: string): string => {
   const normalized = baseUrl.trim().replace(/\/+$/, '');
   if (!normalized) {
     throw new Error('Verifier 模型 Base URL 不能为空');
   }
   return normalized.endsWith('/chat/completions') ? normalized : `${normalized}/chat/completions`;
-}
+};
 
-function usageBucket(promptTokens: number, completionTokens: number, totalTokens: number): AgentUsageBucket {
+const usageBucket =(promptTokens: number, completionTokens: number, totalTokens: number): AgentUsageBucket => {
   return {
     calls: 1,
     promptTokens,
     completionTokens,
     totalTokens,
   };
-}
+};
 
-function verifierSystemPrompt(): string {
+const verifierSystemPrompt =(): string => {
   return [
     '你是 Web 自动化测试 Verifier。只返回 JSON，不要 Markdown。',
     '根据断言、URL、标题、DOM 摘要、文本摘要、表格和图表观察判断测试是否成立。',
     '输出结构：{"status":"passed"|"failed"|"neutral","summary":string,"evidence":string,"failureReason"?:string}。',
     '证据不足时必须返回 neutral，不要猜测通过。',
   ].join('\n');
-}
+};
 
-function parseVerifierPayload(content: string): Pick<AgentVerifierResult, 'status' | 'summary' | 'evidence' | 'failureReason'> {
+const parseVerifierPayload =(content: string): Pick<AgentVerifierResult, 'status' | 'summary' | 'evidence' | 'failureReason'> => {
   const normalized = content
     .trim()
     .replace(/^```(?:json)?\s*/i, '')
@@ -102,7 +102,7 @@ function parseVerifierPayload(content: string): Pick<AgentVerifierResult, 'statu
     evidence,
     ...(failureReason ? { failureReason } : {}),
   };
-}
+};
 
 export class OpenAICompatibleAgentVerifier implements AgentVerifier {
   constructor(private readonly fetchImpl: typeof fetch = fetch) {}

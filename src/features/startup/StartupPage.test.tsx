@@ -5,6 +5,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { createInitialStudioState } from '../../../shared/studio.js';
+import { readLuminousPrecisionCss } from '../../styles/luminous-precision.test-utils.js';
 import { StartupPage } from './StartupPage.js';
 
 const state = createInitialStudioState();
@@ -185,7 +186,7 @@ describe('StartupPage', () => {
   });
 
   it('defines the Figma split layout with a mobile single-column fallback', () => {
-    const styles = readFileSync(resolve(process.cwd(), 'src/styles/luminous-precision.css'), 'utf8');
+    const styles = readLuminousPrecisionCss();
     const startupStyles = styles.slice(
       styles.indexOf('/* First-run configuration follows the same shell as the Figma onboarding view. */'),
       styles.indexOf('/* Page-specific structure sourced from the Figma workbench screens. */'),
@@ -205,7 +206,7 @@ describe('StartupPage', () => {
   });
 
   it('uses a compact, centered configuration workspace without stretching form rows', () => {
-    const styles = readFileSync(resolve(process.cwd(), 'src/styles/luminous-precision.css'), 'utf8');
+    const styles = readLuminousPrecisionCss();
     const startupStyles = styles.slice(
       styles.indexOf('/* First-run configuration follows the same shell as the Figma onboarding view. */'),
       styles.indexOf('/* Page-specific structure sourced from the Figma workbench screens. */'),
@@ -230,7 +231,7 @@ describe('StartupPage', () => {
   });
 
   it('uses an animated logo hub in the Figma dark panel and preserves the 48px desktop gutter', () => {
-    const styles = readFileSync(resolve(process.cwd(), 'src/styles/luminous-precision.css'), 'utf8');
+    const styles = readLuminousPrecisionCss();
     const startupStyles = styles.slice(
       styles.indexOf('/* First-run configuration follows the same shell as the Figma onboarding view. */'),
       styles.indexOf('/* Page-specific structure sourced from the Figma workbench screens. */'),

@@ -249,15 +249,15 @@ export class FixtureScriptExecutor implements FixtureLifecycleExecutor {
   }
 }
 
-function isSelfContainedFixtureScript(source: string): boolean {
+const isSelfContainedFixtureScript = (source: string): boolean => {
   return !/(?:^|[^.$\w])(?:import|require)\b/u.test(source);
-}
+};
 
-function captureBoundedStream(
+const captureBoundedStream = (
   stream: NodeJS.ReadableStream,
   limit: number,
   onLimit: () => void,
-): Promise<Buffer | undefined> {
+): Promise<Buffer | undefined> => {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let size = 0;
@@ -278,16 +278,16 @@ function captureBoundedStream(
     stream.once('error', reject);
     stream.once('end', () => resolve(exceeded ? undefined : Buffer.concat(chunks)));
   });
-}
+};
 
-function waitForChildClose(child: ChildProcess): Promise<number | null> {
+const waitForChildClose = (child: ChildProcess): Promise<number | null> => {
   return new Promise((resolve, reject) => {
     child.once('error', reject);
     child.once('close', (code) => resolve(code));
   });
-}
+};
 
-function terminateChild(child: ChildProcess): void {
+const terminateChild = (child: ChildProcess): void => {
   if (child.exitCode !== null || child.signalCode) {
     return;
   }
@@ -298,12 +298,12 @@ function terminateChild(child: ChildProcess): void {
     }
   }, 250);
   forceTimer.unref();
-}
+};
 
-function normalizeScriptFixtureOutputs(
+const normalizeScriptFixtureOutputs = (
   parameters: FixtureParameter[],
   value: unknown,
-): Record<string, FixtureHttpJsonValue> | undefined {
+): Record<string, FixtureHttpJsonValue> | undefined => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     return undefined;
   }
@@ -335,12 +335,12 @@ function normalizeScriptFixtureOutputs(
     normalized[parameter.name] = valueForType;
   }
   return normalized;
-}
+};
 
-function normalizeFixtureOutputValue(
+const normalizeFixtureOutputValue = (
   value: unknown,
   type: FixtureParameter['type'],
-): FixtureHttpJsonValue | undefined {
+): FixtureHttpJsonValue | undefined => {
   if (type === 'string') {
     return typeof value === 'string' && Buffer.byteLength(value, 'utf8') <= FIXTURE_SCRIPT_OUTPUT_LIMIT ? value : undefined;
   }
@@ -354,11 +354,11 @@ function normalizeFixtureOutputValue(
   return normalized !== undefined && Buffer.byteLength(JSON.stringify(normalized), 'utf8') <= FIXTURE_SCRIPT_OUTPUT_LIMIT
     ? normalized
     : undefined;
-}
+};
 
-function isSensitiveOutputName(value: string): boolean {
+const isSensitiveOutputName = (value: string): boolean => {
   return /(?:api[-_]?key|authorization|cookie|credential|pass(?:word)?|secret|token)/iu.test(value);
-}
+};
 
 class FixtureScriptCancelledError extends Error {}
 class FixtureScriptTimeoutError extends Error {}

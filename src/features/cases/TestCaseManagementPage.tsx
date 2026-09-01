@@ -75,7 +75,7 @@ import { useI18n } from '../../i18n/index.js';
 type SaveMode = 'debounced' | 'immediate';
 type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
 
-function getStepTypeLabel(type: TestStepDraft['type'], t: (key: string) => string): string {
+const getStepTypeLabel = (type: TestStepDraft['type'], t: (key: string) => string): string => {
   const keys: Record<TestStepDraft['type'], string> = {
     ai: 'cases.step.action',
     aiAssert: 'cases.step.assert',
@@ -84,17 +84,17 @@ function getStepTypeLabel(type: TestStepDraft['type'], t: (key: string) => strin
     manual: 'cases.step.manual',
   };
   return t(keys[type]);
-}
+};
 
-function getSourceLabel(testCase: TestCaseDraft, t: (key: string) => string): string {
+const getSourceLabel = (testCase: TestCaseDraft, t: (key: string) => string): string => {
   return t(`cases.source.${testCase.source}`);
-}
+};
 
-function getBlockerLabel(blocker: TestCaseRunBlocker | undefined, t: (key: string) => string): string | undefined {
+const getBlockerLabel = (blocker: TestCaseRunBlocker | undefined, t: (key: string) => string): string | undefined => {
   return blocker ? t(`cases.validation.${blocker}`) : undefined;
-}
+};
 
-function canConfirmDeterministicAction(step: TestStepDraft): boolean {
+const canConfirmDeterministicAction = (step: TestStepDraft): boolean => {
   if (step.type !== 'ai' || !step.execution?.action) {
     return false;
   }
@@ -103,9 +103,9 @@ function canConfirmDeterministicAction(step: TestStepDraft): boolean {
     ...step,
     execution: { ...step.execution, reviewStatus: 'confirmed' },
   }));
-}
+};
 
-function canConfirmExplicitAssertion(step: TestStepDraft): boolean {
+const canConfirmExplicitAssertion = (step: TestStepDraft): boolean => {
   if (step.type !== 'aiAssert' || !step.execution?.assertion) {
     return false;
   }
@@ -114,13 +114,13 @@ function canConfirmExplicitAssertion(step: TestStepDraft): boolean {
     ...step,
     execution: { ...step.execution, reviewStatus: 'confirmed' },
   }));
-}
+};
 
-function canConfirmStructuredExecution(step: TestStepDraft): boolean {
+const canConfirmStructuredExecution = (step: TestStepDraft): boolean => {
   return canConfirmDeterministicAction(step) || canConfirmExplicitAssertion(step);
-}
+};
 
-function StepTypeIcon({ type, className }: { type: TestStepDraft['type']; className?: string }) {
+const StepTypeIcon = ({ type, className }: { type: TestStepDraft['type']; className?: string }) => {
   const Icon =
     type === 'ai'
       ? MousePointer2
@@ -133,9 +133,9 @@ function StepTypeIcon({ type, className }: { type: TestStepDraft['type']; classN
             : ClipboardCheck;
 
   return <Icon className={className} />;
-}
+};
 
-function StepTypeMenu({
+const StepTypeMenu = ({
   index,
   onCreate,
   trigger,
@@ -143,7 +143,7 @@ function StepTypeMenu({
   index: number;
   onCreate: (type: TestStepDraft['type'], index: number) => void;
   trigger: ReactNode;
-}) {
+}) => {
   const { t } = useI18n();
   const options: Array<{ type: TestStepDraft['type']; label: string }> = [
     { type: 'ai', label: t('cases.step.action') },
@@ -166,9 +166,9 @@ function StepTypeMenu({
       </DropdownMenuContent>
     </DropdownMenu>
   );
-}
+};
 
-function FlowTerminal({ terminal }: { terminal: 'start' | 'end' }) {
+const FlowTerminal = ({ terminal }: { terminal: 'start' | 'end' }) => {
   const { t } = useI18n();
   const isStart = terminal === 'start';
 
@@ -181,9 +181,9 @@ function FlowTerminal({ terminal }: { terminal: 'start' | 'end' }) {
       <span>{t(`cases.canvas.${terminal}`)}</span>
     </div>
   );
-}
+};
 
-function FlowInsertionPoint({
+const FlowInsertionPoint = ({
   disabled,
   dropActive,
   index,
@@ -201,7 +201,7 @@ function FlowInsertionPoint({
   onDragEnd: () => void;
   onDragOver: () => void;
   onDrop: (event: DragEvent<HTMLButtonElement>, index: number) => void;
-}) {
+}) => {
   const { t } = useI18n();
 
   return (
@@ -229,9 +229,9 @@ function FlowInsertionPoint({
       />
     </div>
   );
-}
+};
 
-function CaseSelector({
+const CaseSelector = ({
   project,
   selectedReference,
   selectedTestCase,
@@ -241,7 +241,7 @@ function CaseSelector({
   selectedReference?: VersionedTestAssetReference;
   selectedTestCase?: TestCaseDraft;
   onSelect: (reference: VersionedTestAssetReference) => void;
-}) {
+}) => {
   const { t } = useI18n();
   const latestCases = listLatestTestCaseVersions(project);
   const versions = selectedReference
@@ -303,9 +303,9 @@ function CaseSelector({
     ) : null}
     </>
   );
-}
+};
 
-function CaseSettingsDialog({
+const CaseSettingsDialog = ({
   open,
   onOpenChange,
   onUpdateTestCase,
@@ -317,7 +317,7 @@ function CaseSettingsDialog({
   onUpdateTestCase: (updater: (testCase: TestCaseDraft) => TestCaseDraft, mode?: SaveMode) => void;
   project: ProjectDraft;
   testCase: TestCaseDraft;
-}) {
+}) => {
   const { t } = useI18n();
   const nameId = useId();
   const targetUrlId = useId();
@@ -330,7 +330,7 @@ function CaseSettingsDialog({
   const successCriteriaId = useId();
   const notesId = useId();
 
-  function updateIntent(patch: { businessGoal?: string; preconditions?: string[]; successCriteria?: string[] }) {
+  const updateIntent = (patch: { businessGoal?: string; preconditions?: string[]; successCriteria?: string[] }) => {
     onUpdateTestCase((item) => {
       const current = item.intent ?? createTestCaseIntent(item.name.trim() || t('cases.intent.defaultBusinessGoal'));
       const intent = createTestCaseIntent(
@@ -346,11 +346,11 @@ function CaseSettingsDialog({
       }
       return { ...item, intent };
     });
-  }
+  };
 
-  function parseIntentLines(value: string): string[] {
+  const parseIntentLines = (value: string): string[] => {
     return Array.from(new Set(value.split(/\r?\n/u).map((line) => line.trim()).filter(Boolean)));
-  }
+  };
 
   const boundFixtureReferences = testCase.assetReferences?.fixtures ?? [];
   const boundFixtureKeys = new Set(boundFixtureReferences.map((fixture) => `${fixture.id}@${fixture.version}`));
@@ -359,7 +359,7 @@ function CaseSettingsDialog({
     (!fixture.environmentIds.length || fixture.environmentIds.includes(testCase.environmentId))
   ));
 
-  function attachFixture(value: string) {
+  const attachFixture = (value: string) => {
     const fixture = project.fixtures.find((candidate) => `${candidate.id}@${candidate.version}` === value);
     if (!fixture) {
       return;
@@ -378,9 +378,9 @@ function CaseSettingsDialog({
         },
       };
     }, 'immediate');
-  }
+  };
 
-  function removeFixture(fixtureId: string, version: number) {
+  const removeFixture = (fixtureId: string, version: number) => {
     onUpdateTestCase((item) => {
       const assetReferences = item.assetReferences ?? { fixtures: [], reusableFlows: [] };
       return {
@@ -393,13 +393,13 @@ function CaseSettingsDialog({
         },
       };
     }, 'immediate');
-  }
+  };
 
   const boundFlowReferences = testCase.assetReferences?.reusableFlows ?? [];
   const boundFlowIds = new Set(boundFlowReferences.map((flow) => flow.id));
   const availableFlows = project.reusableFlows.filter((flow) => !boundFlowIds.has(flow.id));
 
-  function attachReusableFlow(value: string) {
+  const attachReusableFlow = (value: string) => {
     const flow = project.reusableFlows.find((candidate) => `${candidate.id}@${candidate.version}` === value);
     if (!flow) return;
     onUpdateTestCase((item) => {
@@ -407,14 +407,14 @@ function CaseSettingsDialog({
       if ((assetReferences.reusableFlows ?? []).some((reference) => reference.id === flow.id)) return item;
       return { ...item, assetReferences: { ...assetReferences, reusableFlows: [...(assetReferences.reusableFlows ?? []), { id: flow.id, version: flow.version }] } };
     }, 'immediate');
-  }
+  };
 
-  function updateReusableFlowBindings(updater: (references: VersionedTestAssetReference[]) => VersionedTestAssetReference[]) {
+  const updateReusableFlowBindings = (updater: (references: VersionedTestAssetReference[]) => VersionedTestAssetReference[]) => {
     onUpdateTestCase((item) => {
       const assetReferences = item.assetReferences ?? { fixtures: [], reusableFlows: [] };
       return { ...item, assetReferences: { ...assetReferences, reusableFlows: updater(assetReferences.reusableFlows ?? []) } };
     }, 'immediate');
-  }
+  };
 
   return (
     <Dialog onOpenChange={onOpenChange} open={open}>
@@ -565,9 +565,9 @@ function CaseSettingsDialog({
       </DialogContent>
     </Dialog>
   );
-}
+};
 
-function StepInspector({
+const StepInspector = ({
   focusTitle,
   readOnly = false,
   onFocused,
@@ -583,7 +583,7 @@ function StepInspector({
   project: ProjectDraft;
   step: TestStepDraft;
   testCase: TestCaseDraft;
-}) {
+}) => {
   const { t } = useI18n();
   const titleInputRef = useRef<HTMLInputElement>(null);
   const titleId = useId();
@@ -619,7 +619,7 @@ function StepInspector({
     };
   }, [focusTitle, onFocused]);
 
-  function updateStep(patch: Partial<TestStepDraft>, mode: SaveMode = 'debounced') {
+  const updateStep = (patch: Partial<TestStepDraft>, mode: SaveMode = 'debounced') => {
     onUpdateTestCase((testCase) => ({
       ...testCase,
       steps: testCase.steps.map((item) => {
@@ -634,9 +634,9 @@ function StepInspector({
           : nextStep;
       }),
     }), mode);
-  }
+  };
 
-  function updateStructuredExecutionReviewStatus(reviewStatus: 'needsReview' | 'confirmed') {
+  const updateStructuredExecutionReviewStatus = (reviewStatus: 'needsReview' | 'confirmed') => {
     onUpdateTestCase((testCase) => ({
       ...testCase,
       steps: testCase.steps.map((item) => {
@@ -647,15 +647,15 @@ function StepInspector({
         return { ...item, execution: { ...item.execution, reviewStatus } };
       }),
     }), 'immediate');
-  }
+  };
 
-  function bindRecording(recordingId: string) {
+  const bindRecording = (recordingId: string) => {
     const recording = project.recordings.find((item) => item.id === recordingId);
     updateStep({
       recordingId,
       body: recording ? t('cases.replay.description', { name: recording.name, count: recording.steps.length }) : step.body,
     }, 'immediate');
-  }
+  };
 
   const hasStructuredAction = step.type === 'ai' && Boolean(step.execution?.action);
   const hasStructuredAssertion = step.type === 'aiAssert' && Boolean(step.execution?.assertion);
@@ -675,7 +675,7 @@ function StepInspector({
   const supportsDeterministicExecution = canConfirmStructuredExecution(step);
   const isDeterministicActionConfirmed = supportsDeterministicExecution && step.execution?.reviewStatus === 'confirmed';
 
-  function updateInputBinding(binding: TestInputValueBinding) {
+  const updateInputBinding = (binding: TestInputValueBinding) => {
     if (!inputBindingTarget) {
       return;
     }
@@ -700,9 +700,9 @@ function StepInspector({
         };
       }),
     }), 'immediate');
-  }
+  };
 
-  function clearInputBinding() {
+  const clearInputBinding = () => {
     if (!inputBindingTarget) {
       return;
     }
@@ -723,7 +723,7 @@ function StepInspector({
         };
       }),
     }), 'immediate');
-  }
+  };
 
   return (
     <div className="case-step-inspector-fields grid gap-4">
@@ -970,9 +970,9 @@ function StepInspector({
       ) : null}
     </div>
   );
-}
+};
 
-function SerialStepRow({
+const SerialStepRow = ({
   dragActive,
   index,
   readOnly = false,
@@ -1002,7 +1002,7 @@ function SerialStepRow({
   selected: boolean;
   step: TestStepDraft;
   totalSteps: number;
-}) {
+}) => {
   const { t } = useI18n();
   const blocker = getTestStepRunBlocker(step, project.recordings);
   const summary =
@@ -1075,9 +1075,9 @@ function SerialStepRow({
       </DropdownMenu>
     </article>
   );
-}
+};
 
-export function TestCaseManagementPage({
+export const TestCaseManagementPage = ({
   project,
   publishedTestCase,
   draftTestCase,
@@ -1125,7 +1125,7 @@ export function TestCaseManagementPage({
   onRunTestCase: (reference: VersionedTestAssetReference) => void;
   onUpdateTestCase: (updater: (testCase: TestCaseDraft) => TestCaseDraft, mode?: SaveMode) => void;
   onOpenProjects?: () => void;
-}) {
+}) => {
   const { t } = useI18n();
   const versionedMode = Boolean(publishedTestCase || selectedReference);
   const selectedCase = draftTestCase ?? publishedTestCase ?? selectedTestCase;
@@ -1155,7 +1155,7 @@ export function TestCaseManagementPage({
     stepRowRefs.current.get(focusStepId)?.scrollIntoView?.({ block: 'nearest' });
   }, [focusStepId, selectedCase?.id, selectedCase?.steps]);
 
-  function createStep(type: TestStepDraft['type'], index: number) {
+  const createStep = (type: TestStepDraft['type'], index: number) => {
     if (!isEditable) {
       return;
     }
@@ -1166,17 +1166,17 @@ export function TestCaseManagementPage({
 
     setSelectedStepId(stepId);
     setFocusStepId(stepId);
-  }
+  };
 
-  function handleDragStart(event: DragEvent<HTMLButtonElement>, stepId: string) {
+  const handleDragStart = (event: DragEvent<HTMLButtonElement>, stepId: string) => {
     if (event.dataTransfer) {
       event.dataTransfer.effectAllowed = 'move';
       event.dataTransfer.setData('text/testbuddy-step', stepId);
     }
     setDraggedStepId(stepId);
-  }
+  };
 
-  function handleDrop(event: DragEvent<HTMLButtonElement>, index: number) {
+  const handleDrop = (event: DragEvent<HTMLButtonElement>, index: number) => {
     event.preventDefault();
     const stepId = event.dataTransfer?.getData('text/testbuddy-step') || draggedStepId;
     const sourceIndex = selectedCase?.steps.findIndex((step) => step.id === stepId) ?? -1;
@@ -1185,9 +1185,9 @@ export function TestCaseManagementPage({
     }
     setDraggedStepId(undefined);
     setDropIndex(undefined);
-  }
+  };
 
-  function confirmDelete() {
+  const confirmDelete = () => {
     if (!isEditable || !deleteStepId || !selectedCase) {
       return;
     }
@@ -1197,7 +1197,7 @@ export function TestCaseManagementPage({
     onDeleteStep(deleteStepId);
     setSelectedStepId(nextStepId);
     setDeleteStepId(undefined);
-  }
+  };
 
   if (!project) {
     return (
@@ -1430,4 +1430,4 @@ export function TestCaseManagementPage({
       </Dialog>
     </PageShell>
   );
-}
+};

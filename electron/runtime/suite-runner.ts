@@ -312,11 +312,11 @@ export class SuiteRunner {
  * scheduler keys. Arbitrary Fixture locks may represent account, tenant, or
  * environment ownership, but no secrets are included in the key.
  */
-export function deriveSuiteCaseResourceLocks(
+export const deriveSuiteCaseResourceLocks = (
   project: Pick<ProjectDraft, 'id' | 'fixtures'>,
   testCase: Pick<TestCaseDraft, 'assetReferences'>,
   environmentId: string,
-): string[] {
+): string[] => {
   const locks = new Set<string>();
   const resolution = resolveTestCaseFixtures(project, testCase.assetReferences?.fixtures ?? [], environmentId);
   resolution.fixtures.forEach((fixture) => {
@@ -327,9 +327,9 @@ export function deriveSuiteCaseResourceLocks(
     fixture.resourceLocks.forEach((resource) => locks.add(`resource:${project.id}:${resource}`));
   });
   return Array.from(locks).sort();
-}
+};
 
-function skippedResult(candidate: PendingSuiteCase, summary: string): SuiteCaseRunResult {
+const skippedResult = (candidate: PendingSuiteCase, summary: string): SuiteCaseRunResult => {
   return {
     testCaseId: candidate.testCase.id,
     testCaseVersion: candidate.reference.version,
@@ -339,9 +339,9 @@ function skippedResult(candidate: PendingSuiteCase, summary: string): SuiteCaseR
     attempts: 0,
     flaky: false,
   };
-}
+};
 
-function cancelledResult(candidate: PendingSuiteCase, summary: string): SuiteCaseRunResult {
+const cancelledResult = (candidate: PendingSuiteCase, summary: string): SuiteCaseRunResult => {
   return {
     testCaseId: candidate.testCase.id,
     testCaseVersion: candidate.reference.version,
@@ -351,9 +351,9 @@ function cancelledResult(candidate: PendingSuiteCase, summary: string): SuiteCas
     attempts: 0,
     flaky: false,
   };
-}
+};
 
-function executorErrorResult(candidate: PendingSuiteCase, summary: string): SuiteCaseRunResult {
+const executorErrorResult = (candidate: PendingSuiteCase, summary: string): SuiteCaseRunResult => {
   return {
     testCaseId: candidate.testCase.id,
     testCaseVersion: candidate.reference.version,
@@ -363,7 +363,7 @@ function executorErrorResult(candidate: PendingSuiteCase, summary: string): Suit
     attempts: 0,
     flaky: false,
   };
-}
+};
 
 interface TerminalSuiteCaseExecutionResult {
   status: Exclude<RunStatus, 'running'>;
@@ -372,7 +372,7 @@ interface TerminalSuiteCaseExecutionResult {
   runId?: string;
 }
 
-function terminalSuiteCaseResult(result: SuiteCaseExecutionResult): TerminalSuiteCaseExecutionResult {
+const terminalSuiteCaseResult = (result: SuiteCaseExecutionResult): TerminalSuiteCaseExecutionResult => {
   switch (result.status) {
     case 'passed':
       return { status: result.status, summary: result.summary, ...(result.runId ? { runId: result.runId } : {}) };
@@ -389,26 +389,26 @@ function terminalSuiteCaseResult(result: SuiteCaseExecutionResult): TerminalSuit
     case 'neutral':
       return withSuiteReason(result, 'blocked', 'unsupportedAction');
   }
-}
+};
 
-function withSuiteReason(
+const withSuiteReason = (
   result: Omit<SuiteCaseExecutionResult, 'status'>,
   status: Exclude<RunStatus, 'running' | 'passed'>,
   defaultCode: RunReason['code'],
-): TerminalSuiteCaseExecutionResult {
+): TerminalSuiteCaseExecutionResult => {
   return {
     status,
     summary: result.summary,
     reason: result.reason ?? reason(defaultCode, result.summary),
     ...(result.runId ? { runId: result.runId } : {}),
   };
-}
+};
 
-function suiteResultOutcome(
+const suiteResultOutcome = (
   results: SuiteCaseRunResult[],
   issues: string[],
   cancelled: boolean,
-): Pick<SuiteRunResult, 'status' | 'reason'> {
+): Pick<SuiteRunResult, 'status' | 'reason'> => {
   if (cancelled) {
     return { status: 'cancelled', reason: reason('userCancelled', 'Suite run was cancelled.') };
   }
@@ -437,20 +437,20 @@ function suiteResultOutcome(
     return { status: 'skipped', reason: skipped.reason ?? reason('dependencyFailed', skipped.summary) };
   }
   return { status: 'passed' };
-}
+};
 
-function reason(code: RunReason['code'], message: string): RunReason {
+const reason = (code: RunReason['code'], message: string): RunReason => {
   return { code, message };
-}
+};
 
-function clampConcurrency(value: number): number {
+const clampConcurrency = (value: number): number => {
   return Number.isSafeInteger(value) ? Math.max(1, Math.min(10, value)) : 1;
-}
+};
 
-function referenceKey(reference: Pick<SuiteCaseReference, 'id' | 'version'>): string {
+const referenceKey = (reference: Pick<SuiteCaseReference, 'id' | 'version'>): string => {
   return `${reference.id}@${reference.version}`;
-}
+};
 
-function errorMessage(error: unknown): string {
+const errorMessage = (error: unknown): string => {
   return error instanceof Error && error.message ? `Suite Case execution failed: ${error.message}` : 'Suite Case execution failed.';
-}
+};

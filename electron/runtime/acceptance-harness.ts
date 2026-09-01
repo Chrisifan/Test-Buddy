@@ -142,17 +142,17 @@ export class AcceptanceHarness {
 }
 
 /** Runs the repository-owned fixture through the public desktop-main and CLI boundaries. */
-export async function runLocalAcceptanceWithPublicAdapters(
+export const runLocalAcceptanceWithPublicAdapters = async (
   options: PublicLocalAcceptanceOptions,
-): Promise<LocalAcceptanceReport> {
+): Promise<LocalAcceptanceReport> => {
   const harness = new AcceptanceHarness({
     runDesktop: ({ fixture, attempt }) => runDesktopAcceptanceAdapter(options.rootDir, fixture, attempt, options.executeDesktopSuite),
     runCli: ({ fixture, attempt }) => runCliAdapter(options.rootDir, fixture, attempt),
   });
   return harness.runLocalFixture(options);
-}
+};
 
-async function runCliAdapter(rootDir: string, fixture: LocalAcceptanceFixture, attempt: number): Promise<AcceptanceAdapterRun> {
+const runCliAdapter = async (rootDir: string, fixture: LocalAcceptanceFixture, attempt: number): Promise<AcceptanceAdapterRun> => {
   const dataDir = await prepareAdapterDataRoot(rootDir, 'cli', fixture, attempt);
   await executeCliCommand({
     kind: 'run',
@@ -162,14 +162,14 @@ async function runCliAdapter(rootDir: string, fixture: LocalAcceptanceFixture, a
     suiteReference: { id: fixture.suite.id, version: fixture.suite.version },
   });
   return adapterRunFromState(await new StudioStore(dataDir).loadExisting(), fixture);
-}
+};
 
-export async function runDesktopAcceptanceAdapter(
+export const runDesktopAcceptanceAdapter = async (
   rootDir: string,
   fixture: LocalAcceptanceFixture,
   attempt: number,
   executeSuite: DesktopSuiteExecutionBoundary,
-): Promise<AcceptanceAdapterRun> {
+): Promise<AcceptanceAdapterRun> => {
   const dataDir = await prepareAdapterDataRoot(rootDir, 'desktop', fixture, attempt);
   const store = new StudioStore(dataDir);
   const projectRepository = new ProjectRepository({ studioStore: store });
@@ -204,13 +204,13 @@ export async function runDesktopAcceptanceAdapter(
   } finally {
     await runtime.close();
   }
-}
+};
 
-function adapterRunFromDesktopDetails(
+const adapterRunFromDesktopDetails = (
   details: readonly RunDetail[],
   snapshot: { project: LocalAcceptanceFixture['project']; revision: string; reproducibility: 'versioned' | 'legacy'; source: 'projectDirectory' | 'legacyStudioStore' },
   fixture: LocalAcceptanceFixture,
-): AcceptanceAdapterRun {
+): AcceptanceAdapterRun => {
   if (snapshot.reproducibility !== 'versioned') {
     throw new Error('Desktop acceptance adapter must run a versioned project snapshot.');
   }
@@ -222,14 +222,14 @@ function adapterRunFromDesktopDetails(
     return memberFromDetail(detail);
   });
   return { projectRevision: snapshot.revision, reproducibility: snapshot.reproducibility, suite: { id: fixture.suite.id, version: fixture.suite.version }, members };
-}
+};
 
-async function prepareAdapterDataRoot(
+const prepareAdapterDataRoot = async (
   rootDir: string,
   adapter: 'cli' | 'desktop',
   fixture: LocalAcceptanceFixture,
   attempt: number,
-): Promise<string> {
+): Promise<string> => {
   const dataDir = path.join(rootDir, adapter, `attempt-${attempt}`);
   const projectDirectory = path.join(dataDir, 'project-assets');
   await fs.mkdir(dataDir, { recursive: true });
@@ -250,9 +250,9 @@ async function prepareAdapterDataRoot(
   }];
   await new StudioStore(dataDir).save(state);
   return dataDir;
-}
+};
 
-function adapterRunFromState(state: StudioState, fixture: LocalAcceptanceFixture): AcceptanceAdapterRun {
+const adapterRunFromState = (state: StudioState, fixture: LocalAcceptanceFixture): AcceptanceAdapterRun => {
   const expectedReferences = fixture.suite.caseReferences.map(referenceKey);
   const members = expectedReferences.map((expectedReference) => {
     const detail = state.runDetails.find((candidate) => (
@@ -270,9 +270,9 @@ function adapterRunFromState(state: StudioState, fixture: LocalAcceptanceFixture
     suite: { id: fixture.suite.id, version: fixture.suite.version },
     members,
   };
-}
+};
 
-function memberFromDetail(detail: RunDetail): AcceptanceAdapterMember {
+const memberFromDetail = (detail: RunDetail): AcceptanceAdapterMember => {
   if (!detail.provenance?.testCase) {
     throw new Error(`Acceptance adapter persisted ${detail.testCaseId} without frozen provenance.`);
   }
@@ -289,9 +289,9 @@ function memberFromDetail(detail: RunDetail): AcceptanceAdapterMember {
     provenance: detail.provenance,
     manifestHashes,
   };
-}
+};
 
-function validateAdapterRun(adapter: string, run: AcceptanceAdapterRun, fixture: LocalAcceptanceFixture): void {
+const validateAdapterRun = (adapter: string, run: AcceptanceAdapterRun, fixture: LocalAcceptanceFixture): void => {
   if (run.reproducibility !== 'versioned') {
     throw new Error(`${adapter} acceptance adapter must run a versioned project snapshot.`);
   }
@@ -306,32 +306,32 @@ function validateAdapterRun(adapter: string, run: AcceptanceAdapterRun, fixture:
   if (actual.size !== expected.size || [...expected].some((reference) => !actual.has(reference))) {
     throw new Error(`${adapter} acceptance adapter returned a non-fixture member.`);
   }
-}
+};
 
-function membersByReference(members: readonly AcceptanceAdapterMember[]): Map<string, AcceptanceAdapterMember> {
+const membersByReference = (members: readonly AcceptanceAdapterMember[]): Map<string, AcceptanceAdapterMember> => {
   return new Map(members.map((member) => [referenceKey(member.testCase), member]));
-}
+};
 
-function toAcceptanceChildRun(member: AcceptanceAdapterMember) {
+const toAcceptanceChildRun = (member: AcceptanceAdapterMember) => {
   return {
     status: member.status,
     provenanceHash: canonicalProvenanceHash(member.provenance),
     manifestHashes: [...member.manifestHashes].sort(),
   };
-}
+};
 
-function terminalSummary(members: readonly AcceptanceAdapterMember[]) {
+const terminalSummary = (members: readonly AcceptanceAdapterMember[]) => {
   return members.reduce(
     (summary, member) => ({ ...summary, [member.status]: summary[member.status] + 1 }),
     { passed: 0, failed: 0, blocked: 0, error: 0, cancelled: 0, skipped: 0 },
   );
-}
+};
 
-function canonicalProvenanceHash(value: unknown): string {
+const canonicalProvenanceHash = (value: unknown): string => {
   return createHash('sha256').update(JSON.stringify(canonicalizeProvenance(value))).digest('hex');
-}
+};
 
-function canonicalizeProvenance(value: unknown): unknown {
+const canonicalizeProvenance = (value: unknown): unknown => {
   if (Array.isArray(value)) {
     return value.map(canonicalizeProvenance);
   }
@@ -349,8 +349,8 @@ function canonicalizeProvenance(value: unknown): unknown {
       .sort(([left], [right]) => left.localeCompare(right))
       .map(([key, child]) => [key, canonicalizeProvenance(child)]),
   );
-}
+};
 
-function referenceKey(reference: VersionedTestAssetReference): string {
+const referenceKey = (reference: VersionedTestAssetReference): string => {
   return `${reference.id}@${reference.version}`;
-}
+};

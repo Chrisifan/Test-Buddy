@@ -78,10 +78,10 @@ export class ScriptTrustStore {
   }
 }
 
-function isSameTrustTarget(
+const isSameTrustTarget = (
   candidate: FixtureScriptTrustRecord,
   record: FixtureScriptTrustTrustComparable,
-): boolean {
+): boolean => {
   return (
     candidate.projectId === record.projectId &&
     candidate.projectDirectory === record.projectDirectory &&
@@ -89,14 +89,14 @@ function isSameTrustTarget(
     candidate.fixtureVersion === record.fixtureVersion &&
     candidate.lifecycle === record.lifecycle
   );
-}
+};
 
 type FixtureScriptTrustTrustComparable = Pick<
   FixtureScriptTrustRecord,
   'projectId' | 'projectDirectory' | 'fixtureId' | 'fixtureVersion' | 'lifecycle'
 >;
 
-function assertTrustIdentity(value: FixtureScriptTrustIdentity): void {
+const assertTrustIdentity = (value: FixtureScriptTrustIdentity): void => {
   if (
     !isNonEmptyString(value.projectId) ||
     !path.isAbsolute(value.projectDirectory) ||
@@ -110,9 +110,9 @@ function assertTrustIdentity(value: FixtureScriptTrustIdentity): void {
   ) {
     throw new Error('脚本信任记录无效。');
   }
-}
+};
 
-function isFixtureScriptTrustRecord(value: unknown): value is FixtureScriptTrustRecord {
+const isFixtureScriptTrustRecord = (value: unknown): value is FixtureScriptTrustRecord => {
   if (!value || typeof value !== 'object') {
     return false;
   }
@@ -131,14 +131,14 @@ function isFixtureScriptTrustRecord(value: unknown): value is FixtureScriptTrust
     return false;
   }
   return record.schemaVersion === 1 && isNonEmptyString(record.approvedAt) && !Number.isNaN(Date.parse(record.approvedAt));
-}
+};
 
-function isSafeRelativePath(value: string): boolean {
+const isSafeRelativePath = (value: string): boolean => {
   return isNonEmptyString(value) &&
     !path.isAbsolute(value) &&
     !value.split(/[\\/]/u).includes('..');
-}
+};
 
-function isNonEmptyString(value: unknown): value is string {
+const isNonEmptyString = (value: unknown): value is string => {
   return typeof value === 'string' && Boolean(value.trim());
-}
+};

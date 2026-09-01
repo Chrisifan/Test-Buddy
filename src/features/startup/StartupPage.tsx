@@ -15,7 +15,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 
-function StartupFlowVisual({ brandLogo }: { brandLogo: string }) {
+const StartupFlowVisual = ({ brandLogo }: { brandLogo: string }) => {
   const testNodes = [FileText, MousePointerClick, MonitorSmartphone];
 
   return (
@@ -40,9 +40,9 @@ function StartupFlowVisual({ brandLogo }: { brandLogo: string }) {
       </div>
     </div>
   );
-}
+};
 
-export function StartupPage({
+export const StartupPage = ({
   brandLogo,
   locale = 'zh-CN',
   midsceneConfig,
@@ -60,7 +60,7 @@ export function StartupPage({
   onSaveMidsceneModelSecret: (value: string) => Promise<void>;
   onSkip: () => void;
   onUpdateMidsceneConfig: (patch: Partial<MidsceneConfig>) => void;
-}) {
+}) => {
   const t = createTranslator(locale);
   const modelApiKeyInputRef = useRef<HTMLInputElement>(null);
   const [hasPendingModelSecret, setHasPendingModelSecret] = useState(false);
@@ -78,7 +78,7 @@ export function StartupPage({
   );
   const canComplete = hasModelConfiguration && (midsceneConfig.modelSecret.hasKey || hasPendingModelSecret);
 
-  async function completeStartupSetup() {
+  const completeStartupSetup = async () => {
     if (!hasModelConfiguration || isSavingModelSecret) {
       return;
     }
@@ -107,7 +107,7 @@ export function StartupPage({
     } finally {
       setIsSavingModelSecret(false);
     }
-  }
+  };
 
   return (
     <section aria-label={t('startup.aria.screen')} className="startup-shell">
@@ -215,4 +215,4 @@ export function StartupPage({
       </main>
     </section>
   );
-}
+};

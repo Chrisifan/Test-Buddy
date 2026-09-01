@@ -74,7 +74,7 @@ import {
   writeProjectAssetSnapshot,
 } from '../../lib/runtime.js';
 
-export function ProjectManagementPage({
+export const ProjectManagementPage = ({
   projects,
   selectedProject,
   selectedGroupId,
@@ -112,7 +112,7 @@ export function ProjectManagementPage({
     username: string;
     secret: string;
   }) => Promise<CredentialRef | null>;
-}) {
+}) => {
   const { t } = useI18n();
   const [credentialLabel, setCredentialLabel] = useState(() => t('project.credential.defaultLabel'));
   const [credentialUsername, setCredentialUsername] = useState('');
@@ -220,9 +220,9 @@ export function ProjectManagementPage({
       />
     </PageShell>
   );
-}
+};
 
-function ProjectMetric({
+const ProjectMetric = ({
   icon: Icon,
   label,
   value,
@@ -230,7 +230,7 @@ function ProjectMetric({
   icon: typeof ListChecks;
   label: string;
   value: number;
-}) {
+}) => {
   return (
     <div className="project-overview-metric">
       <div className="flex items-center justify-between gap-3">
@@ -240,9 +240,9 @@ function ProjectMetric({
       <strong>{value.toLocaleString()}</strong>
     </div>
   );
-}
+};
 
-function ProjectCard({
+const ProjectCard = ({
   active,
   onDelete,
   onEdit,
@@ -258,7 +258,7 @@ function ProjectCard({
   isBound: boolean;
   project: ProjectDraft;
   t: (key: string, replacements?: Record<string, string | number>) => string;
-}) {
+}) => {
   const assetCount = project.documents.length + project.recordings.length;
 
   return (
@@ -317,9 +317,9 @@ function ProjectCard({
       </footer>
     </article>
   );
-}
+};
 
-function ProjectConfigurationDialog({
+const ProjectConfigurationDialog = ({
   credentialLabel,
   credentialSecret,
   credentialUsername,
@@ -359,7 +359,7 @@ function ProjectConfigurationDialog({
   setCredentialLabel: (value: string) => void;
   setCredentialSecret: (value: string) => void;
   setCredentialUsername: (value: string) => void;
-}) {
+}) => {
   const { t } = useI18n();
   const [storageStateLabel, setStorageStateLabel] = useState('');
   const [storageStateError, setStorageStateError] = useState<string>();
@@ -718,7 +718,7 @@ function ProjectConfigurationDialog({
       </DialogContent>
     </Dialog>
   );
-}
+};
 
 type FixtureDraft = {
   name: string;
@@ -743,7 +743,7 @@ type FixtureHttpDraft = {
   responseOutputs: string;
 };
 
-function createFixtureHttpDraft(declaration?: FixtureLifecycleDeclaration): FixtureHttpDraft {
+const createFixtureHttpDraft = (declaration?: FixtureLifecycleDeclaration): FixtureHttpDraft => {
   const http = declaration?.mode === 'http' ? declaration.http : undefined;
   return {
     method: http?.method ?? 'POST',
@@ -752,9 +752,9 @@ function createFixtureHttpDraft(declaration?: FixtureLifecycleDeclaration): Fixt
     body: http?.body === undefined ? '' : JSON.stringify(http.body, null, 2),
     responseOutputs: http?.responseOutputs?.map((mapping) => `${mapping.outputName}: ${mapping.jsonPointer}`).join('\n') ?? '',
   };
-}
+};
 
-function createFixtureDraft(fixture?: FixtureAsset): FixtureDraft {
+const createFixtureDraft = (fixture?: FixtureAsset): FixtureDraft => {
   const parameterLines = (parameters: FixtureParameter[]) => parameters
     .map((parameter) => `${parameter.name}:${parameter.type}${parameter.required ? '' : '?'}`)
     .join('\n');
@@ -772,9 +772,9 @@ function createFixtureDraft(fixture?: FixtureAsset): FixtureDraft {
     concurrency: fixture?.concurrency ?? 'exclusive',
     resourceLocks: fixture?.resourceLocks.join(', ') ?? '',
   };
-}
+};
 
-function parseFixtureHttpDraft(draft: FixtureHttpDraft, allowResponseOutputs = true): FixtureHttpDeclaration | undefined {
+const parseFixtureHttpDraft = (draft: FixtureHttpDraft, allowResponseOutputs = true): FixtureHttpDeclaration | undefined => {
   const expectedStatuses = draft.expectedStatuses
     .split(',')
     .map((status) => status.trim())
@@ -809,22 +809,22 @@ function parseFixtureHttpDraft(draft: FixtureHttpDraft, allowResponseOutputs = t
     ...(body === undefined ? {} : { body }),
     ...(responseOutputs.length ? { responseOutputs } : {}),
   });
-}
+};
 
-function createFixtureLifecycle(
+const createFixtureLifecycle = (
   mode: FixtureExecutionMode,
   summary: string,
   httpDraft: FixtureHttpDraft,
   allowResponseOutputs = true,
-): FixtureLifecycleDeclaration | undefined {
+): FixtureLifecycleDeclaration | undefined => {
   if (mode === 'http') {
     const http = parseFixtureHttpDraft(httpDraft, allowResponseOutputs);
     return http ? { mode: 'http', summary, http } : undefined;
   }
   return { mode, summary };
-}
+};
 
-function FixtureHttpFields({
+const FixtureHttpFields = ({
   draft,
   idPrefix,
   onChange,
@@ -834,7 +834,7 @@ function FixtureHttpFields({
   idPrefix: string;
   onChange: (patch: Partial<FixtureHttpDraft>) => void;
   showResponseOutputs?: boolean;
-}) {
+}) => {
   const { t } = useI18n();
   const methodLabelId = `${idPrefix}-method-label`;
   const pathId = `${idPrefix}-path`;
@@ -880,9 +880,9 @@ function FixtureHttpFields({
       <p className="text-xs leading-5 text-muted-foreground">{t('project.fixture.http.safety')}</p>
     </div>
   );
-}
+};
 
-function parseFixtureParameters(value: string): { parameters: FixtureParameter[]; valid: boolean } {
+const parseFixtureParameters = (value: string): { parameters: FixtureParameter[]; valid: boolean } => {
   const lines = value.split(/\r?\n/u).map((line) => line.trim()).filter(Boolean);
   const parameters = lines.map((line) => {
     const [rawName, rawType, ...rest] = line.split(':').map((part) => part.trim());
@@ -901,9 +901,9 @@ function parseFixtureParameters(value: string): { parameters: FixtureParameter[]
   const valid = parameters.every((parameter): parameter is FixtureParameter => Boolean(parameter)) &&
     new Set(parameters.map((parameter) => parameter?.name)).size === parameters.length;
   return { parameters: parameters.filter((parameter): parameter is FixtureParameter => Boolean(parameter)), valid };
-}
+};
 
-function FixtureEditorDialog({
+const FixtureEditorDialog = ({
   fixture,
   onOpenChange,
   onSave,
@@ -915,7 +915,7 @@ function FixtureEditorDialog({
   onSave: (draft: FixtureDraft) => void;
   open: boolean;
   project: ProjectDraft;
-}) {
+}) => {
   const { t } = useI18n();
   const nameId = useId();
   const descriptionId = useId();
@@ -1054,9 +1054,9 @@ function FixtureEditorDialog({
       </DialogContent>
     </Dialog>
   );
-}
+};
 
-function FixtureSection({
+const FixtureSection = ({
   onUpdateProject,
   project,
   projectAssetBinding,
@@ -1064,7 +1064,7 @@ function FixtureSection({
   onUpdateProject: (updater: (project: ProjectDraft) => ProjectDraft) => void;
   project: ProjectDraft;
   projectAssetBinding?: ProjectAssetBinding;
-}) {
+}) => {
   const { t } = useI18n();
   const [editingFixture, setEditingFixture] = useState<FixtureAsset>();
   const [isEditorOpen, setIsEditorOpen] = useState(false);
@@ -1096,7 +1096,7 @@ function FixtureSection({
     };
   }, [project.id, projectAssetBinding, t]);
 
-  async function approveScriptTrust(fixture: FixtureAsset, lifecycle: FixtureScriptLifecycle) {
+  const approveScriptTrust = async (fixture: FixtureAsset, lifecycle: FixtureScriptLifecycle) => {
     const key = `${fixture.id}@${fixture.version}:${lifecycle}`;
     setTrustingKey(key);
     setScriptTrustError('');
@@ -1123,9 +1123,9 @@ function FixtureSection({
     } finally {
       setTrustingKey(undefined);
     }
-  }
+  };
 
-  function saveFixture(draft: FixtureDraft) {
+  const saveFixture = (draft: FixtureDraft) => {
     const inputs = parseFixtureParameters(draft.inputDefinitions).parameters;
     const outputs = parseFixtureParameters(draft.outputDefinitions).parameters;
     const now = new Date().toISOString();
@@ -1162,7 +1162,7 @@ function FixtureSection({
     });
     setIsEditorOpen(false);
     setEditingFixture(undefined);
-  }
+  };
 
   return (
     <section className="project-config-section">
@@ -1238,9 +1238,9 @@ function FixtureSection({
       />
     </section>
   );
-}
+};
 
-function ProjectAssetSnapshotSection({
+const ProjectAssetSnapshotSection = ({
   binding,
   onProjectAssetBound,
   onProjectAssetReloaded,
@@ -1250,7 +1250,7 @@ function ProjectAssetSnapshotSection({
   onProjectAssetBound?: (binding: ProjectAssetBinding) => void;
   onProjectAssetReloaded?: (result: ProjectAssetReloadResult) => void;
   project: ProjectDraft;
-}) {
+}) => {
   const { t } = useI18n();
   const [plan, setPlan] = useState<ProjectAssetMigrationPlan>();
   const [bindingStatus, setBindingStatus] = useState<ProjectAssetBindingStatus>();
@@ -1260,7 +1260,7 @@ function ProjectAssetSnapshotSection({
   const [isInspecting, setIsInspecting] = useState(false);
   const [error, setError] = useState('');
 
-  async function refreshBindingStatus() {
+  const refreshBindingStatus = async () => {
     if (!binding) {
       setBindingStatus(undefined);
       return;
@@ -1289,7 +1289,7 @@ function ProjectAssetSnapshotSection({
     } finally {
       setIsInspecting(false);
     }
-  }
+  };
 
   useEffect(() => {
     void refreshBindingStatus();
@@ -1305,7 +1305,7 @@ function ProjectAssetSnapshotSection({
     return null;
   }
 
-  async function prepareSnapshot() {
+  const prepareSnapshot = async () => {
     setStatus('planning');
     setError('');
     try {
@@ -1327,9 +1327,9 @@ function ProjectAssetSnapshotSection({
       setStatus('error');
       setError(caughtError instanceof Error ? caughtError.message : t('project.assets.error'));
     }
-  }
+  };
 
-  async function prepareReload() {
+  const prepareReload = async () => {
     if (!binding) {
       return;
     }
@@ -1345,9 +1345,9 @@ function ProjectAssetSnapshotSection({
       setStatus('error');
       setError(caughtError instanceof Error ? caughtError.message : t('project.assets.error'));
     }
-  }
+  };
 
-  async function prepareUpdate() {
+  const prepareUpdate = async () => {
     if (!binding) {
       return;
     }
@@ -1367,9 +1367,9 @@ function ProjectAssetSnapshotSection({
       setStatus('error');
       setError(caughtError instanceof Error ? caughtError.message : t('project.assets.error'));
     }
-  }
+  };
 
-  async function writeSnapshot() {
+  const writeSnapshot = async () => {
     if (!plan || plan.status !== 'ready') {
       return;
     }
@@ -1399,9 +1399,9 @@ function ProjectAssetSnapshotSection({
       setStatus('error');
       setError(caughtError instanceof Error ? caughtError.message : t('project.assets.error'));
     }
-  }
+  };
 
-  async function reloadSnapshot() {
+  const reloadSnapshot = async () => {
     if (!reloadPlan || reloadPlan.status !== 'ready' || !reloadPlan.snapshotRevision) {
       return;
     }
@@ -1431,9 +1431,9 @@ function ProjectAssetSnapshotSection({
       setStatus('error');
       setError(caughtError instanceof Error ? caughtError.message : t('project.assets.error'));
     }
-  }
+  };
 
-  async function updateSnapshot() {
+  const updateSnapshot = async () => {
     if (!binding || !updatePlan || updatePlan.status !== 'ready' || !updatePlan.snapshotRevision) {
       return;
     }
@@ -1464,7 +1464,7 @@ function ProjectAssetSnapshotSection({
       setStatus('error');
       setError(caughtError instanceof Error ? caughtError.message : t('project.assets.error'));
     }
-  }
+  };
 
   const isBusy = status === 'planning' || status === 'writing' || status === 'reloadPlanning' || status === 'reloading' || status === 'updatePlanning' || status === 'updating';
   const canWrite = plan?.status === 'ready' && status !== 'written';
@@ -1600,9 +1600,9 @@ function ProjectAssetSnapshotSection({
       </div>
     </section>
   );
-}
+};
 
-function GroupRow({
+const GroupRow = ({
   group,
   active,
   selectedProject,
@@ -1616,7 +1616,7 @@ function GroupRow({
   onDeleteGroup: (groupId: string) => void;
   onSelectGroup: (groupId: string) => void;
   onUpdateProject: (updater: (project: ProjectDraft) => ProjectDraft) => void;
-}) {
+}) => {
   const { locale, t } = useI18n();
   const caseCount = selectedProject.testCases.filter((item) => item.groupId === group.id).length;
 
@@ -1681,9 +1681,9 @@ function GroupRow({
       />
     </div>
   );
-}
+};
 
-function EnvironmentRow({
+const EnvironmentRow = ({
   environment,
   selectedProject,
   onUpdateProject,
@@ -1691,7 +1691,7 @@ function EnvironmentRow({
   environment: ProjectEnvironment;
   selectedProject: ProjectDraft;
   onUpdateProject: (updater: (project: ProjectDraft) => ProjectDraft) => void;
-}) {
+}) => {
   const { t } = useI18n();
 
   return (
@@ -1832,4 +1832,4 @@ function EnvironmentRow({
       </div>
     </div>
   );
-}
+};

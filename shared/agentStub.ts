@@ -163,7 +163,7 @@ export interface PlannedAgentRunRequest {
   modelAssignments?: AgentModelAssignment[];
 }
 
-function modeToAction(mode: AgentStubRequest['mode']): AgentStepAction {
+const modeToAction = (mode: AgentStubRequest['mode']): AgentStepAction => {
   if (mode === 'aiAssert') {
     return 'assert';
   }
@@ -173,13 +173,13 @@ function modeToAction(mode: AgentStubRequest['mode']): AgentStepAction {
   }
 
   return 'observe';
-}
+};
 
-function modeToSourceStepType(mode: AgentStubRequest['mode']): AgentSourceStepType {
+const modeToSourceStepType = (mode: AgentStubRequest['mode']): AgentSourceStepType => {
   return mode;
-}
+};
 
-function formatModelAssignments(assignments: AgentModelAssignment[] | undefined): string {
+const formatModelAssignments = (assignments: AgentModelAssignment[] | undefined): string => {
   if (!assignments?.length) {
     return '';
   }
@@ -191,9 +191,9 @@ function formatModelAssignments(assignments: AgentModelAssignment[] | undefined)
       return `${assignment.role[0]!.toUpperCase()}${assignment.role.slice(1)}: ${status}`;
     })
     .join('；');
-}
+};
 
-function formatPlannerProvenance(planner: AgentPlanProvenance | undefined): string {
+const formatPlannerProvenance = (planner: AgentPlanProvenance | undefined): string => {
   if (!planner) {
     return '';
   }
@@ -201,9 +201,9 @@ function formatPlannerProvenance(planner: AgentPlanProvenance | undefined): stri
     return `Planner 模型：${planner.modelName || '未命名模型'}`;
   }
   return planner.fallbackReason ? `Planner 已降级为规则规划：${planner.fallbackReason}` : 'Planner：规则规划';
-}
+};
 
-export function createStubAgentRun(request: AgentStubRequest): AgentRunResult {
+export const createStubAgentRun = (request: AgentStubRequest): AgentRunResult => {
   const now = new Date().toISOString();
   const runId = `agent-run-${Date.now()}`;
   const intent = createAgentIntent({
@@ -453,9 +453,9 @@ export function createStubAgentRun(request: AgentStubRequest): AgentRunResult {
         ? request.verificationSummary ?? `Agent 已生成执行计划：${plan.steps.map((step) => step.title).join(' -> ')}。`
         : verificationSummary,
   };
-}
+};
 
-export function createPlannedAgentRun(request: PlannedAgentRunRequest): AgentRunResult {
+export const createPlannedAgentRun = (request: PlannedAgentRunRequest): AgentRunResult => {
   const now = new Date().toISOString();
   const runId = `agent-run-${Date.now()}`;
   const intent = createAgentIntent({
@@ -821,21 +821,21 @@ export function createPlannedAgentRun(request: PlannedAgentRunRequest): AgentRun
     endedAt: now,
     ...(failureReason ? { failureReason } : {}),
   };
-}
+};
 
-function addUsageBucket(target: AgentUsageBucket, source: AgentUsageBucket): AgentUsageBucket {
+const addUsageBucket = (target: AgentUsageBucket, source: AgentUsageBucket): AgentUsageBucket => {
   return {
     promptTokens: target.promptTokens + source.promptTokens,
     completionTokens: target.completionTokens + source.completionTokens,
     totalTokens: target.totalTokens + source.totalTokens,
     calls: target.calls + source.calls,
   };
-}
+};
 
-function mergeUsageBuckets(
+const mergeUsageBuckets = (
   metrics: AgentExecutionMetrics[],
   key: 'byIntent' | 'byModel',
-): Record<string, AgentUsageBucket> {
+): Record<string, AgentUsageBucket> => {
   const merged: Record<string, AgentUsageBucket> = {};
   metrics.forEach((metric) => {
     Object.entries(metric[key]).forEach(([bucketKey, bucket]) => {
@@ -846,9 +846,9 @@ function mergeUsageBuckets(
     });
   });
   return merged;
-}
+};
 
-function mergeExecutionMetrics(stepRuns: AgentRunResult[]): AgentExecutionMetrics | undefined {
+const mergeExecutionMetrics = (stepRuns: AgentRunResult[]): AgentExecutionMetrics | undefined => {
   const metrics = stepRuns.flatMap((run) => (run.metrics ? [run.metrics] : []));
   if (!metrics.length) {
     return undefined;
@@ -877,9 +877,9 @@ function mergeExecutionMetrics(stepRuns: AgentRunResult[]): AgentExecutionMetric
     byIntent: mergeUsageBuckets(metrics, 'byIntent'),
     byModel: mergeUsageBuckets(metrics, 'byModel'),
   };
-}
+};
 
-function mergeModelAssignments(stepRuns: AgentRunResult[]): AgentModelAssignment[] {
+const mergeModelAssignments = (stepRuns: AgentRunResult[]): AgentModelAssignment[] => {
   const assignmentsByRole = new Map<AgentModelAssignment['role'], AgentModelAssignment>();
   stepRuns.forEach((run) => {
     run.modelAssignments?.forEach((assignment) => {
@@ -889,12 +889,12 @@ function mergeModelAssignments(stepRuns: AgentRunResult[]): AgentModelAssignment
     });
   });
   return Array.from(assignmentsByRole.values());
-}
+};
 
-function remapReporterRecoveryPlan(
+const remapReporterRecoveryPlan = (
   reporter: AgentReporterSummary | undefined,
   sourceStepId: string | undefined,
-): AgentReporterSummary | undefined {
+): AgentReporterSummary | undefined => {
   if (!reporter || !sourceStepId) {
     return reporter;
   }
@@ -905,17 +905,17 @@ function remapReporterRecoveryPlan(
       ? { recoveryPlan: { ...reporter.recoveryPlan, failedStepId: sourceStepId } }
       : {}),
   };
-}
+};
 
-function workflowStepAction(step: WorkflowAgentStepInput, stepRun: AgentRunResult | undefined): AgentStepAction {
+const workflowStepAction = (step: WorkflowAgentStepInput, stepRun: AgentRunResult | undefined): AgentStepAction => {
   const executedStep = stepRun?.plan.steps.find((candidate) => candidate.sourceStepType === step.type);
   if (executedStep) {
     return executedStep.action;
   }
   return step.type === 'aiAssert' ? 'assert' : step.type === 'aiQuery' ? 'extract' : 'observe';
-}
+};
 
-export function createWorkflowAgentRun(request: WorkflowAgentRunRequest): AgentRunResult {
+export const createWorkflowAgentRun = (request: WorkflowAgentRunRequest): AgentRunResult => {
   const now = new Date().toISOString();
   const runId = request.runId ?? `agent-run-workflow-${Date.now()}`;
   const intent = createAgentIntent({
@@ -1083,12 +1083,12 @@ export function createWorkflowAgentRun(request: WorkflowAgentRunRequest): AgentR
     endedAt: request.stepRuns.at(-1)?.endedAt ?? now,
     ...(failureReason ? { failureReason } : {}),
   };
-}
+};
 
-function testCaseStepAction(
+const testCaseStepAction = (
   step: TestCaseDraft['steps'][number],
   stepRun: AgentRunResult | undefined,
-): AgentStepAction {
+): AgentStepAction => {
   if (step.type === 'recordingReplay' || step.type === 'manual') {
     return 'observe';
   }
@@ -1098,9 +1098,9 @@ function testCaseStepAction(
     return executedStep.action;
   }
   return step.type === 'aiAssert' ? 'assert' : step.type === 'aiQuery' ? 'extract' : 'observe';
-}
+};
 
-export function createTestCaseAgentRun(request: TestCaseAgentRunRequest): AgentRunResult {
+export const createTestCaseAgentRun = (request: TestCaseAgentRunRequest): AgentRunResult => {
   const now = new Date().toISOString();
   const runId = request.runId ?? `agent-run-test-case-${Date.now()}`;
   const documentId = getTestCasePrdPath(request.testCase)?.documentId;
@@ -1266,4 +1266,4 @@ export function createTestCaseAgentRun(request: TestCaseAgentRunRequest): AgentR
     endedAt: executedRuns.at(-1)?.endedAt ?? now,
     ...(failureReason ? { failureReason } : {}),
   };
-}
+};

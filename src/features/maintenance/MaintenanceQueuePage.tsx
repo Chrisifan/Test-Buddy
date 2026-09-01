@@ -18,7 +18,7 @@ export interface MaintenanceQueuePageProps {
   onOpenEvidence?: (request: MaintenanceEvidenceOpenRequest) => Promise<void>;
 }
 
-export function MaintenanceQueuePage({ drafts, onAccept, onReject, onOpenEvidence }: MaintenanceQueuePageProps) {
+export const MaintenanceQueuePage = ({ drafts, onAccept, onReject, onOpenEvidence }: MaintenanceQueuePageProps) => {
   const { t } = useI18n();
   const [confirmed, setConfirmed] = useState<Record<string, boolean>>({});
   const [rejectionRationales, setRejectionRationales] = useState<Record<string, string>>({});
@@ -27,7 +27,7 @@ export function MaintenanceQueuePage({ drafts, onAccept, onReject, onOpenEvidenc
   const [errors, setErrors] = useState<Record<string, boolean>>({});
   const ordered = useMemo(() => [...drafts].sort((left, right) => right.createdAt.localeCompare(left.createdAt)), [drafts]);
 
-  async function runDraftAction(draftId: string, action: () => Promise<void>) {
+  const runDraftAction = async (draftId: string, action: () => Promise<void>) => {
     setErrors((current) => ({ ...current, [draftId]: false }));
     setPending((current) => ({ ...current, [draftId]: true }));
     try {
@@ -37,7 +37,7 @@ export function MaintenanceQueuePage({ drafts, onAccept, onReject, onOpenEvidenc
     } finally {
       setPending((current) => ({ ...current, [draftId]: false }));
     }
-  }
+  };
 
   return (
     <section className="mx-auto flex w-full max-w-6xl flex-col gap-5 px-4 py-6 sm:px-6">
@@ -182,22 +182,22 @@ export function MaintenanceQueuePage({ drafts, onAccept, onReject, onOpenEvidenc
       }) : <p className="py-12 text-center text-sm text-[var(--muted-foreground)]">{t('maintenance.empty')}</p>}
     </section>
   );
-}
+};
 
-function maintenanceStatusLabel(status: MaintenanceDraft['status'], t: ReturnType<typeof useI18n>['t']): string {
+const maintenanceStatusLabel = (status: MaintenanceDraft['status'], t: ReturnType<typeof useI18n>['t']): string => {
   switch (status) {
     case 'draft': return t('maintenance.status.draft');
     case 'accepted': return t('maintenance.status.accepted');
     case 'rejected': return t('maintenance.status.rejected');
     case 'stale': return t('maintenance.status.stale');
   }
-}
+};
 
-function maintenanceAuditActionLabel(action: MaintenanceDraft['audit'][number]['action'], t: ReturnType<typeof useI18n>['t']): string {
+const maintenanceAuditActionLabel = (action: MaintenanceDraft['audit'][number]['action'], t: ReturnType<typeof useI18n>['t']): string => {
   switch (action) {
     case 'created': return t('maintenance.audit.created');
     case 'accepted': return t('maintenance.audit.accepted');
     case 'rejected': return t('maintenance.audit.rejected');
     case 'stale': return t('maintenance.audit.stale');
   }
-}
+};

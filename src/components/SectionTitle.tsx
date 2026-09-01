@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 
-export function SectionTitle({
+export const SectionTitle = ({
   eyebrow,
   title,
   description,
@@ -10,7 +10,7 @@ export function SectionTitle({
   title: string;
   description?: string;
   action?: ReactNode;
-}) {
+}) => {
   return (
     <div className="flex items-start justify-between gap-4">
       <div className="space-y-1.5">
@@ -25,4 +25,4 @@ export function SectionTitle({
       {action}
     </div>
   );
-}
+};

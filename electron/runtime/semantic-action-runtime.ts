@@ -95,11 +95,11 @@ type MidsceneActionExecution<T> =
   | { ok: true; value: T; reportPath?: string; metrics?: AgentExecutionMetrics }
   | { ok: false; error: unknown; reportPath?: string; metrics?: AgentExecutionMetrics };
 
-function getErrorMessage(error: unknown, redactor: SecretRedactor): string {
+const getErrorMessage = (error: unknown, redactor: SecretRedactor): string => {
   return redactor.redactError(error);
-}
+};
 
-function formatExtractedValue(value: unknown): string {
+const formatExtractedValue = (value: unknown): string => {
   if (typeof value === 'string') {
     return value;
   }
@@ -108,14 +108,14 @@ function formatExtractedValue(value: unknown): string {
   } catch {
     return String(value);
   }
-}
+};
 
-function createFailedActionResult(
+const createFailedActionResult = (
   actionLabel: string,
   target: string,
   execution: Extract<MidsceneActionExecution<unknown>, { ok: false }>,
   redactor: SecretRedactor,
-): SemanticActionResult {
+): SemanticActionResult => {
   const failureReason = getErrorMessage(execution.error, redactor);
   return {
     status: 'failed',
@@ -125,9 +125,9 @@ function createFailedActionResult(
     ...(execution.reportPath ? { reportPath: execution.reportPath } : {}),
     ...(execution.metrics ? { metrics: execution.metrics } : {}),
   };
-}
+};
 
-function createModelConfig(config: ResolvedMidsceneConfig): Record<string, string> {
+const createModelConfig = (config: ResolvedMidsceneConfig): Record<string, string> => {
   return {
     MIDSCENE_MODEL_BASE_URL: config.modelBaseUrl,
     MIDSCENE_MODEL_API_KEY: config.modelApiKey,
@@ -135,39 +135,39 @@ function createModelConfig(config: ResolvedMidsceneConfig): Record<string, strin
     MIDSCENE_MODEL_FAMILY: config.modelFamily,
     ...(config.openaiHttpProxy ? { MIDSCENE_MODEL_HTTP_PROXY: config.openaiHttpProxy } : {}),
   };
-}
+};
 
-function parseReplanningCycleLimit(value: string): number | undefined {
+const parseReplanningCycleLimit = (value: string): number | undefined => {
   const parsed = Number.parseInt(value, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
-}
+};
 
-function subtractBucket(current: AgentUsageBucket | undefined, previous: AgentUsageBucket | undefined): AgentUsageBucket {
+const subtractBucket = (current: AgentUsageBucket | undefined, previous: AgentUsageBucket | undefined): AgentUsageBucket => {
   return {
     promptTokens: Math.max(0, (current?.promptTokens ?? 0) - (previous?.promptTokens ?? 0)),
     completionTokens: Math.max(0, (current?.completionTokens ?? 0) - (previous?.completionTokens ?? 0)),
     totalTokens: Math.max(0, (current?.totalTokens ?? 0) - (previous?.totalTokens ?? 0)),
     calls: Math.max(0, (current?.calls ?? 0) - (previous?.calls ?? 0)),
   };
-}
+};
 
-function subtractBuckets(
+const subtractBuckets = (
   current: Record<string, AgentUsageBucket>,
   previous: Record<string, AgentUsageBucket>,
-): Record<string, AgentUsageBucket> {
+): Record<string, AgentUsageBucket> => {
   return Object.fromEntries(
     [...new Set([...Object.keys(current), ...Object.keys(previous)])]
       .map((key) => [key, subtractBucket(current[key], previous[key])] as const)
       .filter(([, bucket]) => bucket.calls || bucket.totalTokens),
   );
-}
+};
 
-function createExecutionMetrics(
+const createExecutionMetrics = (
   current: MidsceneUsageMetrics,
   previous: MidsceneUsageMetrics,
   durationMs: number,
   replanningCycleLimit: number | undefined,
-): AgentExecutionMetrics {
+): AgentExecutionMetrics => {
   return {
     durationMs,
     modelTimeCostMs: Math.max(0, current.totalTimeCostMs - previous.totalTimeCostMs),
@@ -180,7 +180,7 @@ function createExecutionMetrics(
     byIntent: subtractBuckets(current.byIntent, previous.byIntent),
     byModel: subtractBuckets(current.byModel, previous.byModel),
   };
-}
+};
 
 const defaultAgentFactory: MidsceneAgentFactory = (page, options) =>
   new PlaywrightAgent(page as Page, options) as MidsceneAgent;

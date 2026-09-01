@@ -194,23 +194,23 @@ type PendingDeletion =
   | { kind: 'group'; id: string; description: string }
   | { kind: 'recording'; id: string; description: string };
 
-function latestSuiteReference(project: ProjectDraft | undefined): VersionedTestAssetReference | undefined {
+const latestSuiteReference = (project: ProjectDraft | undefined): VersionedTestAssetReference | undefined => {
   const latestSuite = [...(project?.suites ?? [])]
     .sort((left, right) => right.version - left.version || left.id.localeCompare(right.id))[0];
   return latestSuite ? { id: latestSuite.id, version: latestSuite.version } : undefined;
-}
+};
 
-function latestTestCaseReference(project: ProjectDraft | undefined, id?: string): VersionedTestAssetReference | undefined {
+const latestTestCaseReference = (project: ProjectDraft | undefined, id?: string): VersionedTestAssetReference | undefined => {
   const latest = listLatestTestCaseVersions(project ?? { testCases: [] })
     .find((testCase) => !id || testCase.id === id);
   return latest ? { id: latest.id, version: latest.version ?? 1 } : undefined;
-}
+};
 
-function persistedRunStatus(status: RunTone): RunStatus {
+const persistedRunStatus = (status: RunTone): RunStatus => {
   return status === 'neutral' ? 'blocked' : status;
-}
+};
 
-function persistedRunReason(status: RunStatus, message: string): RunReason | undefined {
+const persistedRunReason = (status: RunStatus, message: string): RunReason | undefined => {
   if (status === 'running' || status === 'passed') {
     return undefined;
   }
@@ -227,9 +227,9 @@ function persistedRunReason(status: RunStatus, message: string): RunReason | und
     case 'error':
       return { code: 'executorError', message };
   }
-}
+};
 
-function agentStatusForPersistedRun(status: RunStatus): AgentRunResult['status'] {
+const agentStatusForPersistedRun = (status: RunStatus): AgentRunResult['status'] => {
   switch (status) {
     case 'running':
     case 'passed':
@@ -242,34 +242,34 @@ function agentStatusForPersistedRun(status: RunStatus): AgentRunResult['status']
     case 'cancelled':
       return 'neutral';
   }
-}
+};
 
-function RouteLoadingPlaceholder() {
+const RouteLoadingPlaceholder = () => {
   return <div aria-busy="true" className="h-full min-h-0 animate-pulse rounded-[var(--panel-radius)] bg-muted/30" />;
-}
+};
 
-function createTimestampLabel(): string {
+const createTimestampLabel = (): string => {
   const now = new Date();
   return `${now.getHours().toString().padStart(2, '0')}:${now
     .getMinutes()
     .toString()
     .padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}`;
-}
+};
 
-function isGatedFeaturePage(page: AppPage): page is 'nl' | 'workflow' | 'recording' {
+const isGatedFeaturePage = (page: AppPage): page is 'nl' | 'workflow' | 'recording' => {
   return page === 'nl' || page === 'workflow' || page === 'recording';
-}
+};
 
-function isStaleProjectRevisionError(error: unknown): boolean {
+const isStaleProjectRevisionError = (error: unknown): boolean => {
   if (!error || typeof error !== 'object' || !('code' in error)) {
     return false;
   }
 
   const code = error.code;
   return code === 'staleProjectRevision' || code === 'projectRevisionChanged';
-}
+};
 
-export function App() {
+export const App = () => {
   const [activePage, setActivePage] = useState<AppPage>('home');
   const [isPageExiting, setIsPageExiting] = useState(false);
   const [isHydrated, setIsHydrated] = useState(false);
@@ -401,7 +401,7 @@ export function App() {
   const t = createTranslator(effectiveLocale);
   const maintenanceReviewAvailable = canReviewMaintenanceDrafts();
 
-  function persistLatestStudioState(mode: SaveMode) {
+  const persistLatestStudioState = (mode: SaveMode) => {
     if (storageLoadError || !latestStudioStateRef.current) {
       return;
     }
@@ -437,9 +437,9 @@ export function App() {
     } else {
       saveTimerRef.current = setTimeout(() => void save(), SAVE_DEBOUNCE_MS);
     }
-  }
+  };
 
-  function applyStudioState(state: StudioState) {
+  const applyStudioState = (state: StudioState) => {
     setProjects(state.projects);
     setProjectAssetBindings(state.projectAssetBindings);
     setSelectedProjectId(state.selectedProjectId);
@@ -469,11 +469,11 @@ export function App() {
     setStartupGuide(state.startupGuide);
     setBrowserSession(state.browserSession);
     setNavigateUrl(hydratedProject?.defaultUrl ?? state.runtimeProfile.baseUrl);
-  }
+  };
 
-  async function reloadMainOwnedStudioState() {
+  const reloadMainOwnedStudioState = async () => {
     applyStudioState(await loadStudioState());
-  }
+  };
 
   useEffect(() => {
     const previousLocale = previousLocaleRef.current;
@@ -691,7 +691,7 @@ export function App() {
     return unsubscribe;
   }, [selectedRecordingId]);
 
-  function switchPage(page: AppPage) {
+  const switchPage = (page: AppPage) => {
     if (page === activePage) {
       return;
     }
@@ -715,9 +715,9 @@ export function App() {
       setIsPageExiting(false);
       pageTransitionTimer.current = null;
     }, PAGE_EXIT_DURATION_MS);
-  }
+  };
 
-  function updateRuntimeProfile(patch: Partial<RuntimeProfile>) {
+  const updateRuntimeProfile = (patch: Partial<RuntimeProfile>) => {
     const nextRuntimeProfile = {
       ...(latestStudioStateRef.current?.runtimeProfile ?? runtimeProfile),
       ...patch,
@@ -732,9 +732,9 @@ export function App() {
       ...current,
       ...patch,
     }));
-  }
+  };
 
-  function updateMidsceneConfig(patch: Partial<MidsceneConfig>) {
+  const updateMidsceneConfig = (patch: Partial<MidsceneConfig>) => {
     const nextMidsceneConfig = {
       ...(latestStudioStateRef.current?.midsceneConfig ?? midsceneConfig),
       ...patch,
@@ -749,9 +749,9 @@ export function App() {
       ...current,
       ...patch,
     }));
-  }
+  };
 
-  function updateAgentModelConfig(role: AgentModelRole, patch: Partial<AgentRoleModelConfig>) {
+  const updateAgentModelConfig = (role: AgentModelRole, patch: Partial<AgentRoleModelConfig>) => {
     const currentAgentModelConfig = latestStudioStateRef.current?.agentModelConfig ?? agentModelConfig;
     const nextAgentModelConfig = {
       ...currentAgentModelConfig,
@@ -773,30 +773,30 @@ export function App() {
         ...patch,
       },
     }));
-  }
+  };
 
-  function updateModelSecretRef(scope: ModelSecretScope, modelSecret: ModelSecretRef) {
+  const updateModelSecretRef = (scope: ModelSecretScope, modelSecret: ModelSecretRef) => {
     if (scope === 'midscene') {
       updateMidsceneConfig({ modelSecret });
       return;
     }
 
     updateAgentModelConfig(scope.slice('agent:'.length) as AgentModelRole, { modelSecret });
-  }
+  };
 
-  async function handleSaveModelSecret(scope: ModelSecretScope, value: string): Promise<void> {
+  const handleSaveModelSecret = async (scope: ModelSecretScope, value: string): Promise<void> => {
     const modelSecret = await saveModelSecret({ scope, value });
     updateModelSecretRef(scope, modelSecret);
     persistLatestStudioState('immediate');
-  }
+  };
 
-  async function handleClearModelSecret(scope: ModelSecretScope): Promise<void> {
+  const handleClearModelSecret = async (scope: ModelSecretScope): Promise<void> => {
     const modelSecret = await clearModelSecret({ scope });
     updateModelSecretRef(scope, modelSecret);
     persistLatestStudioState('immediate');
-  }
+  };
 
-  function updateAppearance(patch: Partial<AppearanceConfig>) {
+  const updateAppearance = (patch: Partial<AppearanceConfig>) => {
     const nextAppearance = {
       ...(latestStudioStateRef.current?.appearance ?? appearance),
       ...patch,
@@ -811,20 +811,20 @@ export function App() {
       ...current,
       ...patch,
     }));
-  }
+  };
 
-  function completeStartupGuide(mode: 'configured' | 'skipped') {
+  const completeStartupGuide = (mode: 'configured' | 'skipped') => {
     setStartupGuide({
       completed: true,
       completedAt: new Date().toISOString(),
       mode,
     });
-  }
+  };
 
-  function updateSelectedProject(
+  const updateSelectedProject = (
     updater: (project: ProjectDraft) => ProjectDraft,
     saveMode: SaveMode = 'debounced',
-  ) {
+  ) => {
     if (!selectedProject) {
       return;
     }
@@ -848,12 +848,12 @@ export function App() {
           : project,
       ),
     );
-  }
+  };
 
-  function updateSelectedTestCase(
+  const updateSelectedTestCase = (
     updater: (testCase: TestCaseDraft) => TestCaseDraft,
     _saveMode: SaveMode = 'debounced',
-  ) {
+  ) => {
     if (!caseDraft) {
       return;
     }
@@ -863,17 +863,17 @@ export function App() {
       setSelectedGroupId(preview.groupId);
     }
     setCaseDraft((current) => current ? updater(current) : current);
-  }
+  };
 
-  function handlePublishReusableFlow(flow: ReusableFlowAsset) {
+  const handlePublishReusableFlow = (flow: ReusableFlowAsset) => {
     updateSelectedProject((project) => ({
       ...project,
       reusableFlows: [...project.reusableFlows, flow],
     }), 'immediate');
     setSelectedReusableFlowReference({ id: flow.id, version: flow.version });
-  }
+  };
 
-  function handleUpgradeReusableFlowCases(source: VersionedTestAssetReference, target: VersionedTestAssetReference, selected: VersionedTestAssetReference[]) {
+  const handleUpgradeReusableFlowCases = (source: VersionedTestAssetReference, target: VersionedTestAssetReference, selected: VersionedTestAssetReference[]) => {
     updateSelectedProject((project) => {
       const plan = planReusableFlowCaseUpgrade(project, source, target, selected);
       if (plan.issues.length || !plan.updatedCases.length) return project;
@@ -882,33 +882,33 @@ export function App() {
         testCases: [...project.testCases, ...plan.updatedCases],
       };
     }, 'immediate');
-  }
+  };
 
-  function handleEditCaseVersion() {
+  const handleEditCaseVersion = () => {
     if (!selectedTestCase || !selectedTestCaseReference) {
       return;
     }
     setCaseDraft(structuredClone(selectedTestCase));
     setCaseDraftSourceReference({ ...selectedTestCaseReference });
-  }
+  };
 
-  function handleDiscardCaseDraft() {
+  const handleDiscardCaseDraft = () => {
     setCaseDraft(undefined);
     setCaseDraftSourceReference(undefined);
-  }
+  };
 
-  function transitionSelectedTestCase(
+  const transitionSelectedTestCase = (
     reference: VersionedTestAssetReference | undefined,
     groupId?: string,
-  ) {
+  ) => {
     handleDiscardCaseDraft();
     if (groupId !== undefined) {
       setSelectedGroupId(groupId);
     }
     setSelectedTestCaseReference(reference);
-  }
+  };
 
-  function handlePublishCase() {
+  const handlePublishCase = () => {
     if (!selectedProject || !caseDraft || !caseDraftSourceReference || !selectedTestCaseReference ||
       !isEditingSelectedCase || caseDraft.id !== caseDraftSourceReference.id) {
       handleDiscardCaseDraft();
@@ -931,9 +931,9 @@ export function App() {
     setSelectedTestCaseReference({ id: nextCase.id, version: nextCase.version ?? 1 });
     setSelectedGroupId(nextCase.groupId);
     handleDiscardCaseDraft();
-  }
+  };
 
-  function updateSelectedWorkflow(updater: (workflow: WorkflowDraft) => WorkflowDraft) {
+  const updateSelectedWorkflow = (updater: (workflow: WorkflowDraft) => WorkflowDraft) => {
     if (!caseDraft) {
       return;
     }
@@ -950,9 +950,9 @@ export function App() {
         steps: nextWorkflow.steps,
       };
     });
-  }
+  };
 
-  function syncSelectionToProject(project?: ProjectDraft) {
+  const syncSelectionToProject = (project?: ProjectDraft) => {
     setSelectedProjectId(project?.id ?? '');
     setSelectedGroupId(project?.groups[0]?.id ?? '');
     setSelectedTestCaseReference(latestTestCaseReference(project));
@@ -966,9 +966,9 @@ export function App() {
       projectId: project?.id,
       environmentId: project?.selectedEnvironmentId,
     }));
-  }
+  };
 
-  function appendSystemMessage(text: string) {
+  const appendSystemMessage = (text: string) => {
     setChatEntries((current) => [
       ...current,
       {
@@ -977,60 +977,60 @@ export function App() {
         text,
       },
     ]);
-  }
+  };
 
-  function getRequiredSettingsSection(page?: AppPage): SettingsSectionId {
+  const getRequiredSettingsSection = (page?: AppPage): SettingsSectionId => {
     if (page && isGatedFeaturePage(page) && !midsceneReady) {
       return 'midscene';
     }
 
     return 'appearance';
-  }
+  };
 
-  function openSettings(page?: AppPage, section?: SettingsSectionId) {
+  const openSettings = (page?: AppPage, section?: SettingsSectionId) => {
     setPendingPage(page ?? null);
     setSettingsInitialSection(section ?? getRequiredSettingsSection(page));
     setIsSettingsOpen(true);
-  }
+  };
 
-  function closeSettings() {
+  const closeSettings = () => {
     setIsSettingsOpen(false);
     setPendingPage(null);
-  }
+  };
 
-  function goToPage(page: AppPage) {
+  const goToPage = (page: AppPage) => {
     if (isGatedFeaturePage(page) && !midsceneReady) {
       openSettings(page);
       return;
     }
 
     switchPage(page);
-  }
+  };
 
-  function ensureMidsceneReady(targetPage?: AppPage): boolean {
+  const ensureMidsceneReady = (targetPage?: AppPage): boolean => {
     if (midsceneReady) {
       return true;
     }
 
     openSettings(targetPage ?? activePage);
     return false;
-  }
+  };
 
-  function handleCreateProject() {
+  const handleCreateProject = () => {
     const next = createEmptyProject(projects.length + 1);
     setProjects((current) => [next, ...current]);
     syncSelectionToProject(next);
     switchPage('projects');
-  }
+  };
 
-  function handleProjectAssetBound(binding: ProjectAssetBinding) {
+  const handleProjectAssetBound = (binding: ProjectAssetBinding) => {
     setProjectAssetBindings((current) => [
       binding,
       ...current.filter((candidate) => candidate.projectId !== binding.projectId),
     ]);
-  }
+  };
 
-  function handleProjectAssetReloaded(result: ProjectAssetReloadResult) {
+  const handleProjectAssetReloaded = (result: ProjectAssetReloadResult) => {
     setProjects((current) => current.map((project) => project.id === result.project.id ? result.project : project));
     setProjectAssetBindings((current) => [
       result.binding,
@@ -1039,17 +1039,17 @@ export function App() {
     if (selectedProjectId === result.project.id) {
       syncSelectionToProject(result.project);
     }
-  }
+  };
 
-  function handleSelectProject(projectId: string) {
+  const handleSelectProject = (projectId: string) => {
     const project = projects.find((item) => item.id === projectId);
     if (!project) {
       return;
     }
     syncSelectionToProject(project);
-  }
+  };
 
-  function handleDeleteProject(projectId: string) {
+  const handleDeleteProject = (projectId: string) => {
     const project = projects.find((item) => item.id === projectId);
     if (!project) {
       return;
@@ -1060,9 +1060,9 @@ export function App() {
       id: projectId,
       description: t('app.confirm.deleteProject', { name: project.name }),
     });
-  }
+  };
 
-  function performDeleteProject(projectId: string) {
+  const performDeleteProject = (projectId: string) => {
     const project = projects.find((item) => item.id === projectId);
     if (!project) {
       return;
@@ -1096,14 +1096,14 @@ export function App() {
       environmentId: nextProject?.selectedEnvironmentId,
     }));
     switchPage(nextProject ? 'projects' : 'home');
-  }
+  };
 
-  function handleCreateDocument(payload: {
+  const handleCreateDocument = (payload: {
     name: string;
     kind: PrdDocumentKind;
     size: number;
     sourceText: string;
-  }) {
+  }) => {
     if (!selectedProject) {
       return;
     }
@@ -1115,9 +1115,9 @@ export function App() {
     }));
     setSelectedDocumentId(document.id);
     switchPage('documents');
-  }
+  };
 
-  function handleUpdateDocument(documentId: string, sourceText: string) {
+  const handleUpdateDocument = (documentId: string, sourceText: string) => {
     updateSelectedProject((project) => ({
       ...project,
       documents: project.documents.map((document) =>
@@ -1130,9 +1130,9 @@ export function App() {
           : document,
       ),
     }));
-  }
+  };
 
-  async function handleAnalyzeDocument(documentId: string) {
+  const handleAnalyzeDocument = async (documentId: string) => {
     if (!selectedProject) {
       return;
     }
@@ -1167,9 +1167,9 @@ export function App() {
     } finally {
       setSemanticAnalyzingDocumentId(null);
     }
-  }
+  };
 
-  function handleCreateCaseFromPath(documentId: string, pathId: string) {
+  const handleCreateCaseFromPath = (documentId: string, pathId: string) => {
     if (!selectedProject || !selectedEnvironment) {
       return;
     }
@@ -1206,9 +1206,9 @@ export function App() {
     }));
     transitionSelectedTestCase({ id: testCase.id, version: testCase.version ?? 1 }, groupId);
     switchPage('cases');
-  }
+  };
 
-  function ensureGroupForGeneratedPath(groupName: string) {
+  const ensureGroupForGeneratedPath = (groupName: string) => {
     const existingGroup = selectedProject?.groups.find((group) => group.name === groupName);
     if (existingGroup) {
       return {
@@ -1228,9 +1228,9 @@ export function App() {
       groupId: generatedGroup.id,
       generatedGroup,
     };
-  }
+  };
 
-  function handleCreateRecordingFromPath(documentId: string, pathId: string) {
+  const handleCreateRecordingFromPath = (documentId: string, pathId: string) => {
     if (!selectedProject || !selectedEnvironment) {
       return;
     }
@@ -1259,9 +1259,9 @@ export function App() {
     setSelectedGroupId(groupId);
     setSelectedRecordingId(recording.id);
     switchPage('recording');
-  }
+  };
 
-  function handleCreateAllCasesFromDocument(documentId: string) {
+  const handleCreateAllCasesFromDocument = (documentId: string) => {
     if (!selectedProject || !selectedEnvironment) {
       return;
     }
@@ -1316,9 +1316,9 @@ export function App() {
       firstCase.groupId ?? selectedProject.groups[0]?.id ?? '',
     );
     switchPage('cases');
-  }
+  };
 
-  function handleCreateAllCasesFromMatrix() {
+  const handleCreateAllCasesFromMatrix = () => {
     if (!selectedProject || !selectedEnvironment) {
       return;
     }
@@ -1373,9 +1373,9 @@ export function App() {
       firstCase.groupId ?? selectedProject.groups[0]?.id ?? '',
     );
     switchPage('cases');
-  }
+  };
 
-  function handleCreateAllRecordingsFromMatrix() {
+  const handleCreateAllRecordingsFromMatrix = () => {
     if (!selectedProject || !selectedEnvironment) {
       return;
     }
@@ -1429,15 +1429,15 @@ export function App() {
     setSelectedGroupId(nextRecordings[0]?.groupId ?? selectedProject.groups[0]?.id ?? '');
     setSelectedRecordingId(nextRecordings[0]?.id ?? selectedRecordingId);
     switchPage('recording');
-  }
+  };
 
-  function handleUpdatePrdCoverageTriage(
+  const handleUpdatePrdCoverageTriage = (
     documentId: string,
     pathId: string,
     target: PrdCoverageTarget,
     status: PrdCoverageTriageDecisionStatus | undefined,
     note: string,
-  ) {
+  ) => {
     if (!status) {
       updateSelectedProject((project) => ({
         ...project,
@@ -1469,9 +1469,9 @@ export function App() {
         ),
       ],
     }));
-  }
+  };
 
-  function handleCreateGroup() {
+  const handleCreateGroup = () => {
     if (!selectedProject) {
       return;
     }
@@ -1481,9 +1481,9 @@ export function App() {
       groups: [...project.groups, group],
     }));
     setSelectedGroupId(group.id);
-  }
+  };
 
-  function handleDeleteGroup(groupId: string) {
+  const handleDeleteGroup = (groupId: string) => {
     if (!selectedProject) {
       return;
     }
@@ -1498,9 +1498,9 @@ export function App() {
       id: groupId,
       description: t('app.confirm.deleteGroup', { name: group.name }),
     });
-  }
+  };
 
-  function performDeleteGroup(groupId: string) {
+  const performDeleteGroup = (groupId: string) => {
     if (!selectedProject) {
       return;
     }
@@ -1563,9 +1563,9 @@ export function App() {
         recordings: nextRecordings,
       };
     });
-  }
+  };
 
-  function handleCreateTestCase() {
+  const handleCreateTestCase = () => {
     if (!selectedProject || !selectedGroup || !selectedEnvironment) {
       return;
     }
@@ -1580,9 +1580,9 @@ export function App() {
     }));
     handleDiscardCaseDraft();
     setSelectedTestCaseReference({ id: testCase.id, version: testCase.version ?? 1 });
-  }
+  };
 
-  function handleCreateRecording(source: 'live' | 'imported' = 'live') {
+  const handleCreateRecording = (source: 'live' | 'imported' = 'live') => {
     if (!selectedProject || !selectedGroup || !selectedEnvironment) {
       return;
     }
@@ -1602,15 +1602,15 @@ export function App() {
     setSelectedRecordingId(recording.id);
     setSelectedGroupId(recording.groupId);
     switchPage('recording');
-  }
+  };
 
-  function appendRecordingSampleStep(
+  const appendRecordingSampleStep = (
     kind: RecordingAsset['steps'][number]['kind'],
     title: string,
     detail: string,
     session: BrowserSessionState = browserSession,
     recordingId: string | undefined = selectedRecording?.id,
-  ) {
+  ) => {
     if (!recordingId) {
       return;
     }
@@ -1639,9 +1639,9 @@ export function App() {
         ),
       })),
     );
-  }
+  };
 
-  function appendCapturedRecordingStep(event: RecordingCapturedEvent) {
+  const appendCapturedRecordingStep = (event: RecordingCapturedEvent) => {
     const targetRecordingId = selectedRecordingIdRef.current;
     if (!targetRecordingId) {
       return;
@@ -1695,24 +1695,24 @@ export function App() {
         };
       }),
     );
-  }
+  };
 
-  function handleSelectRecording(recordingId: string) {
+  const handleSelectRecording = (recordingId: string) => {
     setSelectedRecordingId(recordingId);
     const recording = selectedProject?.recordings.find((item) => item.id === recordingId);
     if (recording) {
       setSelectedGroupId(recording.groupId);
     }
-  }
+  };
 
-  function handleConfirmManualStep(
+  const handleConfirmManualStep = (
     runId: string,
     stepId: string,
     status: 'passed' | 'failed',
     note: string,
     screenshotPath?: string,
     attachments: RunArtifact[] = [],
-  ) {
+  ) => {
     const confirmedAt = new Date().toISOString();
     let nextSummary = '';
     let nextStatus: RunStatus = status;
@@ -1884,9 +1884,9 @@ export function App() {
         };
       }),
     );
-  }
+  };
 
-  async function handleCaptureManualEvidence(): Promise<string | undefined> {
+  const handleCaptureManualEvidence = async (): Promise<string | undefined> => {
     setIsBrowserBusy(true);
     try {
       const session = await captureBrowserSnapshot();
@@ -1898,34 +1898,34 @@ export function App() {
     } finally {
       setIsBrowserBusy(false);
     }
-  }
+  };
 
-  async function handleAttachManualEvidence(): Promise<RunArtifact | undefined> {
+  const handleAttachManualEvidence = async (): Promise<RunArtifact | undefined> => {
     try {
       return await attachManualEvidence();
     } catch {
       appendSystemMessage(t('app.runtime.manualEvidenceAttachFailed'));
       return undefined;
     }
-  }
+  };
 
-  async function handleAcceptMaintenanceDraft(request: MaintenanceDraftAcceptanceRequest) {
+  const handleAcceptMaintenanceDraft = async (request: MaintenanceDraftAcceptanceRequest) => {
     const result = await acceptMaintenanceDraft(request);
     await reloadMainOwnedStudioState();
     return result;
-  }
+  };
 
-  async function handleRejectMaintenanceDraft(request: MaintenanceDraftRejectionRequest) {
+  const handleRejectMaintenanceDraft = async (request: MaintenanceDraftRejectionRequest) => {
     const result = await rejectMaintenanceDraft(request);
     await reloadMainOwnedStudioState();
     return result;
-  }
+  };
 
-  async function handleOpenMaintenanceEvidence(request: MaintenanceEvidenceOpenRequest) {
+  const handleOpenMaintenanceEvidence = async (request: MaintenanceEvidenceOpenRequest) => {
     await openMaintenanceEvidence(request);
-  }
+  };
 
-  function handleUpdateRecording(updater: (recording: RecordingAsset) => RecordingAsset) {
+  const handleUpdateRecording = (updater: (recording: RecordingAsset) => RecordingAsset) => {
     if (!selectedProject || !selectedRecording) {
       return;
     }
@@ -1941,9 +1941,9 @@ export function App() {
           : recording,
       ),
     }));
-  }
+  };
 
-  function handleAppendRecordingStep(kind: RecordingAsset['steps'][number]['kind'] = 'click') {
+  const handleAppendRecordingStep = (kind: RecordingAsset['steps'][number]['kind'] = 'click') => {
     if (!selectedRecording) {
       return;
     }
@@ -1955,9 +1955,9 @@ export function App() {
         createRecordingStep(recording.steps.length + 1, kind),
       ],
     }));
-  }
+  };
 
-  async function handleStartRecordingSession() {
+  const handleStartRecordingSession = async () => {
     if (!selectedProject || !selectedEnvironment) {
       return;
     }
@@ -1998,9 +1998,9 @@ export function App() {
     } finally {
       setIsBrowserBusy(false);
     }
-  }
+  };
 
-  async function handleCaptureRecordingSnapshot() {
+  const handleCaptureRecordingSnapshot = async () => {
     setIsBrowserBusy(true);
     try {
       const session = await captureBrowserSnapshot();
@@ -2016,9 +2016,9 @@ export function App() {
     } finally {
       setIsBrowserBusy(false);
     }
-  }
+  };
 
-  function handleCreateTestCaseFromRecording(recordingId: string) {
+  const handleCreateTestCaseFromRecording = (recordingId: string) => {
     if (!selectedProject) {
       return;
     }
@@ -2041,9 +2041,9 @@ export function App() {
     setSelectedGroupId(testCase.groupId);
     setSelectedTestCaseReference({ id: testCase.id, version: testCase.version ?? 1 });
     switchPage('cases');
-  }
+  };
 
-  async function handleRunRecording() {
+  const handleRunRecording = async () => {
     if (!selectedProject || !selectedRecording || isRunning) {
       return;
     }
@@ -2097,9 +2097,9 @@ export function App() {
       setRunStatus('failed');
       appendSystemMessage(t('app.runtime.replayFailed'));
     }
-  }
+  };
 
-  function handleDeleteRecording(recordingId: string) {
+  const handleDeleteRecording = (recordingId: string) => {
     if (!selectedProject) {
       return;
     }
@@ -2119,9 +2119,9 @@ export function App() {
       : t('app.confirm.deleteRecording', { name: target.name });
 
     setPendingDeletion({ kind: 'recording', id: recordingId, description: confirmMessage });
-  }
+  };
 
-  function performDeleteRecording(recordingId: string) {
+  const performDeleteRecording = (recordingId: string) => {
     if (!selectedProject) {
       return;
     }
@@ -2157,9 +2157,9 @@ export function App() {
       setSelectedTestCaseReference({ id: selectedNextCase.id, version: selectedNextCase.version ?? 1 });
     }
     setSelectedRecordingId(nextRecordings[0]?.id ?? '');
-  }
+  };
 
-  function confirmPendingDeletion() {
+  const confirmPendingDeletion = () => {
     if (!pendingDeletion) {
       return;
     }
@@ -2174,9 +2174,9 @@ export function App() {
     } else {
       performDeleteRecording(deletion.id);
     }
-  }
+  };
 
-  function handleCreateStep(type: TestStepDraft['type'], index: number): string | undefined {
+  const handleCreateStep = (type: TestStepDraft['type'], index: number): string | undefined => {
     if (!selectedProject || !caseDraft) {
       return undefined;
     }
@@ -2196,20 +2196,20 @@ export function App() {
       steps: insertTestStep(testCase.steps, step, index),
     }), 'immediate');
     return step.id;
-  }
+  };
 
-  function handleAppendStep(type: TestStepDraft['type'] = 'ai') {
+  const handleAppendStep = (type: TestStepDraft['type'] = 'ai') => {
     return handleCreateStep(type, caseDraft?.steps.length ?? 0);
-  }
+  };
 
-  function handleMoveStep(stepId: string, index: number) {
+  const handleMoveStep = (stepId: string, index: number) => {
     updateSelectedTestCase((testCase) => ({
       ...testCase,
       steps: moveTestStep(testCase.steps, stepId, index),
     }), 'immediate');
-  }
+  };
 
-  function handleCopyStep(stepId: string): string | undefined {
+  const handleCopyStep = (stepId: string): string | undefined => {
     if (!caseDraft?.steps.some((step) => step.id === stepId)) {
       return undefined;
     }
@@ -2220,16 +2220,16 @@ export function App() {
       steps: copyTestStep(testCase.steps, stepId, copyId),
     }), 'immediate');
     return copyId;
-  }
+  };
 
-  function handleDeleteStep(stepId: string) {
+  const handleDeleteStep = (stepId: string) => {
     updateSelectedTestCase((testCase) => ({
       ...testCase,
       steps: removeTestStep(testCase.steps, stepId),
     }), 'immediate');
-  }
+  };
 
-  function handleSelectTestCase(reference: VersionedTestAssetReference) {
+  const handleSelectTestCase = (reference: VersionedTestAssetReference) => {
     if (caseDraft) {
       return;
     }
@@ -2240,16 +2240,16 @@ export function App() {
 
     setSelectedGroupId(testCase.groupId);
     setSelectedTestCaseReference(reference);
-  }
+  };
 
-  function handleSelectWorkflow(workflowId: string) {
+  const handleSelectWorkflow = (workflowId: string) => {
     const reference = latestTestCaseReference(selectedProject, workflowId);
     if (reference) {
       handleSelectTestCase(reference);
     }
-  }
+  };
 
-  function handlePublishSuite(suite: SuiteAsset) {
+  const handlePublishSuite = (suite: SuiteAsset) => {
     if (!selectedProject) {
       return;
     }
@@ -2258,9 +2258,9 @@ export function App() {
       suites: [...project.suites, suite],
     }), 'immediate');
     setSelectedSuiteReference({ id: suite.id, version: suite.version });
-  }
+  };
 
-  async function handleRunSuite(reference: VersionedTestAssetReference) {
+  const handleRunSuite = async (reference: VersionedTestAssetReference) => {
     if (!selectedProject || isRunning) {
       return;
     }
@@ -2353,17 +2353,17 @@ export function App() {
       setActiveSuiteRunId(undefined);
       setIsRunning(false);
     }
-  }
+  };
 
-  async function handleCancelSuite(runId: string) {
+  const handleCancelSuite = async (runId: string) => {
     await handleCancelRun(runId);
-  }
+  };
 
-  async function handleSaveCredential(payload: {
+  const handleSaveCredential = async (payload: {
     label: string;
     username: string;
     secret: string;
-  }): Promise<CredentialRef | null> {
+  }): Promise<CredentialRef | null> => {
     if (!selectedProject) {
       return null;
     }
@@ -2379,9 +2379,9 @@ export function App() {
       credentialRefs: [ref, ...project.credentialRefs],
     }));
     return ref;
-  }
+  };
 
-  async function handleStartBrowserSession() {
+  const handleStartBrowserSession = async () => {
     if (!selectedProject || !selectedEnvironment) {
       return;
     }
@@ -2398,9 +2398,9 @@ export function App() {
     } finally {
       setIsBrowserBusy(false);
     }
-  }
+  };
 
-  async function handleNavigateBrowser() {
+  const handleNavigateBrowser = async () => {
     const url = navigateUrl.trim();
     if (!url) {
       return;
@@ -2413,9 +2413,9 @@ export function App() {
     } finally {
       setIsBrowserBusy(false);
     }
-  }
+  };
 
-  async function handleCaptureBrowser() {
+  const handleCaptureBrowser = async () => {
     setIsBrowserBusy(true);
     try {
       setBrowserSession(await captureBrowserSnapshot());
@@ -2424,9 +2424,9 @@ export function App() {
     } finally {
       setIsBrowserBusy(false);
     }
-  }
+  };
 
-  function appendAgentRunResult(agentRun: AgentRunResult) {
+  const appendAgentRunResult = (agentRun: AgentRunResult) => {
     const environment = selectedProject?.environments.find(
       (candidate) => candidate.id === agentRun.intent.environmentId,
     );
@@ -2501,9 +2501,9 @@ export function App() {
         updatedAt: new Date().toISOString(),
       }));
     }
-  }
+  };
 
-  async function handleSendMessage() {
+  const handleSendMessage = async () => {
     const prompt = chatInput.trim();
     if (!prompt || isSending || !ensureMidsceneReady('nl')) {
       return;
@@ -2539,9 +2539,9 @@ export function App() {
     } finally {
       setIsSending(false);
     }
-  }
+  };
 
-  async function handleToggleSession() {
+  const handleToggleSession = async () => {
     if (isSending || isRunning || !ensureMidsceneReady('nl')) {
       return;
     }
@@ -2558,9 +2558,9 @@ export function App() {
     } catch {
       appendSystemMessage(t('app.runtime.sessionToggleFailed'));
     }
-  }
+  };
 
-  function handleSavePromptAsStep() {
+  const handleSavePromptAsStep = () => {
     const prompt = chatInput.trim();
     if (!prompt || !caseDraft) {
       return;
@@ -2580,9 +2580,9 @@ export function App() {
         },
       ],
     }));
-  }
+  };
 
-  function handleSaveLatestRunAsTestCase() {
+  const handleSaveLatestRunAsTestCase = () => {
     if (
       !selectedProject ||
       !selectedGroup ||
@@ -2620,9 +2620,9 @@ export function App() {
     setSelectedGroupId(testCase.groupId);
     setSelectedTestCaseReference({ id: testCase.id, version: testCase.version ?? 1 });
     switchPage('cases');
-  }
+  };
 
-  async function handleRunWorkflow() {
+  const handleRunWorkflow = async () => {
     if (!selectedWorkflow || isRunning || !ensureMidsceneReady('workflow')) {
       return;
     }
@@ -2677,12 +2677,12 @@ export function App() {
       setRunLogs((current) => [...current, `[${createTimestampLabel()}] Runtime dispatch failed`]);
       appendSystemMessage(t('app.runtime.workflowFailed'));
     }
-  }
+  };
 
-  async function handleRunTestCase(
+  const handleRunTestCase = async (
     selection: TestCaseDraft | VersionedTestAssetReference | undefined = selectedTestCase,
     environmentToRun = selectedCaseEnvironment,
-  ) {
+  ) => {
     let testCaseToRun: TestCaseDraft | undefined;
     if (selection && 'steps' in selection) {
       testCaseToRun = selection;
@@ -2774,13 +2774,13 @@ export function App() {
       }
       appendSystemMessage(t('app.runtime.caseFailed'));
     }
-  }
+  };
 
-  async function handlePlanExactRerun(runId: string) {
+  const handlePlanExactRerun = async (runId: string) => {
     return planHistoricalRerun(runId);
-  }
+  };
 
-  async function handleRunExactRerun(runId: string) {
+  const handleRunExactRerun = async (runId: string) => {
     if (isRunning) {
       return {
         status: 'blocked' as const,
@@ -2852,9 +2852,9 @@ export function App() {
       pendingTestCaseRunContextRef.current = null;
       setIsRunning(false);
     }
-  }
+  };
 
-  async function handleExportProjectReport() {
+  const handleExportProjectReport = async () => {
     if (!selectedProject) {
       return;
     }
@@ -2864,18 +2864,18 @@ export function App() {
     } catch {
       appendSystemMessage(t('app.runtime.projectReportExportFailed'));
     }
-  }
+  };
 
-  async function handleCancelRun(activeRunId: string) {
+  const handleCancelRun = async (activeRunId: string) => {
     try {
       const cancelled = await cancelRun(activeRunId);
       appendSystemMessage(t(cancelled ? 'app.runtime.runCancelled' : 'app.runtime.runCancelUnavailable'));
     } catch {
       appendSystemMessage(t('app.runtime.runCancelFailed'));
     }
-  }
+  };
 
-  function handleCreateReporterFixDraft(run: RunDetail, reporter: AgentReporterSummary) {
+  const handleCreateReporterFixDraft = (run: RunDetail, reporter: AgentReporterSummary) => {
     if (!selectedProject || run.projectId !== selectedProject.id) {
       return;
     }
@@ -2896,9 +2896,9 @@ export function App() {
     }), 'immediate');
     transitionSelectedTestCase({ id: draft.id, version: draft.version ?? 1 }, draft.groupId);
     switchPage('cases');
-  }
+  };
 
-  function handleSaveSettings() {
+  const handleSaveSettings = () => {
     const requiresMidsceneBeforeSave = pendingPage ? isGatedFeaturePage(pendingPage) : false;
 
     if (requiresMidsceneBeforeSave && !midsceneReady) {
@@ -2916,7 +2916,7 @@ export function App() {
       setPendingPage(null);
     }
     setIsSettingsOpen(false);
-  }
+  };
 
   if (storageLoadError) {
     return (
@@ -3359,4 +3359,4 @@ export function App() {
     </div>
     </I18nProvider>
   );
-}
+};

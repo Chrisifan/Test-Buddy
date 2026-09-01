@@ -52,7 +52,7 @@ export interface ProjectAssetIpcDependencies {
   now(): Date;
 }
 
-export function registerProjectAssetIpcHandlers(dependencies: ProjectAssetIpcDependencies): void {
+export const registerProjectAssetIpcHandlers = (dependencies: ProjectAssetIpcDependencies): void => {
   dependencies.handle(projectAssetIpcChannels.planMigration, async (_event, incoming) => {
     const request = assertMigrationRequestWithoutModelKey(incoming);
     const projectDirectory = await dependencies.getApprovedProjectAssetDirectory(request);
@@ -184,27 +184,27 @@ export function registerProjectAssetIpcHandlers(dependencies: ProjectAssetIpcDep
     });
     return binding;
   });
-}
+};
 
-function assertMigrationRequestWithoutModelKey(value: unknown): ProjectAssetMigrationRequest {
+const assertMigrationRequestWithoutModelKey = (value: unknown): ProjectAssetMigrationRequest => {
   assertNoRendererModelApiKey(value);
   return value as ProjectAssetMigrationRequest;
-}
+};
 
-function assertReloadRequestWithoutModelKey(value: unknown): ProjectAssetReloadRequest {
+const assertReloadRequestWithoutModelKey = (value: unknown): ProjectAssetReloadRequest => {
   assertNoRendererModelApiKey(value);
   return value as ProjectAssetReloadRequest;
-}
+};
 
-function assertUpdateRequestWithoutModelKey(value: unknown): ProjectAssetUpdateRequest {
+const assertUpdateRequestWithoutModelKey = (value: unknown): ProjectAssetUpdateRequest => {
   assertNoRendererModelApiKey(value);
   return value as ProjectAssetUpdateRequest;
-}
+};
 
-async function getProjectForAssetRequest(
+const getProjectForAssetRequest = async (
   dependencies: ProjectAssetIpcDependencies,
   request: ProjectAssetMigrationRequest,
-): Promise<ProjectDraft> {
+): Promise<ProjectDraft> => {
   const state = await dependencies.loadState();
   const project = state.projects.find((item) => item.id === request.projectId);
   if (!project) {
@@ -214,12 +214,12 @@ async function getProjectForAssetRequest(
     return request.project;
   }
   return project;
-}
+};
 
-async function getBoundProjectAssetReloadRequest(
+const getBoundProjectAssetReloadRequest = async (
   dependencies: ProjectAssetIpcDependencies,
   request: ProjectAssetReloadRequest,
-): Promise<{ binding: ProjectAssetBinding; project: ProjectDraft; storedProject: ProjectDraft }> {
+): Promise<{ binding: ProjectAssetBinding; project: ProjectDraft; storedProject: ProjectDraft }> => {
   if (!request || typeof request.projectId !== 'string' || !request.projectId.trim() || !request.project || request.project.id !== request.projectId) {
     throw new Error('项目资产重载请求无效。');
   }
@@ -234,12 +234,12 @@ async function getBoundProjectAssetReloadRequest(
     throw new Error('项目尚未登记资产快照，无法重载。');
   }
   return { binding, project: request.project, storedProject };
-}
+};
 
-async function createProjectAssetReloadPlan(
+const createProjectAssetReloadPlan = async (
   dependencies: ProjectAssetIpcDependencies,
   request: ProjectAssetReloadRequest,
-): Promise<ProjectAssetReloadPlan> {
+): Promise<ProjectAssetReloadPlan> => {
   const { binding, project, storedProject } = await getBoundProjectAssetReloadRequest(dependencies, request);
   const plan = await dependencies.createProjectAssetReloadPlan(project, binding);
   if (calculateProjectAssetRevision(storedProject) === binding.revision || plan.status === 'unavailable') {
@@ -253,12 +253,12 @@ async function createProjectAssetReloadPlan(
       { path: 'studio-data', message: '持久化项目已变化，请先刷新本地编辑态。' },
     ],
   };
-}
+};
 
-async function getBoundProjectAssetUpdateRequest(
+const getBoundProjectAssetUpdateRequest = async (
   dependencies: ProjectAssetIpcDependencies,
   request: ProjectAssetUpdateRequest,
-): Promise<{ binding: ProjectAssetBinding; project: ProjectDraft; storedProject: ProjectDraft }> {
+): Promise<{ binding: ProjectAssetBinding; project: ProjectDraft; storedProject: ProjectDraft }> => {
   if (!request || typeof request.projectId !== 'string' || !request.projectId.trim() || !request.project || request.project.id !== request.projectId) {
     throw new Error('项目资产更新请求无效。');
   }
@@ -273,12 +273,12 @@ async function getBoundProjectAssetUpdateRequest(
     throw new Error('项目尚未登记资产快照，无法更新。');
   }
   return { binding, project: request.project, storedProject };
-}
+};
 
-async function createProjectAssetUpdatePlan(
+const createProjectAssetUpdatePlan = async (
   dependencies: ProjectAssetIpcDependencies,
   request: ProjectAssetUpdateRequest,
-): Promise<ProjectAssetUpdatePlan> {
+): Promise<ProjectAssetUpdatePlan> => {
   const { binding, project, storedProject } = await getBoundProjectAssetUpdateRequest(dependencies, request);
   const plan = await dependencies.createProjectAssetUpdatePlan(project, binding);
   const issues = [...plan.issues];
@@ -292,4 +292,4 @@ async function createProjectAssetUpdatePlan(
     return plan;
   }
   return { ...plan, status: 'requiresReview', issues };
-}
+};

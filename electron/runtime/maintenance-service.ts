@@ -260,17 +260,17 @@ export class MaintenanceService {
   }
 }
 
-function sameTarget(
+const sameTarget = (
   target: MaintenanceCaseTarget,
   reference: { id: string; version: number },
-): boolean {
+): boolean => {
   return target.kind === 'case' && target.id === reference.id && target.version === reference.version;
-}
+};
 
-function sameImpact(
+const sameImpact = (
   left: ReturnType<typeof analyzeMaintenanceImpact>,
   right: ReturnType<typeof analyzeMaintenanceImpact>,
-): boolean {
+): boolean => {
   if (left.length !== right.length) {
     return false;
   }
@@ -279,13 +279,13 @@ function sameImpact(
     reference.id === right[index]?.id &&
     reference.version === right[index]?.version
   ));
-}
+};
 
-function hashTestCase(testCase: TestCaseDraft): string {
+const hashTestCase = (testCase: TestCaseDraft): string => {
   return createHash('sha256').update(JSON.stringify(canonicalize(testCase)), 'utf8').digest('hex');
-}
+};
 
-function canonicalize(value: unknown): unknown {
+const canonicalize = (value: unknown): unknown => {
   if (Array.isArray(value)) {
     return value.map(canonicalize);
   }
@@ -299,4 +299,4 @@ function canonicalize(value: unknown): unknown {
     }, {});
   }
   return value;
-}
+};

@@ -34,7 +34,7 @@ const stepKinds: RecordingStepDraft['kind'][] = [
   'snapshot',
 ];
 
-function getStepKindLabel(kind: RecordingStepDraft['kind'], t: (key: string) => string): string {
+const getStepKindLabel = (kind: RecordingStepDraft['kind'], t: (key: string) => string): string => {
   switch (kind) {
     case 'navigate':
       return t('recording.step.navigate');
@@ -51,18 +51,18 @@ function getStepKindLabel(kind: RecordingStepDraft['kind'], t: (key: string) => 
     default:
       return kind;
   }
-}
+};
 
-function formatDate(value: string, locale: string): string {
+const formatDate = (value: string, locale: string): string => {
   return new Date(value).toLocaleString(locale, {
     month: '2-digit',
     day: '2-digit',
     hour: '2-digit',
     minute: '2-digit',
   });
-}
+};
 
-function normalizeVisualDiffMask(mask: VisualDiffMask): VisualDiffMask {
+const normalizeVisualDiffMask = (mask: VisualDiffMask): VisualDiffMask => {
   const x = Math.min(100, Math.max(0, mask.x));
   const y = Math.min(100, Math.max(0, mask.y));
   return {
@@ -72,9 +72,9 @@ function normalizeVisualDiffMask(mask: VisualDiffMask): VisualDiffMask {
     width: Math.min(100 - x, Math.max(0, mask.width)),
     height: Math.min(100 - y, Math.max(0, mask.height)),
   };
-}
+};
 
-export function RecordingPage({
+export const RecordingPage = ({
   project,
   environment,
   recording,
@@ -110,7 +110,7 @@ export function RecordingPage({
   onDeleteRecording: (recordingId: string) => void;
   onCaptureSnapshot: () => void;
   onOpenProjects?: () => void;
-}) {
+}) => {
   const { locale, t } = useI18n();
 
   if (!project) {
@@ -665,4 +665,4 @@ export function RecordingPage({
       </PageBody>
     </PageShell>
   );
-}
+};

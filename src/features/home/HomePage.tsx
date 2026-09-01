@@ -27,7 +27,7 @@ import { StatusPill } from '../../components/StatusPill.js';
 import { PageBody, PageHeader, PageShell, Surface } from '../../components/workbench.js';
 import { useI18n } from '../../i18n/index.js';
 
-function getSignalSummary(recentRuns: RunSummary[], t: (key: string) => string) {
+const getSignalSummary = (recentRuns: RunSummary[], t: (key: string) => string) => {
   const passed = recentRuns.filter((run) => run.status === 'passed').length;
   const failed = recentRuns.filter((run) => run.status === 'failed').length;
   const running = recentRuns.filter((run) => run.status === 'running').length;
@@ -59,9 +59,9 @@ function getSignalSummary(recentRuns: RunSummary[], t: (key: string) => string) 
     failed,
     running,
   };
-}
+};
 
-function getCoverageIndex(projects: ProjectDraft[], runs: RunSummary[]): number {
+const getCoverageIndex = (projects: ProjectDraft[], runs: RunSummary[]): number => {
   const assetScore = projects.reduce(
     (total, project) =>
       total +
@@ -76,9 +76,9 @@ function getCoverageIndex(projects: ProjectDraft[], runs: RunSummary[]): number 
     : 0;
 
   return Math.min(98, Math.max(12, assetScore + passScore));
-}
+};
 
-function DashboardCard({
+const DashboardCard = ({
   children,
   className = '',
   action,
@@ -87,16 +87,16 @@ function DashboardCard({
   children: ReactNode;
   className?: string;
   action?: ReactNode;
-} & ComponentPropsWithoutRef<'section'>) {
+} & ComponentPropsWithoutRef<'section'>) => {
   return (
     <section className={`home-stat-card ${className}`} {...props}>
       {children}
       {action ? <div className="mt-auto pt-4">{action}</div> : null}
     </section>
   );
-}
+};
 
-function StatGlyph({
+const StatGlyph = ({
   children,
   tone = 'neutral',
   testId,
@@ -104,24 +104,24 @@ function StatGlyph({
   children: ReactNode;
   tone?: 'neutral' | 'primary' | 'risk';
   testId?: string;
-}) {
+}) => {
   return (
     <span className={`home-glyph home-glyph-${tone} flex h-9 w-9 shrink-0 items-center justify-center rounded-[4px] border`} data-testid={testId}>
       {children}
     </span>
   );
-}
+};
 
-function CompactStat({ label, value }: { label: string; value: string }) {
+const CompactStat = ({ label, value }: { label: string; value: string }) => {
   return (
     <span className="home-compact-stat rounded-[4px] px-3 py-2">
       <span className="home-compact-label block text-[11px]">{label}</span>
       <span className="home-compact-value mt-0.5 block truncate font-mono text-sm font-semibold">{value}</span>
     </span>
   );
-}
+};
 
-export function HomePage({
+export const HomePage = ({
   projects,
   browserSession,
   recentRuns,
@@ -135,7 +135,7 @@ export function HomePage({
   runtimeInfo?: RuntimeInfo;
   onCreateProject: () => void;
   onGoToPage: (page: AppPage) => void;
-}) {
+}) => {
   const { t } = useI18n();
   const signal = getSignalSummary(recentRuns, t);
 
@@ -450,4 +450,4 @@ export function HomePage({
       </PageBody>
     </PageShell>
   );
-}
+};

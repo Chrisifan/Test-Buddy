@@ -85,7 +85,7 @@ type RunComparison = {
 
 type Translator = (key: string, replacements?: Record<string, string | number>) => string;
 
-function formatEventMetrics(metrics: AgentExecutionMetrics, t: Translator): string {
+const formatEventMetrics = (metrics: AgentExecutionMetrics, t: Translator): string => {
   const values = [
     metrics.calls ? t('runs.agent.modelCalls', { count: metrics.calls }) : '',
     metrics.totalTokens ? t('runs.agent.tokens', { count: metrics.totalTokens }) : '',
@@ -93,25 +93,25 @@ function formatEventMetrics(metrics: AgentExecutionMetrics, t: Translator): stri
   ].filter(Boolean);
 
   return values.join(' · ');
-}
+};
 
-function isFailureStatus(status: RunStatus): boolean {
+const isFailureStatus = (status: RunStatus): boolean => {
   return status === 'failed' || status === 'error';
-}
+};
 
-function getRunEnvironmentId(run: RunSummary, detail?: RunDetail): string {
+const getRunEnvironmentId = (run: RunSummary, detail?: RunDetail): string => {
   return detail?.provenance?.environment.id ?? run.environmentId ?? `run:${run.id}`;
-}
+};
 
-function getRunEnvironmentName(run: RunSummary, detail: RunDetail | undefined, t: Translator): string {
+const getRunEnvironmentName = (run: RunSummary, detail: RunDetail | undefined, t: Translator): string => {
   return detail?.provenance?.environment.name ?? run.environmentName ?? t('runs.value.environmentMissing');
-}
+};
 
-function getRunTestCaseId(run: RunSummary): string {
+const getRunTestCaseId = (run: RunSummary): string => {
   return run.testCaseId ?? `run:${run.id}`;
-}
+};
 
-function getHealthLabel(total: number, failed: number, running: number, t: Translator): string {
+const getHealthLabel = (total: number, failed: number, running: number, t: Translator): string => {
   if (!total) {
     return t('runs.health.waiting');
   }
@@ -125,28 +125,28 @@ function getHealthLabel(total: number, failed: number, running: number, t: Trans
   }
 
   return failed > 0 ? t('runs.health.attention') : t('runs.health.stable');
-}
+};
 
-function getWorstBucket(buckets: Bucket[]): Bucket | null {
+const getWorstBucket = (buckets: Bucket[]): Bucket | null => {
   return buckets
     .filter((bucket) => bucket.total > 0)
     .sort((left, right) => right.failed - left.failed || right.total - left.total)[0] ?? null;
-}
+};
 
-function getFailureReason(detail: RunDetail): string {
+const getFailureReason = (detail: RunDetail): string => {
   return (
     detail.failureReason ??
     detail.agentRun?.failureReason ??
     detail.agentRun?.events.find((event) => event.verification?.failureReason)?.verification?.failureReason ??
     detail.summary
   ).trim();
-}
+};
 
-function normalizeFailureReason(reason: string): string {
+const normalizeFailureReason = (reason: string): string => {
   return reason.trim().toLocaleLowerCase().replace(/\s+/g, ' ').replace(/[。.!！]+$/g, '');
-}
+};
 
-function getFailureTrend(runs: RunSummary[]): FailureTrend | undefined {
+const getFailureTrend = (runs: RunSummary[]): FailureTrend | undefined => {
   const chronologicalRuns = runs
     .map((run) => ({ run, timestamp: run.startedAt ? Date.parse(run.startedAt) : Number.NaN }))
     .filter((entry) => Number.isFinite(entry.timestamp))
@@ -163,14 +163,14 @@ function getFailureTrend(runs: RunSummary[]): FailureTrend | undefined {
     return { direction: 'steady', delta: 0 };
   }
   return { direction: delta > 0 ? 'rising' : 'falling', delta: Math.abs(delta) };
-}
+};
 
-function getRunTimestamp(run: Pick<RunDetail, 'startedAt'>): number {
+const getRunTimestamp = (run: Pick<RunDetail, 'startedAt'>): number => {
   const timestamp = Date.parse(run.startedAt);
   return Number.isFinite(timestamp) ? timestamp : 0;
-}
+};
 
-function compareRuns(current: RunDetail, baseline: RunDetail): RunComparison {
+const compareRuns = (current: RunDetail, baseline: RunDetail): RunComparison => {
   const baselineSteps = new Map(baseline.steps.map((step) => [step.stepId, step]));
   const comparableSteps = current.steps.filter((step) => baselineSteps.has(step.stepId));
   const changedSteps = comparableSteps.filter((step) => baselineSteps.get(step.stepId)?.status !== step.status).length;
@@ -180,23 +180,23 @@ function compareRuns(current: RunDetail, baseline: RunDetail): RunComparison {
     totalComparableSteps: comparableSteps.length,
     artifactDelta: current.artifacts.length - baseline.artifacts.length,
   };
-}
+};
 
-function formatTableTitle(caption: string | undefined, index: number, t: Translator): string {
+const formatTableTitle = (caption: string | undefined, index: number, t: Translator): string => {
   return t('runs.agent.tableTitle', { title: caption || `#${index}` });
-}
+};
 
-function formatChartTitle(title: string | undefined, index: number, t: Translator): string {
+const formatChartTitle = (title: string | undefined, index: number, t: Translator): string => {
   return t('runs.agent.chartTitle', { title: title || `#${index}` });
-}
+};
 
-function formatChartMeta(chart: {
+const formatChartMeta = (chart: {
   kind: string;
   width?: number;
   height?: number;
   rendered?: boolean;
   legends?: string[];
-}, t: Translator): string {
+}, t: Translator): string => {
   const size = chart.width && chart.height ? `${chart.width}x${chart.height}` : t('runs.agent.sizeMissing');
   const rendered = chart.rendered === undefined
     ? t('runs.agent.renderUnknown')
@@ -205,14 +205,14 @@ function formatChartMeta(chart: {
     ? t('runs.agent.legends', { legends: chart.legends.join(' / ') })
     : t('runs.agent.legendsMissing');
   return `${chart.kind} · ${size} · ${rendered} · ${legends}`;
-}
+};
 
-function formatChartEvidence(chart: {
+const formatChartEvidence = (chart: {
   tooltip?: string;
   dataPoints?: Array<{ series?: string; label?: string; value: number }>;
   seriesTrends?: Array<{ series: string; trend: 'rising' | 'falling' | 'flat' | 'mixed' }>;
   trend?: 'rising' | 'falling' | 'flat' | 'mixed';
-}, t: Translator): string | undefined {
+}, t: Translator): string | undefined => {
   const signals = [
     chart.tooltip ? t('runs.agent.chartTooltip', { tooltip: chart.tooltip }) : undefined,
     chart.dataPoints?.length
@@ -232,17 +232,17 @@ function formatChartEvidence(chart: {
     chart.trend ? t('runs.agent.chartTrend', { trend: t(`runs.agent.chartTrend.${chart.trend}`) }) : undefined,
   ].filter(Boolean);
   return signals.length ? signals.join(' · ') : undefined;
-}
+};
 
-function formatAgentRole(role: string): string {
+const formatAgentRole = (role: string): string => {
   return role.charAt(0).toUpperCase() + role.slice(1);
-}
+};
 
-function getAgentSourceLabel(agentRun: AgentRunResult, t: Translator): string {
+const getAgentSourceLabel = (agentRun: AgentRunResult, t: Translator): string => {
   return t(`runs.agent.source.${agentRun.intent.source}`);
-}
+};
 
-function getLinkedArtifacts(event: AgentRunEvent, agentRun: AgentRunResult): AgentArtifact[] {
+const getLinkedArtifacts = (event: AgentRunEvent, agentRun: AgentRunResult): AgentArtifact[] => {
   const seen = new Set<string>();
   const relatedEvents = agentRun.events.filter((candidate) =>
     candidate.artifact && (candidate.id === event.id || (event.stepId && candidate.stepId === event.stepId)),
@@ -256,13 +256,13 @@ function getLinkedArtifacts(event: AgentRunEvent, agentRun: AgentRunResult): Age
     seen.add(artifact.id);
     return true;
   });
-}
+};
 
-function getLinkedEvidence(events: AgentRunEvent[], selected: AgentRunEvent): {
+const getLinkedEvidence = (events: AgentRunEvent[], selected: AgentRunEvent): {
   observation?: AgentRunEvent['observation'];
   verification?: AgentRunEvent['verification'];
   browserSession?: AgentRunEvent['browserSession'];
-} {
+} => {
   const relatedEvents = selected.stepId
     ? events.filter((event) => event.stepId === selected.stepId)
     : [selected];
@@ -272,23 +272,23 @@ function getLinkedEvidence(events: AgentRunEvent[], selected: AgentRunEvent): {
     verification: selected.verification ?? relatedEvents.find((event) => event.verification)?.verification,
     browserSession: selected.browserSession ?? relatedEvents.find((event) => event.browserSession)?.browserSession,
   };
-}
+};
 
-function getEvidencePreviewPath(event: AgentRunEvent, artifacts: AgentArtifact[]): string | undefined {
+const getEvidencePreviewPath = (event: AgentRunEvent, artifacts: AgentArtifact[]): string | undefined => {
   if (event.browserSession?.screenshotPath) {
     return event.browserSession.screenshotPath;
   }
 
   return artifacts.find((artifact) => artifact.type === 'screenshot' || artifact.type === 'snapshot')?.path;
-}
+};
 
-function formatArtifactBytes(byteCount: number): string {
+const formatArtifactBytes = (byteCount: number): string => {
   if (byteCount < 1024) return `${byteCount} B`;
   if (byteCount < 1024 * 1024) return `${(byteCount / 1024).toFixed(1)} KB`;
   return `${(byteCount / (1024 * 1024)).toFixed(1)} MB`;
-}
+};
 
-export function RunRecordsPage({
+export const RunRecordsPage = ({
   project,
   projectAssetBinding,
   recentRuns,
@@ -333,7 +333,7 @@ export function RunRecordsPage({
     screenshotPath?: string,
     attachments?: RunArtifact[],
   ) => void;
-}) {
+}) => {
   const { t } = useI18n();
   const isProjectBound = Boolean(project && projectAssetBinding?.projectId === project.id);
   const [statusFilter, setStatusFilter] = useState<'all' | RunStatus>('all');
@@ -1775,13 +1775,13 @@ export function RunRecordsPage({
       </PageBody>
     </PageShell>
   );
-}
+};
 
-function SuiteRunRecordDetail({ onCancelRun, onSelectRun, record }: {
+const SuiteRunRecordDetail = ({ onCancelRun, onSelectRun, record }: {
   onCancelRun?: (runId: string) => Promise<void>;
   onSelectRun: (runId: string) => void;
   record: SuiteRunRecord;
-}) {
+}) => {
   const { t } = useI18n();
   const counts = Object.entries(record.summary).filter(([, count]) => count > 0);
   return (
@@ -1855,37 +1855,37 @@ function SuiteRunRecordDetail({ onCancelRun, onSelectRun, record }: {
       </section>
     </div>
   );
-}
+};
 
-function EvidenceTrailBlock({ label, value }: { label: string; value: string }) {
+const EvidenceTrailBlock = ({ label, value }: { label: string; value: string }) => {
   return (
     <div className="grid gap-1 rounded-[4px] bg-background/65 p-3">
       <p className="text-[11px] font-medium text-muted-foreground">{label}</p>
       <p className="break-words text-xs leading-5 text-foreground">{value}</p>
     </div>
   );
-}
+};
 
-function ProvenanceRow({ children, label }: { children: ReactNode; label: string }) {
+const ProvenanceRow = ({ children, label }: { children: ReactNode; label: string }) => {
   return (
     <div className="min-w-0">
       <dt className="sr-only">{label}</dt>
       <dd className="break-words text-muted-foreground">{label} {children}</dd>
     </div>
   );
-}
+};
 
-function ProvenanceReferences({
+const ProvenanceReferences = ({
   label,
   references,
 }: {
   label: string;
   references: Array<{ id: string; version: number }>;
-}) {
+}) => {
   return <ProvenanceRow label={label}>{references.length ? references.map((reference) => `${reference.id}@${reference.version}`).join(', ') : '-'}</ProvenanceRow>;
-}
+};
 
-function ArtifactActions({ artifact, t }: { artifact: AgentArtifact | RunArtifact; t: Translator }) {
+const ArtifactActions = ({ artifact, t }: { artifact: AgentArtifact | RunArtifact; t: Translator }) => {
   const isManagedArtifact = !artifact.path.startsWith('memory://');
 
   return (
@@ -1919,9 +1919,9 @@ function ArtifactActions({ artifact, t }: { artifact: AgentArtifact | RunArtifac
       ) : null}
     </div>
   );
-}
+};
 
-function EvidencePanel({
+const EvidencePanel = ({
   children,
   icon,
   meta,
@@ -1931,7 +1931,7 @@ function EvidencePanel({
   icon: ReactNode;
   meta: string;
   title: string;
-}) {
+}) => {
   return (
     <Surface className="p-4" variant="subtle">
       <div className="mb-3 flex items-start justify-between gap-3">
@@ -1944,9 +1944,9 @@ function EvidencePanel({
       {children}
     </Surface>
   );
-}
+};
 
-function SignalList({ emptyLabel, items, title }: { emptyLabel: string; items: string[]; title: string }) {
+const SignalList = ({ emptyLabel, items, title }: { emptyLabel: string; items: string[]; title: string }) => {
   return (
     <Surface className="p-4" variant="subtle">
       <p className="text-sm font-medium">{title}</p>
@@ -1960,9 +1960,9 @@ function SignalList({ emptyLabel, items, title }: { emptyLabel: string; items: s
       </div>
     </Surface>
   );
-}
+};
 
-function InsightCard({
+const InsightCard = ({
   icon,
   label,
   value,
@@ -1972,7 +1972,7 @@ function InsightCard({
   label: string;
   value: string;
   tone: RunTone;
-}) {
+}) => {
   return (
     <Surface className="flex items-start gap-3 p-4" variant="subtle">
       <span className="mt-0.5 text-primary">{icon}</span>
@@ -1985,4 +1985,4 @@ function InsightCard({
       </div>
     </Surface>
   );
-}
+};

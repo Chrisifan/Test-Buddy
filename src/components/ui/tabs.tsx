@@ -3,7 +3,7 @@ import * as TabsPrimitive from '@radix-ui/react-tabs';
 
 import { cn } from '@/lib/utils';
 
-function Tabs({ className, ...props }: React.ComponentProps<typeof TabsPrimitive.Root>) {
+const Tabs = ({ className, ...props }: React.ComponentProps<typeof TabsPrimitive.Root>) => {
   return (
     <TabsPrimitive.Root
       className={cn('flex flex-col gap-1.5', className)}
@@ -11,12 +11,12 @@ function Tabs({ className, ...props }: React.ComponentProps<typeof TabsPrimitive
       {...props}
     />
   );
-}
+};
 
-function TabsList({
+const TabsList = ({
   className,
   ...props
-}: React.ComponentProps<typeof TabsPrimitive.List>) {
+}: React.ComponentProps<typeof TabsPrimitive.List>) => {
   return (
     <TabsPrimitive.List
       className={cn(
@@ -27,12 +27,12 @@ function TabsList({
       {...props}
     />
   );
-}
+};
 
-function TabsTrigger({
+const TabsTrigger = ({
   className,
   ...props
-}: React.ComponentProps<typeof TabsPrimitive.Trigger>) {
+}: React.ComponentProps<typeof TabsPrimitive.Trigger>) => {
   return (
     <TabsPrimitive.Trigger
       className={cn(
@@ -43,12 +43,12 @@ function TabsTrigger({
       {...props}
     />
   );
-}
+};
 
-function TabsContent({
+const TabsContent = ({
   className,
   ...props
-}: React.ComponentProps<typeof TabsPrimitive.Content>) {
+}: React.ComponentProps<typeof TabsPrimitive.Content>) => {
   return (
     <TabsPrimitive.Content
       className={cn('outline-none', className)}
@@ -56,6 +56,6 @@ function TabsContent({
       {...props}
     />
   );
-}
+};
 
 export { Tabs, TabsList, TabsTrigger, TabsContent };

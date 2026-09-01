@@ -10,6 +10,7 @@ import {
   type MidsceneConfig,
   type RuntimeProfile,
 } from '../../../shared/studio.js';
+import { readLuminousPrecisionCss } from '../../styles/luminous-precision.test-utils.js';
 
 const midsceneConfig: MidsceneConfig = {
   modelBaseUrl: '',
@@ -228,7 +229,7 @@ describe('SettingsModal', () => {
   });
 
   it('scopes settings label hierarchy and field spacing to the settings dialog', () => {
-    const styles = readFileSync(resolve(process.cwd(), 'src/styles/luminous-precision.css'), 'utf8');
+    const styles = readLuminousPrecisionCss();
 
     expect(styles).toContain('.settings-dialog-scroll .form-field {\n  gap: 8px;\n}');
     expect(styles).toContain('.settings-dialog-scroll .form-field > label,\n.settings-dialog-scroll .form-field > div > label');

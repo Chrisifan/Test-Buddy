@@ -6,12 +6,12 @@ import type {
   StudioState,
 } from '../../shared/studio.js';
 
-export function appendRunToStudioState(
+export const appendRunToStudioState = (
   state: StudioState,
   result: RunTestCaseResponse,
   environment: ProjectEnvironment,
   browserSession: BrowserSessionState,
-): StudioState {
+): StudioState => {
   const detail = copyDetailWithFrozenProvenance(result.detail);
   return {
     ...state,
@@ -35,13 +35,13 @@ export function appendRunToStudioState(
     ],
     browserSession,
   };
-}
+};
 
 /** Persists one Suite parent without adding a fabricated Case detail. */
-export function appendSuiteRunToStudioState(
+export const appendSuiteRunToStudioState = (
   state: StudioState,
   record: SuiteRunRecord,
-): StudioState {
+): StudioState => {
   const existingRecords = Array.isArray(state.suiteRunRecords) ? state.suiteRunRecords : [];
   const persistedRecord = deepFreeze({
     ...structuredClone(record),
@@ -54,9 +54,9 @@ export function appendSuiteRunToStudioState(
       ...existingRecords.filter((candidate) => candidate.id !== record.id),
     ],
   };
-}
+};
 
-function copyDetailWithFrozenProvenance(result: RunTestCaseResponse['detail']): RunTestCaseResponse['detail'] {
+const copyDetailWithFrozenProvenance = (result: RunTestCaseResponse['detail']): RunTestCaseResponse['detail'] => {
   if (!result.provenance) {
     return result;
   }
@@ -64,12 +64,12 @@ function copyDetailWithFrozenProvenance(result: RunTestCaseResponse['detail']): 
     ...result,
     provenance: deepFreeze(structuredClone(result.provenance)),
   };
-}
+};
 
-function deepFreeze<Value>(value: Value): Value {
+const deepFreeze = <Value>(value: Value): Value => {
   if (!value || typeof value !== 'object' || Object.isFrozen(value)) {
     return value;
   }
   Object.values(value).forEach((child) => deepFreeze(child));
   return Object.freeze(value);
-}
+};

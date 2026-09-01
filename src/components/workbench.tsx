@@ -7,7 +7,7 @@ import { cn } from '@/lib/utils';
 
 type Tone = 'neutral' | 'primary' | 'passed' | 'failed' | 'running';
 
-function toneClass(tone: Tone): string {
+const toneClass = (tone: Tone): string => {
   if (tone === 'primary') {
     return 'tech-active text-primary';
   }
@@ -25,9 +25,9 @@ function toneClass(tone: Tone): string {
   }
 
   return 'tech-subtle text-foreground';
-}
+};
 
-export function PageHeader({
+export const PageHeader = ({
   title,
   action,
   meta,
@@ -35,7 +35,7 @@ export function PageHeader({
   title: string;
   action?: ReactNode;
   meta?: ReactNode;
-}) {
+}) => {
   return (
     <header className="page-header motion-page-header flex min-h-12 flex-wrap items-center justify-between gap-3 pb-2">
       <h1 className="min-w-0 truncate text-[20px] font-bold leading-6 tracking-[-0.02em] text-foreground">{title}</h1>
@@ -47,29 +47,29 @@ export function PageHeader({
       ) : null}
     </header>
   );
-}
+};
 
-export function PageShell({
+export const PageShell = ({
   children,
   className,
 }: {
   children: ReactNode;
   className?: string;
-}) {
+}) => {
   return <div className={cn('motion-page-shell grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)]', className)}>{children}</div>;
-}
+};
 
-export function PageBody({
+export const PageBody = ({
   children,
   className,
 }: {
   children: ReactNode;
   className?: string;
-}) {
+}) => {
   return <div className={cn('motion-page-body min-h-0 overflow-y-auto pt-2 pb-4', className)}>{children}</div>;
-}
+};
 
-export function Surface({
+export const Surface = ({
   children,
   className,
   variant = 'panel',
@@ -78,7 +78,7 @@ export function Surface({
   children: ReactNode;
   className?: string;
   variant?: 'panel' | 'subtle' | 'active' | 'evidence' | 'plain' | 'stat';
-} & ComponentPropsWithoutRef<'section'>) {
+} & ComponentPropsWithoutRef<'section'>) => {
   return (
     <section
       className={cn(
@@ -96,9 +96,9 @@ export function Surface({
       {children}
     </section>
   );
-}
+};
 
-export function MetricTile({
+export const MetricTile = ({
   label,
   value,
   description,
@@ -108,7 +108,7 @@ export function MetricTile({
   value: string;
   description?: string;
   tone?: Tone;
-}) {
+}) => {
   return (
     <div className={cn('metric-tile motion-surface rounded-[6px] p-3', toneClass(tone))}>
       <p className="font-mono text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">{label}</p>
@@ -116,9 +116,9 @@ export function MetricTile({
       {description ? <p className="mt-1 text-xs leading-5 text-muted-foreground">{description}</p> : null}
     </div>
   );
-}
+};
 
-export function ActionListItem({
+export const ActionListItem = ({
   title,
   description,
   meta,
@@ -130,7 +130,7 @@ export function ActionListItem({
   meta?: ReactNode;
   active?: boolean;
   onClick?: () => void;
-}) {
+}) => {
   const content = (
     <div className="flex items-start justify-between gap-4">
       <div className="min-w-0">
@@ -166,9 +166,9 @@ export function ActionListItem({
       {content}
     </div>
   );
-}
+};
 
-export function EvidenceCard({
+export const EvidenceCard = ({
   title,
   description,
   action,
@@ -176,7 +176,7 @@ export function EvidenceCard({
   title: string;
   description: string;
   action?: ReactNode;
-}) {
+}) => {
   return (
     <Surface className="p-4" variant="evidence">
       <div className="relative flex items-start justify-between gap-4">
@@ -188,9 +188,9 @@ export function EvidenceCard({
       </div>
     </Surface>
   );
-}
+};
 
-export function ProjectRequiredState({
+export const ProjectRequiredState = ({
   title,
   description,
   actionLabel,
@@ -200,7 +200,7 @@ export function ProjectRequiredState({
   description: string;
   actionLabel: string;
   onOpenProjects?: () => void;
-}) {
+}) => {
   return (
     <section className="project-required-state" aria-live="polite">
       <EvidenceCard
@@ -215,4 +215,4 @@ export function ProjectRequiredState({
       />
     </section>
   );
-}
+};

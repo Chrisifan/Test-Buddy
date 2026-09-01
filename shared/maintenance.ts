@@ -81,7 +81,7 @@ export interface MaintenanceValidationIssue {
   message: string;
 }
 
-export function createMaintenanceDraft(input: CreateMaintenanceDraftInput): MaintenanceDraft {
+export const createMaintenanceDraft = (input: CreateMaintenanceDraftInput): MaintenanceDraft => {
   if (!isCandidateForTarget(input.sourceCase, input.target)) {
     throw new Error('Maintenance draft source must be the exact complete target Case version.');
   }
@@ -115,18 +115,18 @@ export function createMaintenanceDraft(input: CreateMaintenanceDraftInput): Main
     throw new Error(`Invalid maintenance draft: ${issues.map((issue) => issue.message).join(' ')}`);
   }
   return deepFreeze(draft);
-}
+};
 
-export function validateMaintenanceDraft(draft: MaintenanceDraft): MaintenanceValidationIssue[] {
+export const validateMaintenanceDraft = (draft: MaintenanceDraft): MaintenanceValidationIssue[] => {
   return validateDraft(draft);
-}
+};
 
-export function isMaintenanceDraft(value: unknown): value is MaintenanceDraft {
+export const isMaintenanceDraft = (value: unknown): value is MaintenanceDraft => {
   return isRecord(value) && validateDraft(value as unknown as MaintenanceDraft).length === 0;
-}
+};
 
 /** Drops malformed and duplicate persisted queue entries instead of reviving unsafe work. */
-export function normalizeMaintenanceDrafts(value: unknown): MaintenanceDraft[] {
+export const normalizeMaintenanceDrafts = (value: unknown): MaintenanceDraft[] => {
   if (!Array.isArray(value)) {
     return [];
   }
@@ -138,14 +138,14 @@ export function normalizeMaintenanceDrafts(value: unknown): MaintenanceDraft[] {
     ids.add(candidate.id);
     return [deepFreeze(structuredClone(candidate))];
   });
-}
+};
 
-export function transitionMaintenanceDraft(
+export const transitionMaintenanceDraft = (
   draft: MaintenanceDraft,
   nextStatus: MaintenanceDraftStatus,
   at = new Date().toISOString(),
   rationale?: string,
-): MaintenanceDraft {
+): MaintenanceDraft => {
   const issues = validateMaintenanceDraft(draft);
   if (issues.length) {
     throw new Error(`Invalid maintenance draft: ${issues.map((issue) => issue.message).join(' ')}`);
@@ -169,21 +169,21 @@ export function transitionMaintenanceDraft(
         : { action: nextStatus, at },
     ],
   });
-}
+};
 
 /** Rejects empty or obviously secret-bearing reviewer prose before it reaches durable audit history. */
-export function isSafeMaintenanceRationale(value: unknown): value is string {
+export const isSafeMaintenanceRationale = (value: unknown): value is string => {
   return typeof value === 'string' &&
     value.trim().length > 0 &&
     value.length <= 1_000 &&
     !sensitiveRationalePattern.test(value);
-}
+};
 
 /** Finds immutable Suite versions that directly pin the exact Case under review. */
-export function analyzeMaintenanceImpact(
+export const analyzeMaintenanceImpact = (
   project: Pick<ProjectDraft, 'suites'>,
   target: MaintenanceCaseTarget,
-): MaintenanceImpactReference[] {
+): MaintenanceImpactReference[] => {
   const seen = new Set<string>();
   return project.suites.flatMap((suite) => {
     if (!suite.caseReferences.some((reference) => reference.id === target.id && reference.version === target.version)) {
@@ -196,12 +196,12 @@ export function analyzeMaintenanceImpact(
     seen.add(key);
     return [{ kind: 'suite' as const, id: suite.id, version: suite.version }];
   });
-}
+};
 
-function validateDraft(
+const validateDraft = (
   draft: MaintenanceDraft,
   options: { expectedBefore?: string } = {},
-): MaintenanceValidationIssue[] {
+): MaintenanceValidationIssue[] => {
   const issues: MaintenanceValidationIssue[] = [];
   if (!isRecord(draft) || draft.schemaVersion !== 1 || !nonEmptyString(draft.id) || !nonEmptyString(draft.projectId)) {
     issues.push({ code: 'invalidIdentity', message: 'Maintenance draft identity is invalid.' });
@@ -235,9 +235,9 @@ function validateDraft(
     issues.push({ code: 'invalidAudit', message: 'Maintenance draft audit history is invalid.' });
   }
   return issues;
-}
+};
 
-function isCandidateForTarget(candidate: unknown, target: unknown): candidate is TestCaseDraft {
+const isCandidateForTarget = (candidate: unknown, target: unknown): candidate is TestCaseDraft => {
   if (!isRecord(candidate) || !isCaseTarget(target)) {
     return false;
   }
@@ -259,21 +259,21 @@ function isCandidateForTarget(candidate: unknown, target: unknown): candidate is
     !Object.prototype.hasOwnProperty.call(step, 'preflightBlockReason') &&
     (step.execution === undefined || hasValidTestStepExecution(step.execution))
   ));
-}
+};
 
-function isCaseTarget(value: unknown): value is MaintenanceCaseTarget {
+const isCaseTarget = (value: unknown): value is MaintenanceCaseTarget => {
   return isRecord(value) && value.kind === 'case' && nonEmptyString(value.id) && positiveInteger(value.version);
-}
+};
 
-function isEvidenceReference(value: unknown): value is MaintenanceEvidenceReference {
+const isEvidenceReference = (value: unknown): value is MaintenanceEvidenceReference => {
   return isRecord(value) && nonEmptyString(value.runId) && nonEmptyString(value.artifactId) && isHash(value.contentHash);
-}
+};
 
-function isImpactReference(value: unknown): value is MaintenanceImpactReference {
+const isImpactReference = (value: unknown): value is MaintenanceImpactReference => {
   return isRecord(value) && value.kind === 'suite' && nonEmptyString(value.id) && positiveInteger(value.version);
-}
+};
 
-function isAuditForStatus(value: unknown, status: unknown): value is MaintenanceAuditEntry[] {
+const isAuditForStatus = (value: unknown, status: unknown): value is MaintenanceAuditEntry[] => {
   if (!Array.isArray(value) || !value.length || !isMaintenanceStatus(status)) {
     return false;
   }
@@ -288,17 +288,17 @@ function isAuditForStatus(value: unknown, status: unknown): value is Maintenance
     return actions.length === 1;
   }
   return actions.length === 2 && actions[1] === status;
-}
+};
 
-function isMaintenanceStatus(value: unknown): value is MaintenanceDraftStatus {
+const isMaintenanceStatus = (value: unknown): value is MaintenanceDraftStatus => {
   return value === 'draft' || value === 'accepted' || value === 'rejected' || value === 'stale';
-}
+};
 
-function isAuditAction(value: unknown): value is MaintenanceAuditEntry['action'] {
+const isAuditAction = (value: unknown): value is MaintenanceAuditEntry['action'] => {
   return value === 'created' || value === 'accepted' || value === 'rejected' || value === 'stale';
-}
+};
 
-function isAuditEntry(value: unknown): value is MaintenanceAuditEntry {
+const isAuditEntry = (value: unknown): value is MaintenanceAuditEntry => {
   if (!isRecord(value) || !nonEmptyString(value.at) || !isAuditAction(value.action)) {
     return false;
   }
@@ -306,13 +306,13 @@ function isAuditEntry(value: unknown): value is MaintenanceAuditEntry {
     return hasExactKeys(value, ['action', 'at', 'rationale']) && isSafeMaintenanceRationale(value.rationale);
   }
   return hasExactKeys(value, ['action', 'at']);
-}
+};
 
-function isStepType(value: unknown): boolean {
+const isStepType = (value: unknown): boolean => {
   return value === 'ai' || value === 'aiAssert' || value === 'aiQuery' || value === 'recordingReplay' || value === 'manual';
-}
+};
 
-function hasDuplicateReferences(references: MaintenanceImpactReference[]): boolean {
+const hasDuplicateReferences = (references: MaintenanceImpactReference[]): boolean => {
   const seen = new Set<string>();
   return references.some((reference) => {
     const key = `${reference.kind}:${reference.id}@${reference.version}`;
@@ -322,34 +322,34 @@ function hasDuplicateReferences(references: MaintenanceImpactReference[]): boole
     seen.add(key);
     return false;
   });
-}
+};
 
-function isHash(value: unknown): value is string {
+const isHash = (value: unknown): value is string => {
   return typeof value === 'string' && /^[a-f0-9]{64}$/i.test(value);
-}
+};
 
-function positiveInteger(value: unknown): value is number {
+const positiveInteger = (value: unknown): value is number => {
   return typeof value === 'number' && Number.isInteger(value) && value > 0;
-}
+};
 
-function nonEmptyString(value: unknown): value is string {
+const nonEmptyString = (value: unknown): value is string => {
   return typeof value === 'string' && value.trim().length > 0;
-}
+};
 
-function hasExactKeys(value: Record<string, unknown>, keys: string[]): boolean {
+const hasExactKeys = (value: Record<string, unknown>, keys: string[]): boolean => {
   const actual = Object.keys(value).sort();
   return actual.length === keys.length && actual.every((key, index) => key === [...keys].sort()[index]);
-}
+};
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+const isRecord = (value: unknown): value is Record<string, unknown> => {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
-}
+};
 
-function canonicalJson(value: unknown): string {
+const canonicalJson = (value: unknown): string => {
   return JSON.stringify(canonicalize(value));
-}
+};
 
-function canonicalize(value: unknown): unknown {
+const canonicalize = (value: unknown): unknown => {
   if (Array.isArray(value)) {
     return value.map(canonicalize);
   }
@@ -364,14 +364,14 @@ function canonicalize(value: unknown): unknown {
       }, {});
   }
   return value;
-}
+};
 
-function deepFreeze<Value>(value: Value): Value {
+const deepFreeze = <Value>(value: Value): Value => {
   if (!value || typeof value !== 'object' || Object.isFrozen(value)) {
     return value;
   }
   Object.values(value).forEach((child) => deepFreeze(child));
   return Object.freeze(value);
-}
+};
 
 const sensitiveRationalePattern = /(?:\b(?:password|passwd|passcode|passphrase|pwd|pin|secret|token|cookie|authorization|bearer|api[-_ ]?key)\b\s*(?:[:=]|with)\s*\S+)|(?:\bsk-[A-Za-z0-9_-]+\b)|(?:\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b)/iu;

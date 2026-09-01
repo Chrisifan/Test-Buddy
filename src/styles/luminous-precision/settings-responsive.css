@@ -1,0 +1,314 @@
+/* Settings */
+
+.settings-dialog-content {
+  width: min(860px, calc(100vw - 32px));
+  height: min(640px, calc(100vh - 32px));
+  max-width: 860px;
+  border: 1px solid var(--outline-variant);
+  border-radius: var(--panel-radius);
+  background: var(--card);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+}
+
+.settings-dialog-shell,
+.settings-dialog-topbar,
+.settings-dialog-scroll,
+.settings-dialog-footer {
+  background: var(--card);
+}
+
+.settings-dialog-topbar {
+  height: 56px;
+  border-color: var(--outline-variant);
+  padding-inline: 16px;
+}
+
+.settings-dialog-topbar [role='heading'] {
+  color: var(--foreground);
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: 0;
+  line-height: 24px;
+}
+
+.settings-dialog-aside {
+  width: 176px;
+  border-color: var(--outline-variant);
+  background: var(--surface-container-low);
+  padding: 12px;
+}
+
+.settings-dialog-aside button {
+  min-height: 36px;
+  border: 1px solid transparent;
+  border-radius: var(--control-radius);
+  padding: 8px 10px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  box-shadow: none;
+}
+
+.settings-dialog-aside button:hover {
+  background: color-mix(in srgb, var(--card) 72%, transparent);
+  color: var(--foreground);
+}
+
+.settings-dialog-aside button.border-primary {
+  border-color: color-mix(in srgb, var(--primary) 34%, var(--outline-variant));
+  background: var(--card);
+  color: var(--primary);
+}
+
+.settings-dialog-scroll {
+  padding: 20px 24px;
+}
+
+.settings-dialog-scroll > section {
+  width: min(100%, 600px);
+}
+
+.settings-dialog-scroll > section > h2 {
+  color: var(--foreground);
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: 0;
+  line-height: 28px;
+}
+
+.settings-dialog-scroll .rounded-\[8px\].border,
+.settings-dialog-scroll .rounded-\[8px\].bg-muted {
+  border-color: var(--outline-variant);
+  border-radius: var(--panel-radius);
+  background: var(--card);
+  box-shadow: none;
+}
+
+.settings-dialog-footer {
+  min-height: 56px;
+  border-color: var(--outline-variant);
+  padding: 8px 16px;
+  box-shadow: none;
+}
+
+.settings-dialog-mobile-nav {
+  border-color: var(--outline-variant);
+  background: var(--surface-container-low);
+}
+
+.settings-page-shell,
+.settings-page-workspace,
+.settings-page-body,
+.settings-page-scroll {
+  background: var(--workspace-background);
+}
+
+.settings-page-aside,
+.settings-page-footer {
+  border-color: var(--outline-variant);
+  background: var(--card);
+}
+
+/* Dark mode repairs for utility-colored content. */
+
+.dark .app-main,
+.dark .page-header,
+.dark .home-dashboard,
+.dark .home-dashboard-layout,
+.dark .home-empty-shell,
+.dark .home-empty-main,
+.dark .home-empty-hero {
+  background: var(--workspace-background);
+}
+
+.dark .settings-dialog-content,
+.dark .settings-dialog-shell,
+.dark .settings-dialog-aside,
+.dark .settings-dialog-scroll,
+.dark .settings-dialog-footer {
+  background: var(--card);
+}
+
+.dark .app-main .bg-white,
+.dark .app-main .bg-slate-50,
+.dark .app-main .bg-slate-100 {
+  background-color: var(--card);
+}
+
+.dark .app-main .text-slate-800,
+.dark .app-main .text-slate-500,
+.dark .app-main .text-slate-400 {
+  color: var(--muted-foreground);
+}
+
+/* Responsive workbench */
+
+@media (max-width: 768px) {
+  .app-shell {
+    --page-padding: 12px;
+    --sidebar-width: 224px;
+  }
+
+  .app-shell {
+    gap: 0;
+    padding: 0;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+    background: transparent;
+  }
+
+  .app-workspace {
+    width: 100%;
+    min-width: 0;
+    border-radius: 0;
+    box-shadow: none;
+    grid-template-rows: minmax(0, 1fr);
+  }
+
+  .app-rail {
+    width: 100%;
+    max-width: 100vw;
+    min-height: 56px;
+    overflow: hidden;
+    border: 0;
+    border-radius: 0;
+    border-bottom: 1px solid var(--outline-variant);
+    padding: 8px 12px;
+    box-shadow: inset 0 -1px rgba(255, 255, 255, 0.24);
+  }
+
+  .app-rail .nav-button {
+    width: 32px;
+    min-width: 32px;
+    height: 32px;
+    justify-content: center;
+    padding: 0;
+  }
+
+  .mobile-nav-menu {
+    scrollbar-width: none;
+  }
+
+  .mobile-nav-menu::-webkit-scrollbar {
+    display: none;
+  }
+
+  .app-main {
+    padding: 12px;
+  }
+
+  .page-header {
+    min-height: 56px;
+    align-items: flex-start;
+    padding-bottom: 12px;
+  }
+
+  .page-header h1 {
+    max-width: 100%;
+    font-size: 28px;
+    line-height: 36px;
+    white-space: normal;
+  }
+
+  .page-header-actions {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .motion-page-body {
+    padding-right: 4px;
+  }
+
+  .home-summary-grid,
+  .home-operation-grid,
+  .home-insight-grid,
+  .project-overview-metrics,
+  .project-card-grid,
+  .document-asset-grid,
+  .document-side-panel,
+  .nl-metric-grid,
+  .nl-evidence-grid,
+  .workflow-runtime-metrics {
+    grid-template-columns: 1fr;
+  }
+
+  .home-metric-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .home-entry-grid,
+  .home-insight-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .designer-split,
+  .designer-split.nl-workbench,
+  .designer-split.run-workbench,
+  .designer-split.recording-console,
+  .designer-split.workflow-console,
+  .run-workbench,
+  .recording-console,
+  .workflow-studio,
+  .case-workbench,
+  .document-studio {
+    grid-template-columns: 1fr;
+    min-height: 0;
+    overflow-y: auto;
+  }
+
+  .designer-panel + .designer-panel,
+  .case-step-inspector,
+  .workflow-sidebar {
+    border-top: 1px solid var(--outline-variant);
+    border-left: 0;
+  }
+
+  .case-step-list {
+    min-height: 440px;
+  }
+
+  .case-step-inspector {
+    min-height: 420px;
+  }
+
+  .workflow-editor,
+  .workflow-sidebar,
+  .run-detail-stage,
+  .designer-detail-stage,
+  .document-asset-area,
+  .document-side-panel {
+    padding: 16px;
+  }
+
+  .settings-dialog-content {
+    width: calc(100vw - 24px);
+    height: calc(100vh - 24px);
+  }
+
+  .settings-dialog-scroll {
+    padding: 16px;
+  }
+
+  .settings-dialog-footer {
+    min-height: 56px;
+  }
+}
+
+@media (max-width: 480px) {
+  .home-metric-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .page-header-actions,
+  .page-header-statuses {
+    align-items: stretch;
+  }
+
+  .page-header-actions [data-slot='button'] {
+    flex: 1 1 auto;
+  }
+
+  .settings-dialog-footer [data-slot='button'] {
+    width: 100%;
+  }
+}
+

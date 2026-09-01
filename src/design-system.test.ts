@@ -3,9 +3,10 @@ import path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-const stylesheetPath = path.resolve(process.cwd(), 'src/styles/luminous-precision.css');
+import { readLuminousPrecisionCss } from './styles/luminous-precision.test-utils.js';
+
 const tokenStylesheetPath = path.resolve(process.cwd(), 'src/styles/design-tokens.css');
-const stylesheet = existsSync(stylesheetPath) ? readFileSync(stylesheetPath, 'utf8') : '';
+const stylesheet = readLuminousPrecisionCss();
 const tokenStylesheet = existsSync(tokenStylesheetPath) ? readFileSync(tokenStylesheetPath, 'utf8') : '';
 
 function normalizeCss(value: string): string {

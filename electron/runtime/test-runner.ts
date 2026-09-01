@@ -1293,11 +1293,11 @@ export class TestRunner {
   }
 }
 
-function createUserCancellation(): NonNullable<RunDetail['cancellation']> {
+const createUserCancellation = (): NonNullable<RunDetail['cancellation']> => {
   return createUserRunCancellation();
-}
+};
 
-function appendUnexecutedSteps(
+const appendUnexecutedSteps = (
   steps: RunStepLog[],
   request: RunTestCaseRequest,
   firstIndex: number,
@@ -1305,7 +1305,7 @@ function appendUnexecutedSteps(
   screenshotPath: string,
   reason: string,
   status: Extract<Exclude<RunStatus, 'running'>, 'skipped' | 'cancelled'> = 'skipped',
-): void {
+): void => {
   request.testCase.steps.slice(firstIndex).forEach((step, offset) => {
     steps.push({
       id: `run-step-${runId}-${firstIndex + offset}`,
@@ -1316,13 +1316,13 @@ function appendUnexecutedSteps(
       screenshotPath,
     });
   });
-}
+};
 
-function getFixtureOutputBindingIssue(
+const getFixtureOutputBindingIssue = (
   steps: TestStepDraft[],
   fixtures: FixtureAsset[],
   outputValues: ReadonlyMap<string, Readonly<Record<string, FixtureHttpJsonValue>>>,
-): string | undefined {
+): string | undefined => {
   for (const step of steps) {
     const binding = getConfirmedDeterministicTestInputBinding(step);
     if (binding?.kind !== 'fixtureOutput') {
@@ -1351,24 +1351,24 @@ function getFixtureOutputBindingIssue(
     }
   }
   return undefined;
-}
+};
 
-function fixtureReferenceKey(fixture: Pick<FixtureAsset, 'id' | 'version'>): string {
+const fixtureReferenceKey = (fixture: Pick<FixtureAsset, 'id' | 'version'>): string => {
   return `${fixture.id}@${fixture.version}`;
-}
+};
 
-function isAgentStep(step: TestStepDraft): step is TestStepDraft & { type: StepType } {
+const isAgentStep = (step: TestStepDraft): step is TestStepDraft & { type: StepType } => {
   return step.type === 'ai' || step.type === 'aiAssert' || step.type === 'aiQuery';
-}
+};
 
-function getConfirmedControlledInteraction(step: TestStepDraft) {
+const getConfirmedControlledInteraction = (step: TestStepDraft) => {
   const action = step.execution?.action;
   return step.type === 'ai' && step.execution?.reviewStatus === 'confirmed' && isControlledDeterministicInteraction(action)
     ? action
     : undefined;
-}
+};
 
-function isAgentRunResult(value: unknown): value is AgentRunResult {
+const isAgentRunResult = (value: unknown): value is AgentRunResult => {
   return Boolean(
     value &&
       typeof value === 'object' &&
@@ -1377,18 +1377,18 @@ function isAgentRunResult(value: unknown): value is AgentRunResult {
       'plan' in value &&
       'events' in value,
   );
-}
+};
 
 type TerminalOutcome =
   | { status: 'passed' }
   | { status: Exclude<RunStatus, 'running' | 'passed'>; reason: RunReason };
 
-function terminalOutcome(
+const terminalOutcome = (
   status: RunStatus,
   existingReason: RunReason | undefined,
   cancellation: RunDetail['cancellation'],
   step: TestStepDraft,
-): TerminalOutcome {
+): TerminalOutcome => {
   if (cancellation) {
     return { status: 'cancelled', reason: runReason('userCancelled', cancellation.message) };
   }
@@ -1411,41 +1411,41 @@ function terminalOutcome(
     return { status, reason: existingReason ?? runReason('userCancelled', '用户已取消运行。') };
   }
   return { status: 'error', reason: existingReason ?? runReason('executorError', '执行器未产生终态结果。') };
-}
+};
 
-function runReason(code: RunReason['code'], message: string): RunReason {
+const runReason = (code: RunReason['code'], message: string): RunReason => {
   return { code, message };
-}
+};
 
-function isCredentialUnavailable(message: string): boolean {
+const isCredentialUnavailable = (message: string): boolean => {
   return /认证|凭据|credential|storage state/i.test(message);
-}
+};
 
-function originFor(value: string): string | undefined {
+const originFor = (value: string): string | undefined => {
   try {
     const url = new URL(value);
     return url.protocol === 'http:' || url.protocol === 'https:' ? url.origin : undefined;
   } catch {
     return undefined;
   }
-}
+};
 
-function hostFor(value: string): string | undefined {
+const hostFor = (value: string): string | undefined => {
   try {
     const url = new URL(value);
     return url.protocol === 'http:' || url.protocol === 'https:' ? url.hostname : undefined;
   } catch {
     return undefined;
   }
-}
+};
 
-function deterministicFileReferenceKey(reference: DeterministicFileReference): string {
+const deterministicFileReferenceKey = (reference: DeterministicFileReference): string => {
   return reference.kind === 'fixture'
     ? `fixture:${reference.id}@${reference.version}`
     : `attachment:${reference.id}`;
-}
+};
 
-function toDeterministicAssertionPlanStep(step: TestStepDraft): AgentPlanStepDraft {
+const toDeterministicAssertionPlanStep = (step: TestStepDraft): AgentPlanStepDraft => {
   const assertion = step.execution?.assertion;
   const expected =
     assertion?.kind === 'locatorVisible'
@@ -1460,9 +1460,9 @@ function toDeterministicAssertionPlanStep(step: TestStepDraft): AgentPlanStepDra
     instruction: step.body,
     ...(expected ? { expected } : {}),
   };
-}
+};
 
-function findRecording(request: RunTestCaseRequest, recordingId?: string): RecordingAsset | undefined {
+const findRecording = (request: RunTestCaseRequest, recordingId?: string): RecordingAsset | undefined => {
   if (recordingId) {
     return request.project.recordings.find((recording) => recording.id === recordingId);
   }
@@ -1472,11 +1472,11 @@ function findRecording(request: RunTestCaseRequest, recordingId?: string): Recor
       recording.groupId === request.testCase.groupId &&
       recording.environmentId === request.testCase.environmentId,
   );
-}
+};
 
-function timeLabel(date: Date): string {
+const timeLabel = (date: Date): string => {
   return `${date.getHours().toString().padStart(2, '0')}:${date
     .getMinutes()
     .toString()
     .padStart(2, '0')}:${date.getSeconds().toString().padStart(2, '0')}`;
-}
+};

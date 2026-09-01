@@ -1,4 +1,4 @@
-function decodePdfLiteral(value: string): string {
+const decodePdfLiteral = (value: string): string => {
   return value
     .replace(/\\([nrtbf()\\])/g, (_match, escaped: string) => {
       const map: Record<string, string> = {
@@ -14,9 +14,9 @@ function decodePdfLiteral(value: string): string {
       return map[escaped] ?? escaped;
     })
     .replace(/\\([0-7]{1,3})/g, (_match, octal: string) => String.fromCharCode(parseInt(octal, 8)));
-}
+};
 
-function decodePdfHex(value: string): string {
+const decodePdfHex = (value: string): string => {
   const clean = value.replace(/\s+/g, '');
   const bytes: number[] = [];
   for (let index = 0; index < clean.length; index += 2) {
@@ -32,18 +32,18 @@ function decodePdfHex(value: string): string {
   }
 
   return new TextDecoder('latin1').decode(new Uint8Array(bytes));
-}
+};
 
-function normalizeExtractedText(value: string): string {
+const normalizeExtractedText = (value: string): string => {
   return value
     .replace(/\u0000/g, '')
     .replace(/[ \t]+\n/g, '\n')
     .replace(/\n{3,}/g, '\n\n')
     .replace(/[ \t]{2,}/g, ' ')
     .trim();
-}
+};
 
-function extractTextOperators(source: string): string[] {
+const extractTextOperators = (source: string): string[] => {
   const text: string[] = [];
   const literalPattern = /\((?:\\.|[^\\()])*\)\s*Tj/g;
   const arrayPattern = /\[(.*?)\]\s*TJ/gs;
@@ -68,9 +68,9 @@ function extractTextOperators(source: string): string[] {
   }
 
   return text;
-}
+};
 
-async function inflateStream(data: Uint8Array): Promise<string> {
+const inflateStream = async (data: Uint8Array): Promise<string> => {
   if (typeof DecompressionStream === 'undefined') {
     return '';
   }
@@ -82,9 +82,9 @@ async function inflateStream(data: Uint8Array): Promise<string> {
   } catch {
     return '';
   }
-}
+};
 
-export async function extractPdfText(file: File): Promise<string> {
+export const extractPdfText = async (file: File): Promise<string> => {
   const bytes = new Uint8Array(await file.arrayBuffer());
   const latinText = new TextDecoder('latin1').decode(bytes);
   const chunks = [latinText];
@@ -104,4 +104,4 @@ export async function extractPdfText(file: File): Promise<string> {
 
   const extracted = chunks.flatMap(extractTextOperators).join('\n');
   return normalizeExtractedText(extracted);
-}
+};

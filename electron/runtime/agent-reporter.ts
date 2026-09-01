@@ -27,33 +27,33 @@ export interface AgentReporter {
   report(request: AgentReporterRequest): Promise<AgentReporterResult>;
 }
 
-function completionEndpoint(baseUrl: string): string {
+const completionEndpoint =(baseUrl: string): string => {
   const normalized = baseUrl.trim().replace(/\/+$/, '');
   if (!normalized) {
     throw new Error('Reporter 模型 Base URL 不能为空');
   }
   return normalized.endsWith('/chat/completions') ? normalized : `${normalized}/chat/completions`;
-}
+};
 
-function usageBucket(promptTokens: number, completionTokens: number, totalTokens: number): AgentUsageBucket {
+const usageBucket =(promptTokens: number, completionTokens: number, totalTokens: number): AgentUsageBucket => {
   return {
     calls: 1,
     promptTokens,
     completionTokens,
     totalTokens,
   };
-}
+};
 
-function reporterSystemPrompt(): string {
+const reporterSystemPrompt =(): string => {
   return [
     '你是 Web 自动化测试 Reporter。只返回 JSON，不要 Markdown。',
     '根据 Agent 运行计划、事件、断言结果和产物总结失败原因、关键证据和修复建议。',
     '输出结构：{"summary":string,"evidenceSummary":string,"failureAnalysis":string,"suggestedFixes":string[]}。',
     '不要编造不存在的证据；证据不足时明确说明不足。',
   ].join('\n');
-}
+};
 
-function parseReporterPayload(content: string): Omit<AgentReporterResult, 'modelName' | 'metrics'> {
+const parseReporterPayload =(content: string): Omit<AgentReporterResult, 'modelName' | 'metrics'> => {
   const normalized = content
     .trim()
     .replace(/^```(?:json)?\s*/i, '')
@@ -90,7 +90,7 @@ function parseReporterPayload(content: string): Omit<AgentReporterResult, 'model
     failureAnalysis,
     suggestedFixes,
   };
-}
+};
 
 export class OpenAICompatibleAgentReporter implements AgentReporter {
   constructor(private readonly fetchImpl: typeof fetch = fetch) {}

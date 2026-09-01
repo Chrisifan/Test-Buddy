@@ -3,7 +3,7 @@ import type { ResolvedMidsceneConfig } from './model-config-resolver.js';
 
 const connectionTimeoutMs = 15_000;
 
-function completionEndpoint(baseUrl: string): string | undefined {
+const completionEndpoint = (baseUrl: string): string | undefined => {
   const normalized = baseUrl.trim().replace(/\/+$/, '');
   if (!normalized) {
     return undefined;
@@ -18,21 +18,21 @@ function completionEndpoint(baseUrl: string): string | undefined {
   } catch {
     return undefined;
   }
-}
+};
 
-function isConfigComplete(config: ResolvedMidsceneConfig): boolean {
+const isConfigComplete = (config: ResolvedMidsceneConfig): boolean => {
   return Boolean(
     config.modelBaseUrl.trim() &&
       config.modelApiKey.trim() &&
       config.modelName.trim() &&
       config.modelFamily.trim(),
   );
-}
+};
 
-export async function testMidsceneConnection(
+export const testMidsceneConnection = async (
   config: ResolvedMidsceneConfig,
   fetchImpl: typeof fetch = fetch,
-): Promise<MidsceneConnectionTestResult> {
+): Promise<MidsceneConnectionTestResult> => {
   const startedAt = Date.now();
   const modelName = config.modelName.trim();
   const endpoint = completionEndpoint(config.modelBaseUrl);
@@ -98,4 +98,4 @@ export async function testMidsceneConnection(
   } finally {
     clearTimeout(timeout);
   }
-}
+};

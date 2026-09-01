@@ -120,10 +120,10 @@ export type DesktopSuiteExecutionDependencies = Pick<RuntimeIpcDependencies,
   'loadState' | 'saveState' | 'createLazyModelConfigResolver' | 'getRuntimeBundle' |
   'projectRepository' | 'getFixtureScriptTrustContext'>;
 
-export async function executeDesktopSuiteIntent(
+export const executeDesktopSuiteIntent = async (
   dependencies: DesktopSuiteExecutionDependencies,
   request: RunSuiteIntent,
-): Promise<RunSuiteResponse> {
+): Promise<RunSuiteResponse> => {
   const projectSnapshot = await loadProjectSnapshot(dependencies.projectRepository, request.projectId, request.expectedProjectRevision);
   const suite = findSuiteAsset(projectSnapshot.project, request.suite);
   if (!suite) {
@@ -249,9 +249,9 @@ export async function executeDesktopSuiteIntent(
   }, stateWithParent);
   await dependencies.saveState(nextState);
   return persistedResult;
-}
+};
 
-export function registerRuntimeIpcHandlers(dependencies: RuntimeIpcDependencies): void {
+export const registerRuntimeIpcHandlers = (dependencies: RuntimeIpcDependencies): void => {
   dependencies.handle(runtimeIpcChannels.getInfo, async () => dependencies.getRuntimeInfo());
 
   dependencies.handle(runtimeIpcChannels.runTestCase, (_event, request) => serializeRunIntentError(async () => {
@@ -427,14 +427,14 @@ export function registerRuntimeIpcHandlers(dependencies: RuntimeIpcDependencies)
     }
     return dependencies.getRuntimeBundle().artifactManager.importManualEvidence(result.filePaths[0]);
   });
-}
+};
 
-function parseMaintenanceCreateRequest(value: unknown): {
+const parseMaintenanceCreateRequest = (value: unknown): {
   runId: string;
   target: { kind: 'case'; id: string; version: number };
   proposedCase: TestCaseDraft;
   citations: Array<{ artifactId: string; contentHash: string }>;
-} {
+} => {
   if (!isRecord(value) || !hasExactKeys(value, ['runId', 'target', 'proposedCase', 'citations']) || containsForbiddenMaintenanceData(value)) {
     throw new Error('Maintenance request is invalid.');
   }
@@ -460,9 +460,9 @@ function parseMaintenanceCreateRequest(value: unknown): {
     proposedCase: structuredClone(value.proposedCase) as unknown as TestCaseDraft,
     citations: citations.map((citation) => ({ artifactId: citation.artifactId as string, contentHash: citation.contentHash as string })),
   };
-}
+};
 
-function parseMaintenanceAcceptRequest(value: unknown): { draftId: string; expectedRevision: string } {
+const parseMaintenanceAcceptRequest = (value: unknown): { draftId: string; expectedRevision: string } => {
   if (
     !isRecord(value) || !hasExactKeys(value, ['draftId', 'expectedRevision']) ||
     typeof value.draftId !== 'string' || !value.draftId.trim() ||
@@ -471,9 +471,9 @@ function parseMaintenanceAcceptRequest(value: unknown): { draftId: string; expec
     throw new Error('Maintenance request is invalid.');
   }
   return { draftId: value.draftId, expectedRevision: value.expectedRevision };
-}
+};
 
-function parseMaintenanceRejectRequest(value: unknown): MaintenanceDraftRejectionRequest {
+const parseMaintenanceRejectRequest = (value: unknown): MaintenanceDraftRejectionRequest => {
   if (
     !isRecord(value) || !hasExactKeys(value, ['draftId', 'rationale']) || containsForbiddenMaintenanceData(value) ||
     typeof value.draftId !== 'string' || !value.draftId.trim() || !isSafeMaintenanceRationale(value.rationale)
@@ -481,9 +481,9 @@ function parseMaintenanceRejectRequest(value: unknown): MaintenanceDraftRejectio
     throw new Error('Maintenance request is invalid.');
   }
   return { draftId: value.draftId, rationale: value.rationale.trim() };
-}
+};
 
-function parseMaintenanceEvidenceOpenRequest(value: unknown): MaintenanceEvidenceOpenRequest {
+const parseMaintenanceEvidenceOpenRequest = (value: unknown): MaintenanceEvidenceOpenRequest => {
   if (!isRecord(value) || !hasExactKeys(value, ['draftId', 'citation']) || containsForbiddenMaintenanceData(value)) {
     throw new Error('Maintenance request is invalid.');
   }
@@ -505,12 +505,12 @@ function parseMaintenanceEvidenceOpenRequest(value: unknown): MaintenanceEvidenc
       contentHash: citation.contentHash,
     },
   };
-}
+};
 
-async function openManagedArtifact(
+const openManagedArtifact = async (
   dependencies: Pick<RuntimeIpcDependencies, 'getRuntimeBundle' | 'openPath'>,
   artifactPath: unknown,
-): Promise<void> {
+): Promise<void> => {
   const runtime = dependencies.getRuntimeBundle();
   if (typeof artifactPath !== 'string' || !runtime.artifactManager.isManagedArtifactPath(artifactPath)) {
     throw new Error('只能打开应用生成的证据文件。');
@@ -519,9 +519,9 @@ async function openManagedArtifact(
   if (error) {
     throw new Error(`打开证据文件失败：${error}`);
   }
-}
+};
 
-function containsForbiddenMaintenanceData(value: unknown): boolean {
+const containsForbiddenMaintenanceData = (value: unknown): boolean => {
   if (Array.isArray(value)) {
     return value.some(containsForbiddenMaintenanceData);
   }
@@ -541,18 +541,18 @@ function containsForbiddenMaintenanceData(value: unknown): boolean {
     'modelApiKey',
   ]);
   return Object.entries(value).some(([key, child]) => forbidden.has(key) || containsForbiddenMaintenanceData(child));
-}
+};
 
-function hasExactKeys(value: Record<string, unknown>, keys: string[]): boolean {
+const hasExactKeys = (value: Record<string, unknown>, keys: string[]): boolean => {
   const actual = Object.keys(value).sort();
   return actual.length === keys.length && actual.every((key, index) => key === [...keys].sort()[index]);
-}
+};
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+const isRecord = (value: unknown): value is Record<string, unknown> => {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
-}
+};
 
-async function serializeRunIntentError<T>(operation: () => Promise<T>): Promise<T | RunIntentIpcErrorResponse> {
+const serializeRunIntentError = async <T>(operation: () => Promise<T>): Promise<T | RunIntentIpcErrorResponse> => {
   try {
     return await operation();
   } catch (error) {
@@ -565,11 +565,11 @@ async function serializeRunIntentError<T>(operation: () => Promise<T>): Promise<
       message: error.message,
     };
   }
-}
+};
 
-function isRunIntentError(
+const isRunIntentError = (
   error: unknown,
-): error is Error & { code: RunIntentIpcErrorResponse['code'] } {
+): error is Error & { code: RunIntentIpcErrorResponse['code'] } => {
   return error instanceof Error &&
     typeof error === 'object' &&
     error !== null &&
@@ -577,13 +577,13 @@ function isRunIntentError(
     (error.code === 'staleProjectRevision' ||
       error.code === 'projectRevisionChanged' ||
       error.code === 'missingAssetVersion');
-}
+};
 
-async function loadProjectSnapshot(
+const loadProjectSnapshot = async (
   projectRepository: Pick<ProjectRepository, 'load' | 'loadBound'>,
   projectId: string,
   expectedProjectRevision?: string,
-): Promise<ProjectSnapshot> {
+): Promise<ProjectSnapshot> => {
   try {
     return await projectRepository.loadBound(projectId, expectedProjectRevision);
   } catch (error) {
@@ -598,36 +598,36 @@ async function loadProjectSnapshot(
     }
     throw error;
   }
-}
+};
 
-function isProjectUnboundError(error: unknown): error is { code: 'projectUnbound' } {
+const isProjectUnboundError = (error: unknown): error is { code: 'projectUnbound' } => {
   return typeof error === 'object' && error !== null && 'code' in error && error.code === 'projectUnbound';
-}
+};
 
-function findEnvironment(
+const findEnvironment = (
   projectSnapshot: ProjectSnapshot,
   environmentId: string,
   assetLabel: string,
-): ProjectEnvironment {
+): ProjectEnvironment => {
   const environment = projectSnapshot.project.environments.find((candidate) => candidate.id === environmentId);
   if (!environment) {
     throw new RunIntentResolutionError('missingAssetVersion', `${assetLabel} 引用了不存在的环境：${environmentId}。`);
   }
   return environment;
-}
+};
 
-function toCaseRunResponse(detail: RunDetail): RunTestCaseResponse {
+const toCaseRunResponse = (detail: RunDetail): RunTestCaseResponse => {
   return {
     runId: detail.id,
     title: detail.title,
     detail,
   };
-}
+};
 
-async function resolveStoredHistoricalRerun(
+const resolveStoredHistoricalRerun = async (
   dependencies: Pick<RuntimeIpcDependencies, 'loadState' | 'projectRepository'>,
   runId: string,
-): Promise<{ run?: RunDetail; plan: RerunPlan }> {
+): Promise<{ run?: RunDetail; plan: RerunPlan }> => {
   const state = await dependencies.loadState();
   const run = state.runDetails.find((candidate) => candidate.id === runId);
   if (!run?.provenance) {
@@ -649,9 +649,9 @@ async function resolveStoredHistoricalRerun(
     run,
     plan: await resolveRerunPlan(dependencies.projectRepository, run.provenance),
   };
-}
+};
 
-function historicalRerunPlanForRenderer(runId: string, plan: RerunPlan): HistoricalRerunPlan {
+const historicalRerunPlanForRenderer = (runId: string, plan: RerunPlan): HistoricalRerunPlan => {
   if (plan.status === 'blocked') {
     return {
       status: 'blocked',
@@ -661,12 +661,12 @@ function historicalRerunPlanForRenderer(runId: string, plan: RerunPlan): Histori
     };
   }
   return { status: 'ready', runId };
-}
+};
 
-function runtimeProvenanceMetadata(
+const runtimeProvenanceMetadata = (
   state: StudioState,
   environment: ProjectEnvironment,
-): RunProvenanceRuntimeMetadata {
+): RunProvenanceRuntimeMetadata => {
   return {
     browserProfile: {
       engine: environment.browser,
@@ -686,12 +686,12 @@ function runtimeProvenanceMetadata(
     },
     createdAt: new Date().toISOString(),
   };
-}
+};
 
-function withCaseProvenance(
+const withCaseProvenance = (
   response: RunTestCaseResponse,
   provenance: RunProvenance,
-): RunTestCaseResponse {
+): RunTestCaseResponse => {
   return {
     ...response,
     detail: {
@@ -699,15 +699,15 @@ function withCaseProvenance(
       provenance: deepFreeze(structuredClone(provenance)),
     },
   };
-}
+};
 
-function createSuiteMemberProvenanceByTestCaseReference(
+const createSuiteMemberProvenanceByTestCaseReference = (
   snapshot: ProjectSnapshot,
   suite: SuiteAsset,
   environment: ProjectEnvironment,
   metadata: RunProvenanceRuntimeMetadata,
   parentRunId: string,
-): ReadonlyMap<string, readonly RunProvenance[]> {
+): ReadonlyMap<string, readonly RunProvenance[]> => {
   const members = new Map<string, RunProvenance[]>();
   suite.caseReferences.forEach((reference) => {
     const testCase = findTestCaseVersion(snapshot.project, reference);
@@ -725,12 +725,12 @@ function createSuiteMemberProvenanceByTestCaseReference(
     members.set(key, [...(members.get(key) ?? []), provenance]);
   });
   return members;
-}
+};
 
-function suiteCaseProvenance(
+const suiteCaseProvenance = (
   memberProvenanceByTestCaseReference: ReadonlyMap<string, readonly RunProvenance[]>,
   detail: Pick<RunDetail, 'testCaseId' | 'testCaseVersion'>,
-): RunProvenance {
+): RunProvenance => {
   const version = detail.testCaseVersion;
   if (typeof version !== 'number' || !Number.isSafeInteger(version) || version < 1) {
     throw new Error(`Suite Case provenance is missing an exact version for ${detail.testCaseId}.`);
@@ -740,16 +740,16 @@ function suiteCaseProvenance(
     throw new Error(`Suite Case provenance is unavailable or ambiguous for ${detail.testCaseId}.`);
   }
   return matches[0]!;
-}
+};
 
-function versionedTestCaseKey(id: string, version: number): string {
+const versionedTestCaseKey = (id: string, version: number): string => {
   return JSON.stringify([id, version]);
-}
+};
 
-function createRunningSuiteRecord(
+const createRunningSuiteRecord = (
   id: string,
   provenance: SuiteRunRecord['provenance'],
-): SuiteRunRecord {
+): SuiteRunRecord => {
   return {
     id,
     provenance: deepFreeze(structuredClone(provenance)),
@@ -759,14 +759,14 @@ function createRunningSuiteRecord(
     members: [],
     summary: emptySuiteSummary(),
   };
-}
+};
 
-function completeSuiteRunRecord(
+const completeSuiteRunRecord = (
   record: SuiteRunRecord,
   result: RunSuiteResponse,
   memberProvenanceByTestCaseReference: ReadonlyMap<string, readonly RunProvenance[]>,
   historyEnvironmentsById: ReadonlyMap<string, ProjectEnvironment>,
-): SuiteRunRecord {
+): SuiteRunRecord => {
   const suite = result.detail.suite;
   const persistedChildIds = new Set(
     result.detail.caseDetails
@@ -796,13 +796,13 @@ function completeSuiteRunRecord(
       [member.status]: summary[member.status] + 1,
     }), emptySuiteSummary()),
   };
-}
+};
 
-function appendCompletedSuiteMember(
+const appendCompletedSuiteMember = (
   record: SuiteRunRecord,
   detail: RunDetail,
   attempt: number,
-): SuiteRunRecord {
+): SuiteRunRecord => {
   const members = record.members ?? [];
   const existing = members.find((member) =>
     member.testCaseId === detail.testCaseId && member.testCaseVersion === detail.testCaseVersion,
@@ -829,12 +829,12 @@ function appendCompletedSuiteMember(
       [candidate.status]: summary[candidate.status] + 1,
     }), emptySuiteSummary()),
   };
-}
+};
 
-function terminalizeRejectedSuiteRunRecord(
+const terminalizeRejectedSuiteRunRecord = (
   record: SuiteRunRecord,
   error: unknown,
-): SuiteRunRecord {
+): SuiteRunRecord => {
   const cancelled = isRunCancelled(error);
   return {
     ...record,
@@ -842,9 +842,9 @@ function terminalizeRejectedSuiteRunRecord(
     reasonCode: cancelled ? 'userCancelled' : 'executorError',
     finishedAt: new Date().toISOString(),
   };
-}
+};
 
-function emptySuiteSummary(): SuiteRunRecord['summary'] {
+const emptySuiteSummary = (): SuiteRunRecord['summary'] => {
   return {
     passed: 0,
     failed: 0,
@@ -853,25 +853,25 @@ function emptySuiteSummary(): SuiteRunRecord['summary'] {
     cancelled: 0,
     error: 0,
   };
-}
+};
 
-function createSuiteRunId(): string {
+const createSuiteRunId = (): string => {
   return `suite-run-${randomUUID()}`;
-}
+};
 
-function requiresModelConfiguration(testCase: TestCaseDraft): boolean {
+const requiresModelConfiguration = (testCase: TestCaseDraft): boolean => {
   return isAgentRunnableTestCase(testCase) || testCase.steps.some((step) =>
     (step.type === 'ai' || step.type === 'aiAssert' || step.type === 'aiQuery') &&
     !((step.type === 'ai' || step.type === 'aiAssert') && step.execution?.reviewStatus === 'confirmed'),
   );
-}
+};
 
-function deepFreeze<Value>(value: Value): Value {
+const deepFreeze = <Value>(value: Value): Value => {
   if (!value || typeof value !== 'object' || Object.isFrozen(value)) {
     return value;
   }
   Object.values(value).forEach((child) => deepFreeze(child));
   return Object.freeze(value);
-}
+};
 
 export type { RuntimeIpcChannel };

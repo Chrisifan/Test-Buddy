@@ -37,16 +37,16 @@ const runtimeIpcChannels = {
   attachManualEvidence: 'runtime:attach-manual-evidence',
 } as const;
 
-function invokeRunIntent<T>(channel: string, request: RunSuiteIntent | RunTestCaseIntent): Promise<T> {
+const invokeRunIntent = <T,>(channel: string, request: RunSuiteIntent | RunTestCaseIntent): Promise<T> => {
   return ipcRenderer.invoke(channel, request).then((response: unknown) => {
     if (isRunIntentIpcError(response)) {
       throw Object.assign(new Error(response.message), { code: response.code });
     }
     return response as T;
   });
-}
+};
 
-function isRunIntentIpcError(response: unknown): response is RunIntentIpcErrorResponse {
+const isRunIntentIpcError = (response: unknown): response is RunIntentIpcErrorResponse => {
   return typeof response === 'object' &&
     response !== null &&
     'type' in response &&
@@ -57,7 +57,7 @@ function isRunIntentIpcError(response: unknown): response is RunIntentIpcErrorRe
       response.code === 'missingAssetVersion') &&
     'message' in response &&
     typeof response.message === 'string';
-}
+};
 
 contextBridge.exposeInMainWorld('desktopApi', {
   loadStudioState: () => ipcRenderer.invoke('studio:load-state'),

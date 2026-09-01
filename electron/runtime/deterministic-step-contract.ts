@@ -98,21 +98,21 @@ type ControlledDeterministicInteraction = Extract<
   { kind: 'iframe' | 'tab' | 'upload' | 'download' | 'hover' | 'drag' | 'clipboard' | 'networkObserve' | 'networkMock' }
 >;
 
-export function isControlledDeterministicInteraction(
+export const isControlledDeterministicInteraction = (
   action: DeterministicTestAction | undefined,
-): action is ControlledDeterministicInteraction {
+): action is ControlledDeterministicInteraction => {
   return Boolean(action && typeof action === 'object' && 'kind' in action &&
     typeof action.kind === 'string' && controlledActionKinds.has(action.kind as DeterministicTestAction['kind']));
-}
+};
 
 /**
  * Pure validation for one persisted V2 step. The caller maps every issue to
  * a terminal blocked/unsupportedAction result before it starts BrowserRuntime.
  */
-export function validateDeterministicStep(
+export const validateDeterministicStep = (
   step: TestStepDraft,
   context: DeterministicInteractionPreflightContext,
-): DeterministicStepValidationIssue[] {
+): DeterministicStepValidationIssue[] => {
   const issues = validateDeterministicPersistenceSurfaces({ steps: [step] }, context);
   const action = step.execution?.action;
   if (!isControlledDeterministicInteraction(action)) {
@@ -193,26 +193,26 @@ export function validateDeterministicStep(
   }
 
   return issues;
-}
+};
 
 /** Validates all persisted Case/Flow steps before a browser session is started. */
-export function validateDeterministicSteps(
+export const validateDeterministicSteps = (
   steps: readonly TestStepDraft[],
   context: DeterministicInteractionPreflightContext,
-): DeterministicStepValidationIssue[] {
+): DeterministicStepValidationIssue[] => {
   return [
     ...steps.flatMap((step) => validateDeterministicStep(step, context)),
     ...validateDeterministicPersistenceSurfaces({ steps }, context),
   ].filter((issue, index, all) => all.findIndex((candidate) => (
     candidate.reason === issue.reason && candidate.surface === issue.surface && candidate.message === issue.message
   )) === index);
-}
+};
 
 /** Rejects resolved secrets in every durable surface before it can be recorded. */
-export function validateDeterministicPersistenceSurfaces(
+export const validateDeterministicPersistenceSurfaces = (
   surfaces: DeterministicPersistenceSurfaces,
   context: Pick<DeterministicInteractionPreflightContext, 'knownSecrets'>,
-): DeterministicStepValidationIssue[] {
+): DeterministicStepValidationIssue[] => {
   const issues: DeterministicStepValidationIssue[] = [];
   const visit = (value: unknown, surface: DeterministicStepValidationIssue['surface']) => {
     if (containsKnownSecret(value, context.knownSecrets)) {
@@ -226,71 +226,71 @@ export function validateDeterministicPersistenceSurfaces(
   surfaces.maintenance?.forEach((entry) => visit(entry, 'maintenance'));
   surfaces.reports?.forEach((entry) => visit(entry, 'report'));
   return issues;
-}
+};
 
-function block(
+const block = (
   reason: DeterministicInteractionBlockReason,
   surface: DeterministicStepValidationIssue['surface'],
   message: string,
-): DeterministicStepValidationIssue {
+): DeterministicStepValidationIssue => {
   return { code: 'unsupportedAction', reason, message, ...(surface ? { surface } : {}) };
-}
+};
 
-function blockForUrl(
+const blockForUrl = (
   value: string,
   reason: 'untrustedTab' | 'untrustedDownload',
   message: string,
-): DeterministicStepValidationIssue {
+): DeterministicStepValidationIssue => {
   return parseHttpUrl(value)
     ? block(reason, 'step', message)
     : block('unsupportedUrlScheme', 'step', message);
-}
+};
 
-function normalizeOrigins(origins: readonly string[] | undefined, fallback: string): string[] {
+const normalizeOrigins = (origins: readonly string[] | undefined, fallback: string): string[] => {
   return (origins?.length ? origins : [fallback]).flatMap((origin) => {
     const url = parseHttpUrl(origin);
     return url ? [url.origin] : [];
   });
-}
+};
 
-function parseHttpUrl(value: string): URL | undefined {
+const parseHttpUrl = (value: string): URL | undefined => {
   try {
     const url = new URL(value);
     return url.protocol === 'https:' || url.protocol === 'http:' ? url : undefined;
   } catch {
     return undefined;
   }
-}
+};
 
-function isAllowedOrigin(value: string, allowedOrigins: ReadonlySet<string>): boolean {
+const isAllowedOrigin = (value: string, allowedOrigins: ReadonlySet<string>): boolean => {
   const url = parseHttpUrl(value);
   return Boolean(url && allowedOrigins.has(url.origin));
-}
+};
 
-function sameFileReference(left: DeterministicFileReference, right: DeterministicFileReference): boolean {
+const sameFileReference = (left: DeterministicFileReference, right: DeterministicFileReference): boolean => {
   if (left.kind !== right.kind || left.id !== right.id) {
     return false;
   }
   return left.kind !== 'fixture' || right.kind === 'fixture' && left.version === right.version;
-}
+};
 
-function isBoundedPoint(
+const isBoundedPoint = (
   point: { x: number; y: number } | undefined,
   bounds: { min: number; max: number },
-): boolean {
+): boolean => {
   return !point || (
     Number.isFinite(point.x) &&
     Number.isFinite(point.y) &&
     point.x >= bounds.min && point.x <= bounds.max &&
     point.y >= bounds.min && point.y <= bounds.max
   );
-}
+};
 
-function byteCount(value: string): number {
+const byteCount = (value: string): number => {
   return new TextEncoder().encode(value).byteLength;
-}
+};
 
-function containsKnownSecret(value: unknown, knownSecrets: readonly string[] | undefined): boolean {
+const containsKnownSecret = (value: unknown, knownSecrets: readonly string[] | undefined): boolean => {
   const secrets = knownSecrets?.filter((secret) => typeof secret === 'string' && secret.length > 0) ?? [];
   if (!secrets.length) {
     return false;
@@ -323,10 +323,10 @@ function containsKnownSecret(value: unknown, knownSecrets: readonly string[] | u
     }
   };
   return visit(value);
-}
+};
 
 /** Reads only own data descriptors so persistence checks never invoke arbitrary getters. */
-function getSafePersistenceValues(value: object): unknown[] | undefined {
+const getSafePersistenceValues = (value: object): unknown[] | undefined => {
   try {
     if (Array.isArray(value)) {
       if (Object.getPrototypeOf(value) !== Array.prototype || Object.getOwnPropertySymbols(value).length) {
@@ -369,4 +369,4 @@ function getSafePersistenceValues(value: object): unknown[] | undefined {
   } catch {
     return undefined;
   }
-}
+};

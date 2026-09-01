@@ -42,18 +42,18 @@ interface RecordingVisualDiff {
   compare: (request: VisualDiffRequest) => Promise<VisualDiffResult>;
 }
 
-function formatDuration(durationMs: number): string {
+const formatDuration = (durationMs: number): string => {
   const totalSeconds = durationMs > 0 ? Math.ceil(durationMs / 1_000) : 0;
   const hours = Math.floor(totalSeconds / 3_600);
   const minutes = Math.floor((totalSeconds % 3_600) / 60);
   const seconds = totalSeconds % 60;
   return [hours, minutes, seconds].map((value) => String(value).padStart(2, '0')).join(':');
-}
+};
 
-function diffPathFor(actualPath: string): string {
+const diffPathFor = (actualPath: string): string => {
   const extension = path.extname(actualPath) || '.png';
   return path.join(path.dirname(actualPath), `${path.basename(actualPath, extension)}-diff${extension}`);
-}
+};
 
 export class RecordingRunner {
   constructor(
@@ -243,7 +243,7 @@ export class RecordingRunner {
   }
 }
 
-function markAgentRunPreflightBlocked(agentRun: AgentRunResult, reason: string): AgentRunResult {
+const markAgentRunPreflightBlocked = (agentRun: AgentRunResult, reason: string): AgentRunResult => {
   return {
     ...agentRun,
     status: 'neutral',
@@ -260,18 +260,18 @@ function markAgentRunPreflightBlocked(agentRun: AgentRunResult, reason: string):
       },
     ],
   };
-}
+};
 
 interface TerminalRecordingOutcome {
   status: Exclude<RunStatus, 'running'>;
   reason?: RunReason;
 }
 
-function terminalRecordingOutcome(
+const terminalRecordingOutcome = (
   agentRun: AgentRunResult,
   cancellation: RunDetail['cancellation'],
   preflightReason: string | undefined,
-): TerminalRecordingOutcome {
+): TerminalRecordingOutcome => {
   if (cancellation) {
     return { status: 'cancelled', reason: runReason('userCancelled', cancellation.message) };
   }
@@ -291,17 +291,17 @@ function terminalRecordingOutcome(
     return { status: 'blocked', reason: runReason('unsupportedAction', agentRun.summary) };
   }
   return { status: 'error', reason: runReason('executorError', 'Recording executor did not produce a terminal result.') };
-}
+};
 
-function runReason(code: RunReason['code'], message: string): RunReason {
+const runReason = (code: RunReason['code'], message: string): RunReason => {
   return { code, message };
-}
+};
 
-function isCredentialUnavailable(message: string): boolean {
+const isCredentialUnavailable = (message: string): boolean => {
   return /认证|凭据|credential|storage state/i.test(message);
-}
+};
 
-function appendTraceArtifact(agentRun: AgentRunResult, trace: RunArtifact): AgentRunResult {
+const appendTraceArtifact = (agentRun: AgentRunResult, trace: RunArtifact): AgentRunResult => {
   const artifact: AgentArtifact = {
     id: `${agentRun.runId}-artifact-trace`,
     type: 'trace',
@@ -324,4 +324,4 @@ function appendTraceArtifact(agentRun: AgentRunResult, trace: RunArtifact): Agen
     ],
     artifacts: [...agentRun.artifacts, artifact],
   };
-}
+};

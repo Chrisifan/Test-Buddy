@@ -372,9 +372,9 @@ export class BrowserPool {
  * Creates the production worker pool without launching Chromium. The browser
  * launches only when an eligible Suite worker successfully acquires it.
  */
-export function createControlledChromiumBrowserPool(
+export const createControlledChromiumBrowserPool = (
   options: ControlledChromiumBrowserPoolOptions = {},
-): BrowserPool {
+): BrowserPool => {
   return new BrowserPool({
     capacity: options.capacity ?? CONTROLLED_BROWSER_POOL_CAPACITY,
     createBrowser: options.createBrowser ?? launchControlledChromium,
@@ -395,34 +395,34 @@ export function createControlledChromiumBrowserPool(
       return { storageState: serializedState };
     },
   });
-}
+};
 
-async function launchControlledChromium(): Promise<BrowserPoolBrowser> {
+const launchControlledChromium = async (): Promise<BrowserPoolBrowser> => {
   const { chromium } = await import('playwright');
   const browser = await chromium.launch({ headless: true });
   return {
     newContext: (options) => browser.newContext(options as never),
     close: () => browser.close(),
   };
-}
+};
 
-function clampCapacity(capacity: number): number {
+const clampCapacity = (capacity: number): number => {
   return Number.isFinite(capacity) ? Math.max(1, Math.floor(capacity)) : 1;
-}
+};
 
-function uniqueLocks(locks: readonly string[] | undefined): string[] {
+const uniqueLocks = (locks: readonly string[] | undefined): string[] => {
   return Array.from(new Set(locks ?? [])).sort();
-}
+};
 
-function hasOverlappingLock(heldLocks: ReadonlySet<string>, requestedLocks: readonly string[] | undefined): boolean {
+const hasOverlappingLock = (heldLocks: ReadonlySet<string>, requestedLocks: readonly string[] | undefined): boolean => {
   return (requestedLocks ?? []).some((lock) => heldLocks.has(lock));
-}
+};
 
-function environmentKey(environment: BrowserPoolEnvironment): string {
+const environmentKey = (environment: BrowserPoolEnvironment): string => {
   return [environment.id, environment.browser, environment.locale, environment.viewport, environment.headless].join('|');
-}
+};
 
-function viewportFor(viewport: ProjectEnvironment['viewport']): { width: number; height: number } {
+const viewportFor = (viewport: ProjectEnvironment['viewport']): { width: number; height: number } => {
   if (viewport === 'mobile') {
     return { width: 390, height: 844 };
   }
@@ -430,8 +430,8 @@ function viewportFor(viewport: ProjectEnvironment['viewport']): { width: number;
     return { width: 1440, height: 900 };
   }
   return { width: 1600, height: 1000 };
-}
+};
 
-function abortedError(): Error {
+const abortedError = (): Error => {
   return new Error('BrowserPool acquire aborted.');
-}
+};

@@ -183,7 +183,7 @@ export class StorageStateStore {
   }
 }
 
-export function inspectStorageState(serializedState: string, now = new Date()): StorageStateInspection {
+export const inspectStorageState = (serializedState: string, now = new Date()): StorageStateInspection => {
   let raw: unknown;
   try {
     raw = JSON.parse(serializedState);
@@ -222,9 +222,9 @@ export function inspectStorageState(serializedState: string, now = new Date()): 
     return { availability: 'unknown', ...(latestExpiration ? { expiresAt: latestExpiration.toISOString() } : {}) };
   }
   return { availability: 'available', ...(latestExpiration ? { expiresAt: latestExpiration.toISOString() } : {}) };
-}
+};
 
-function toStorageStateRef(record: StoredStorageState, now: Date): StorageStateRef {
+const toStorageStateRef = (record: StoredStorageState, now: Date): StorageStateRef => {
   const availability = record.expiresAt && Date.parse(record.expiresAt) <= now.getTime()
     ? 'expired'
     : record.availability;
@@ -236,9 +236,9 @@ function toStorageStateRef(record: StoredStorageState, now: Date): StorageStateR
     availability,
     ...(record.expiresAt ? { expiresAt: record.expiresAt } : {}),
   };
-}
+};
 
-function isStoredStorageState(value: unknown): value is StoredStorageState {
+const isStoredStorageState = (value: unknown): value is StoredStorageState => {
   if (!value || typeof value !== 'object') {
     return false;
   }
@@ -252,9 +252,9 @@ function isStoredStorageState(value: unknown): value is StoredStorageState {
     (record.availability === 'available' || record.availability === 'expired' || record.availability === 'unknown') &&
     (record.expiresAt === undefined || (typeof record.expiresAt === 'string' && !Number.isNaN(Date.parse(record.expiresAt)))) &&
     typeof record.encryptedState === 'string' && Boolean(record.encryptedState);
-}
+};
 
-function validateStorageStateCookie(value: unknown): void {
+const validateStorageStateCookie = (value: unknown): void => {
   if (!value || typeof value !== 'object') {
     throw new Error('认证状态包含无效 cookie。');
   }
@@ -269,9 +269,9 @@ function validateStorageStateCookie(value: unknown): void {
   ) {
     throw new Error('认证状态包含无效 cookie。');
   }
-}
+};
 
-function validateStorageStateOrigin(value: unknown): void {
+const validateStorageStateOrigin = (value: unknown): void => {
   if (!value || typeof value !== 'object' || typeof (value as { origin?: unknown }).origin !== 'string') {
     throw new Error('认证状态包含无效 origin 存储。');
   }
@@ -283,14 +283,14 @@ function validateStorageStateOrigin(value: unknown): void {
   )))) {
     throw new Error('认证状态包含无效 origin 存储。');
   }
-}
+};
 
-function requiredString(value: string, label: string): string {
+const requiredString = (value: string, label: string): string => {
   if (!value.trim()) {
     throw new Error(`${label}无效。`);
   }
   return value.trim();
-}
+};
 
 const electronStorageStateProtection: StorageStateProtection = {
   encrypt(serializedState) {
@@ -315,7 +315,7 @@ const electronStorageStateProtection: StorageStateProtection = {
 
 const requireElectron = createRequire(import.meta.url);
 
-function loadElectronSafeStorage(): ElectronSafeStorage | undefined {
+const loadElectronSafeStorage = (): ElectronSafeStorage | undefined => {
   try {
     const electron = requireElectron('electron') as unknown;
     if (!electron || typeof electron !== 'object') {
@@ -326,9 +326,9 @@ function loadElectronSafeStorage(): ElectronSafeStorage | undefined {
   } catch {
     return undefined;
   }
-}
+};
 
-function isElectronSafeStorage(value: unknown): value is ElectronSafeStorage {
+const isElectronSafeStorage = (value: unknown): value is ElectronSafeStorage => {
   if (!value || typeof value !== 'object') {
     return false;
   }
@@ -336,4 +336,4 @@ function isElectronSafeStorage(value: unknown): value is ElectronSafeStorage {
   return typeof candidate.isEncryptionAvailable === 'function' &&
     typeof candidate.encryptString === 'function' &&
     typeof candidate.decryptString === 'function';
-}
+};

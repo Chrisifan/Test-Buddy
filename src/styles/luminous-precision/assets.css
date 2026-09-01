@@ -1,0 +1,195 @@
+/* Projects */
+
+.project-overview,
+.project-overview-scroll {
+  background: var(--workspace-background);
+}
+
+.project-overview-metrics {
+  gap: 16px;
+}
+
+.project-overview-metric {
+  border: 1px solid var(--outline-variant);
+  border-radius: var(--panel-radius);
+  background: var(--card);
+  box-shadow: var(--panel-shadow);
+}
+
+.project-overview-metric p,
+.project-card-metrics dt {
+  color: var(--muted-foreground);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
+.project-overview-metric strong,
+.project-card-metrics dd {
+  color: var(--foreground);
+  letter-spacing: 0;
+}
+
+.project-card-grid {
+  gap: 16px;
+}
+
+.project-card,
+.project-create-card {
+  border-color: var(--outline-variant);
+  border-radius: var(--panel-radius);
+  background: var(--card);
+  box-shadow: var(--panel-shadow);
+}
+
+.project-create-card {
+  border-style: dashed;
+  box-shadow: none;
+}
+
+.project-card:hover,
+.project-create-card:hover,
+.project-card.is-active {
+  border-color: color-mix(in srgb, var(--primary) 58%, var(--outline-variant));
+  background: var(--card);
+  transform: none;
+  box-shadow: var(--panel-shadow);
+}
+
+.project-card.is-active {
+  box-shadow: inset 2px 0 var(--primary), var(--panel-shadow);
+}
+
+.project-card-icon,
+.project-create-card-icon {
+  border-radius: var(--control-radius);
+  background: var(--surface-container-low);
+  color: var(--primary);
+  box-shadow: none;
+}
+
+.project-card-status {
+  min-height: 20px;
+  border: 1px solid var(--outline-variant);
+  border-radius: 999px;
+  background: var(--surface-container-low);
+  color: var(--muted-foreground);
+  padding: 1px 8px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 16px;
+  box-shadow: none;
+}
+
+.project-card-status.is-active {
+  border-color: color-mix(in srgb, var(--success) 34%, transparent);
+  background: var(--success-container);
+  color: var(--on-success-container);
+}
+
+.project-card-copy h2,
+.project-create-card-title,
+.project-config-heading h2,
+.project-config-section-heading h3 {
+  color: var(--foreground);
+  letter-spacing: 0;
+}
+
+.project-card-copy p,
+.project-create-card-description,
+.project-config-section-heading p,
+.project-credential-row span {
+  color: var(--muted-foreground);
+}
+
+.project-card-footer,
+.project-config-section + .project-config-section {
+  border-color: var(--outline-variant);
+}
+
+.project-config-dialog,
+.project-config-content,
+.project-config-section,
+.project-credential-row,
+.project-environment-row {
+  border-color: var(--outline-variant);
+  background: var(--card);
+}
+
+.project-group-row {
+  border-radius: var(--control-radius);
+}
+
+/* Documents and requirement analysis */
+
+.document-studio {
+  background: var(--card);
+}
+
+.document-asset-area,
+.document-side-panel,
+.document-intake,
+.document-inspector {
+  background: var(--workspace-background);
+}
+
+.document-summary-strip {
+  border-color: var(--outline-variant);
+  border-radius: var(--panel-radius);
+  background: var(--surface-container-low);
+  box-shadow: none;
+}
+
+.document-summary-metrics > span {
+  border-color: var(--outline-variant);
+}
+
+.document-asset-grid {
+  gap: 16px;
+}
+
+.document-asset-card,
+.document-path-card {
+  border-color: var(--outline-variant);
+  border-radius: var(--panel-radius);
+  background: var(--card);
+  box-shadow: var(--panel-shadow);
+}
+
+.document-asset-card:hover,
+.document-asset-card.is-active {
+  border-color: color-mix(in srgb, var(--primary) 56%, var(--outline-variant));
+  background: var(--card);
+  transform: none;
+  box-shadow: var(--panel-shadow);
+}
+
+.document-asset-card.is-active {
+  box-shadow: inset 2px 0 var(--primary), var(--panel-shadow);
+}
+
+.document-asset-icon {
+  border-radius: var(--control-radius);
+  background: var(--surface-container-low);
+  color: var(--primary);
+}
+
+.document-asset-card h3,
+.document-intake h2,
+.document-inspector h2,
+.document-path-card h3 {
+  color: var(--foreground);
+  letter-spacing: 0;
+}
+
+.document-asset-card > p,
+.document-intake p {
+  color: var(--muted-foreground);
+}
+
+.document-side-panel,
+.document-intake,
+.document-path-steps > div + div {
+  border-color: var(--outline-variant);
+}
+

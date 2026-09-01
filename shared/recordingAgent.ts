@@ -41,12 +41,12 @@ export interface RecordingAgentRunRequest {
   visualComparisons?: RecordingVisualComparison[];
 }
 
-function recordingAction(kind: RecordingStepDraft['kind']): AgentStepAction {
+const recordingAction = (kind: RecordingStepDraft['kind']): AgentStepAction => {
   if (kind === 'snapshot') return 'observe';
   return kind;
-}
+};
 
-export function createRecordingAgentRun(request: RecordingAgentRunRequest): AgentRunResult {
+export const createRecordingAgentRun = (request: RecordingAgentRunRequest): AgentRunResult => {
   const now = new Date().toISOString();
   const runId = request.runId ?? `agent-run-recording-${Date.now()}`;
   const documentId = request.documentId ?? request.recording.prdPath?.documentId;
@@ -297,4 +297,4 @@ export function createRecordingAgentRun(request: RecordingAgentRunRequest): Agen
     endedAt: request.endedAt ?? now,
     ...(failureReason ? { failureReason } : {}),
   };
-}
+};

@@ -74,13 +74,18 @@ pnpm add -D eslint @eslint/js typescript-eslint knip jscpd rollup-plugin-visuali
 {
   "scripts": {
     "lint": "eslint .",
-    "quality": "pnpm lint && pnpm quality:unused && pnpm quality:duplicates",
+    "quality": "pnpm lint",
     "quality:unused": "knip --config knip.json",
     "quality:duplicates": "jscpd --config jscpd.json",
     "analyze:bundle": "ANALYZE_BUNDLE=1 pnpm build:renderer"
   }
 }
 ```
+
+`quality` is the passing enforcement gate. `quality:unused` and
+`quality:duplicates` are opt-in audits: preserve their native nonzero exit
+codes when they identify candidates, and review their output before deciding
+whether a targeted refactor is safe.
 
 ```js
 export default [
@@ -404,11 +409,15 @@ export const declarationStyleOnly = (): string => 'must be an arrow';
 
 Convert top-level and nested functions in each touched module after its focused tests are green. When a declaration relies on hoisting, move the arrow above its first call and rerun the focused suite. Do not convert constructors, getters, setters, or intentional prototype methods.
 
-- [ ] **Step 3: Verify all quality reports and final acceptance**
+- [ ] **Step 3: Verify the enforcement gate, inspect reports, and complete final acceptance**
 
 Run: `pnpm quality && pnpm test && pnpm typecheck && pnpm build && git diff --check`
 
-Expected: every command exits 0. Browser smoke remains explicitly recorded as unavailable only when the sandbox cannot bind `127.0.0.1`.
+Expected: every enforcement command exits 0. Run `pnpm quality:unused` and
+`pnpm quality:duplicates` separately as reports; their nonzero exit codes
+mean candidates were found, not that the acceptance gate failed. Browser smoke
+remains explicitly recorded as unavailable only when the sandbox cannot bind
+`127.0.0.1`.
 
 ```bash
 git add <module-family-files> eslint.config.js docs/acceptance/matrix.md

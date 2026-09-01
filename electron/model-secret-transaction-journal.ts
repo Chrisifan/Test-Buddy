@@ -66,13 +66,13 @@ export class ModelSecretTransactionJournal {
   }
 }
 
-function assertJournalEntry(entry: ModelSecretTransactionJournalEntry): void {
+const assertJournalEntry = (entry: ModelSecretTransactionJournalEntry): void => {
   if (!isJournalEntry(entry)) {
     throw new Error('模型密钥事务恢复日志无效。');
   }
-}
+};
 
-function isJournalEntry(value: unknown): value is ModelSecretTransactionJournalEntry {
+const isJournalEntry = (value: unknown): value is ModelSecretTransactionJournalEntry => {
   if (!value || typeof value !== 'object') {
     return false;
   }
@@ -80,9 +80,9 @@ function isJournalEntry(value: unknown): value is ModelSecretTransactionJournalE
   return isModelSecretScope(entry.scope) &&
     isMatchingReference(entry.next, entry.scope) &&
     (entry.previous === undefined || isMatchingSnapshot(entry.previous, entry.scope));
-}
+};
 
-function isMatchingReference(value: unknown, scope: ModelSecretScope): value is ModelSecretRef {
+const isMatchingReference = (value: unknown, scope: ModelSecretScope): value is ModelSecretRef => {
   if (!value || typeof value !== 'object') {
     return false;
   }
@@ -91,9 +91,9 @@ function isMatchingReference(value: unknown, scope: ModelSecretScope): value is 
     typeof reference.hasKey === 'boolean' &&
     typeof reference.updatedAt === 'string' &&
     !Number.isNaN(Date.parse(reference.updatedAt));
-}
+};
 
-function isMatchingSnapshot(value: unknown, scope: ModelSecretScope): value is ModelSecretSnapshot {
+const isMatchingSnapshot = (value: unknown, scope: ModelSecretScope): value is ModelSecretSnapshot => {
   if (!isMatchingReference(value, scope)) {
     return false;
   }
@@ -101,9 +101,9 @@ function isMatchingSnapshot(value: unknown, scope: ModelSecretScope): value is M
   return snapshot.hasKey === true &&
     typeof snapshot.encryptedValue === 'string' &&
     snapshot.encryptedValue.startsWith('safe:');
-}
+};
 
-function isModelSecretScope(value: unknown): value is ModelSecretScope {
+const isModelSecretScope = (value: unknown): value is ModelSecretScope => {
   return value === 'midscene' || value === 'agent:planner' || value === 'agent:executor' ||
     value === 'agent:verifier' || value === 'agent:reporter';
-}
+};

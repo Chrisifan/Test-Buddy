@@ -31,11 +31,11 @@ export interface RunAcceptanceResult extends AcceptanceReport {
 }
 
 /** Executes the offline local lane, or fails closed before any external-lane work starts. */
-export async function runAcceptance(
+export const runAcceptance = async (
   argv: readonly string[],
   environment: Readonly<Record<string, string | undefined>> = process.env,
   dependencies: RunAcceptanceDependencies = {},
-): Promise<RunAcceptanceResult> {
+): Promise<RunAcceptanceResult> => {
   const { lane, outputDir } = parseArguments(argv);
   if (lane !== 'localFixture') {
     assertExternalLaneAuthorized(lane, environment);
@@ -58,9 +58,9 @@ export async function runAcceptance(
   const files = await writeReport(report, evidenceDirectory);
   await verifyAcceptanceReport(files.json);
   return { ...report, files };
-}
+};
 
-function parseArguments(argv: readonly string[]): { lane: AcceptanceLane; outputDir: string } {
+const parseArguments = (argv: readonly string[]): { lane: AcceptanceLane; outputDir: string } => {
   let lane: AcceptanceLane | undefined;
   let outputDir = path.resolve('.acceptance', 'local');
   for (let index = 0; index < argv.length; index += 1) {
@@ -87,9 +87,9 @@ function parseArguments(argv: readonly string[]): { lane: AcceptanceLane; output
     throw new Error('Acceptance lane is required.');
   }
   return { lane, outputDir };
-}
+};
 
-function assertExternalLaneAuthorized(lane: Exclude<AcceptanceLane, 'localFixture'>, environment: Readonly<Record<string, string | undefined>>): void {
+const assertExternalLaneAuthorized = (lane: Exclude<AcceptanceLane, 'localFixture'>, environment: Readonly<Record<string, string | undefined>>): void => {
   if (environment.TESTBUDDY_ACCEPTANCE_CONSENT !== '1') {
     throw new Error('External acceptance requires explicit consent.');
   }
@@ -100,9 +100,9 @@ function assertExternalLaneAuthorized(lane: Exclude<AcceptanceLane, 'localFixtur
   if (lane === 'model' && !environment.TESTBUDDY_ACCEPTANCE_MODEL_SECRET_REF?.trim()) {
     throw new Error('Model acceptance requires an available main-owned model secret reference.');
   }
-}
+};
 
-async function runDefaultLocalFixture(target: AcceptanceTarget, evidenceDirectory: string): Promise<LocalAcceptanceReport> {
+const runDefaultLocalFixture = async (target: AcceptanceTarget, evidenceDirectory: string): Promise<LocalAcceptanceReport> => {
   return withLocalFixtureServer(startLocalAcceptanceFixtureServer, async (server) => {
     const fixture = createLocalAcceptanceFixture(server.url);
     const executeDesktopSuite = await loadDesktopSuiteBoundary();
@@ -114,68 +114,68 @@ async function runDefaultLocalFixture(target: AcceptanceTarget, evidenceDirector
       executeDesktopSuite,
     });
   });
-}
+};
 
-async function loadDesktopSuiteBoundary(): Promise<DesktopSuiteExecutionBoundary> {
+const loadDesktopSuiteBoundary = async (): Promise<DesktopSuiteExecutionBoundary> => {
   const modulePath = '../electron/ipc/runtime-ipc-handlers.js';
   const module = await import(modulePath) as { executeDesktopSuiteIntent?: DesktopSuiteExecutionBoundary };
   if (!module.executeDesktopSuiteIntent) {
     throw new Error('Desktop acceptance requires the public desktop-main Suite boundary.');
   }
   return module.executeDesktopSuiteIntent;
-}
+};
 
 /** Keeps previous local acceptance evidence intact when the command is rerun. */
-export async function createLocalAcceptanceRunDirectory(outputDir: string): Promise<string> {
+export const createLocalAcceptanceRunDirectory = async (outputDir: string): Promise<string> => {
   await fs.mkdir(outputDir, { recursive: true });
   return fs.mkdtemp(path.join(outputDir, 'runs-'));
-}
+};
 
 /** Ensures the loopback fixture outlives all adapter browser activity. */
-export async function withLocalFixtureServer<T>(
+export const withLocalFixtureServer = async <T>(
   start: () => Promise<LocalAcceptanceFixtureServer>,
   execute: (server: LocalAcceptanceFixtureServer) => Promise<T>,
-): Promise<T> {
+): Promise<T> => {
   const server = await start();
   try {
     return await execute(server);
   } finally {
     await server.close();
   }
-}
+};
 
-function localTarget(): AcceptanceTarget {
+const localTarget = (): AcceptanceTarget => {
   return {
     id: 'local-fixture',
     kind: 'localFixture',
     configFingerprint: createHash('sha256').update('testbuddy-local-fixture-v1', 'utf8').digest('hex'),
     requiredForRelease: true,
   };
-}
+};
 
-function requireLocalDecision(report: LocalAcceptanceReport): ReleaseGateDecision {
+const requireLocalDecision = (report: LocalAcceptanceReport): ReleaseGateDecision => {
   const decision = evaluateReleaseGate(report.matrix, report.attempts);
   if (decision.status !== 'readyForLocalReleaseClaim') {
     throw new Error('Local acceptance did not meet the release threshold.');
   }
   return decision;
-}
+};
 
-async function writeReport(report: AcceptanceReport, outputDir: string): Promise<{ json: string; junit: string }> {
+const writeReport = async (report: AcceptanceReport, outputDir: string): Promise<{ json: string; junit: string }> => {
   await fs.mkdir(outputDir, { recursive: true });
   const json = path.join(outputDir, 'acceptance-report.json');
   const junit = path.join(outputDir, 'acceptance-report.junit.xml');
   await fs.writeFile(json, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
   await fs.writeFile(junit, renderJUnit(report), 'utf8');
   return { json, junit };
-}
+};
 
-function renderJUnit(report: AcceptanceReport): string {
+const renderJUnit = (report: AcceptanceReport): string => {
   const tests = report.attempts.length * 20;
   return `<?xml version="1.0" encoding="UTF-8"?>\n<testsuite name="TestBuddy Acceptance ${report.lane}" tests="${tests}" failures="0" errors="0" skipped="0">\n  <system-out>decision=${report.decision.status} reportHash=${report.reportHash}</system-out>\n</testsuite>\n`;
-}
+};
 
-function isExactHttpOrigin(value: string | undefined): boolean {
+const isExactHttpOrigin = (value: string | undefined): boolean => {
   if (!value || /[?#@]/.test(value)) {
     return false;
   }
@@ -185,12 +185,12 @@ function isExactHttpOrigin(value: string | undefined): boolean {
   } catch {
     return false;
   }
-}
+};
 
-async function main(): Promise<void> {
+const main = async (): Promise<void> => {
   const result = await runAcceptance(process.argv.slice(2));
   process.stdout.write(`${result.files.json}\n`);
-}
+};
 
 if (process.argv[1]?.endsWith('run-acceptance.js')) {
   void main().catch((error) => {

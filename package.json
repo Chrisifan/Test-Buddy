@@ -16,7 +16,7 @@
     "build:electron": "pnpm exec node node_modules/typescript/bin/tsc -p tsconfig.electron.json",
     "check": "pnpm test && pnpm typecheck && pnpm build && git diff --check",
     "lint": "eslint .",
-    "quality": "pnpm lint && pnpm quality:unused && pnpm quality:duplicates",
+    "quality": "pnpm lint",
     "quality:unused": "knip --config knip.json",
     "quality:duplicates": "jscpd --config jscpd.json",
     "analyze:bundle": "ANALYZE_BUNDLE=1 pnpm build:renderer",

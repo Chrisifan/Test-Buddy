@@ -22,7 +22,7 @@ export class DurableAtomicFileCommitError extends Error {
  * Publishes a replacement only after both the staged data and its directory
  * metadata have been flushed to disk.
  */
-export async function writeDurableAtomicFile(write: DurableAtomicFileWrite): Promise<void> {
+export const writeDurableAtomicFile = async (write: DurableAtomicFileWrite): Promise<void> => {
   let renamed = false;
   try {
     await (write.fileSystem?.writeFile ?? fs.writeFile)(write.stagingPath, write.content, 'utf8');
@@ -37,23 +37,23 @@ export async function writeDurableAtomicFile(write: DurableAtomicFileWrite): Pro
     }
     throw error;
   }
-}
+};
 
-export async function syncDurableDirectory(
+export const syncDurableDirectory = async (
   directory: string,
   fileSystem?: Partial<DurableAtomicFileFileSystem>,
-): Promise<void> {
+): Promise<void> => {
   await syncPath(directory, fileSystem);
-}
+};
 
-async function syncPath(
+const syncPath = async (
   targetPath: string,
   fileSystem?: Partial<DurableAtomicFileFileSystem>,
-): Promise<void> {
+): Promise<void> => {
   const handle = await (fileSystem?.open ?? fs.open)(targetPath, 'r');
   try {
     await handle.sync();
   } finally {
     await handle.close();
   }
-}
+};

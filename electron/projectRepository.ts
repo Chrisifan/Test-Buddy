@@ -114,8 +114,8 @@ export class ProjectRepository {
   }
 }
 
-export function createProjectRepository(
+export const createProjectRepository = (
   dependencies: { studioStore: Pick<StudioStore, 'load'> },
-): ProjectRepository {
+): ProjectRepository => {
   return new ProjectRepository(dependencies);
-}
+};

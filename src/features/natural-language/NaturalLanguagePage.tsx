@@ -24,7 +24,7 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { useI18n } from '../../i18n/index.js';
 
-function getModeLabel(mode: CommandMode, t: (key: string) => string): string {
+const getModeLabel = (mode: CommandMode, t: (key: string) => string): string => {
   if (mode === 'aiAssert') {
     return t('nl.mode.assert');
   }
@@ -34,9 +34,9 @@ function getModeLabel(mode: CommandMode, t: (key: string) => string): string {
   }
 
   return t('nl.mode.action');
-}
+};
 
-function getRoleLabel(role: ChatEntry['role'], t: (key: string) => string): string {
+const getRoleLabel = (role: ChatEntry['role'], t: (key: string) => string): string => {
   if (role === 'assistant') {
     return t('nl.role.runtime');
   }
@@ -46,16 +46,16 @@ function getRoleLabel(role: ChatEntry['role'], t: (key: string) => string): stri
   }
 
   return t('nl.role.user');
-}
+};
 
-function getEnvironmentLabel(environment: string, t: (key: string) => string): string {
+const getEnvironmentLabel = (environment: string, t: (key: string) => string): string => {
   if (environment === 'production') return t('nl.environment.production');
   if (environment === 'local') return t('nl.environment.local');
   if (environment === 'staging') return t('nl.environment.staging');
   return environment;
-}
+};
 
-export function NaturalLanguagePage({
+export const NaturalLanguagePage = ({
   commandMode,
   chatInput,
   targetEnvironment,
@@ -99,7 +99,7 @@ export function NaturalLanguagePage({
   onSaveLatestRunAsTestCase: () => void;
   onSavePromptAsStep: () => void;
   onSendMessage: () => void;
-}) {
+}) => {
   const { t } = useI18n();
   const sessionStatus = sessionActive ? t('nl.session.active') : t('nl.session.standby');
 
@@ -291,4 +291,4 @@ export function NaturalLanguagePage({
       </PageBody>
     </PageShell>
   );
-}
+};

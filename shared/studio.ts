@@ -1,5 +1,44 @@
 import type { AgentModelAssignment, AgentPlanStepDraft, AgentRecoveryPlan, AgentReporterSummary, AgentRunResult, AgentStep } from './agent.js';
 import { normalizeMaintenanceDrafts, type MaintenanceDraft } from './maintenance.js';
+import {
+  appendLatestTestCaseTransforms,
+  createNextTestCaseVersion,
+  findTestCaseVersion,
+  listLatestTestCaseVersions,
+  nextTestCaseVersion,
+} from './studio/test-cases.js';
+import {
+  createEmptySuiteAsset,
+  findSuiteAsset,
+  resolveSuiteCases,
+  resolveSuiteTestCases,
+} from './studio/suites.js';
+import {
+  createEmptyReusableFlowAsset,
+  createNextReusableFlowVersion,
+  findReusableFlowAsset,
+  listLatestReusableFlowVersions,
+} from './studio/reusable-flows.js';
+
+export {
+  appendLatestTestCaseTransforms,
+  createNextTestCaseVersion,
+  findTestCaseVersion,
+  listLatestTestCaseVersions,
+  nextTestCaseVersion,
+};
+export {
+  createEmptySuiteAsset,
+  findSuiteAsset,
+  resolveSuiteCases,
+  resolveSuiteTestCases,
+};
+export {
+  createEmptyReusableFlowAsset,
+  createNextReusableFlowVersion,
+  findReusableFlowAsset,
+  listLatestReusableFlowVersions,
+};
 
 export type RunStatus = 'running' | 'passed' | 'failed' | 'blocked' | 'skipped' | 'cancelled' | 'error';
 /**
@@ -368,36 +407,6 @@ export interface SuiteRunResult {
   issues: string[];
 }
 
-/** Creates a new mutable draft; saved changes must publish a new version. */
-export function createEmptySuiteAsset(project: Pick<ProjectDraft, 'selectedEnvironmentId'>, seed: number): SuiteAsset {
-  const now = new Date().toISOString();
-  return {
-    schemaVersion: 1,
-    id: `suite-${Date.now()}-${seed}`,
-    version: 1,
-    name: `新的 Suite ${seed}`,
-    description: '',
-    tags: [],
-    environmentId: project.selectedEnvironmentId,
-    caseReferences: [],
-    execution: {
-      concurrency: 1,
-      failurePolicy: 'continue',
-      retryLimit: 0,
-    },
-    createdAt: now,
-    updatedAt: now,
-  };
-}
-
-/** Never resolves to a newer Suite version on behalf of a caller. */
-export function findSuiteAsset(
-  project: Pick<ProjectDraft, 'suites'>,
-  reference: VersionedTestAssetReference,
-): SuiteAsset | undefined {
-  return project.suites.find((suite) => suite.id === reference.id && suite.version === reference.version);
-}
-
 export type FixtureValueType = 'string' | 'number' | 'boolean' | 'json';
 export type FixtureExecutionMode = 'http' | 'ui' | 'script';
 export type FixtureConcurrency = 'parallel' | 'exclusive';
@@ -521,80 +530,8 @@ export interface ReusableFlowResolution {
   issues: ReusableFlowReferenceIssue[];
 }
 
-/** Creates an unpublished V1 Flow draft. It is invalid until it contains supported steps. */
-export function createEmptyReusableFlowAsset(seed: number): ReusableFlowAsset {
-  const now = new Date().toISOString();
-  return {
-    schemaVersion: 1,
-    id: `flow-${Date.now()}-${seed}`,
-    version: 1,
-    name: `新的可复用流程 ${seed}`,
-    description: '',
-    tags: [],
-    steps: [],
-    createdAt: now,
-    updatedAt: now,
-  };
-}
-
-/** Finds exactly one published Flow version; duplicate versions remain unavailable. */
-export function findReusableFlowAsset(
-  project: Pick<ProjectDraft, 'reusableFlows'>,
-  reference: VersionedTestAssetReference,
-): ReusableFlowAsset | undefined {
-  const matches = project.reusableFlows.filter((flow) => (
-    flow.id === reference.id && flow.version === reference.version
-  ));
-  return matches.length === 1 ? matches[0] : undefined;
-}
-
-/** Returns one latest immutable Flow version per Flow ID. */
-export function listLatestReusableFlowVersions(
-  project: Pick<ProjectDraft, 'reusableFlows'>,
-): ReusableFlowAsset[] {
-  const latest = new Map<string, ReusableFlowAsset>();
-  const seenVersions = new Set<string>();
-  project.reusableFlows.forEach((flow) => {
-    const key = versionedReferenceKey(flow);
-    if (seenVersions.has(key)) {
-      throw new Error(`Duplicate reusable Flow version ${key}.`);
-    }
-    seenVersions.add(key);
-    const previous = latest.get(flow.id);
-    if (!previous || flow.version > previous.version) {
-      latest.set(flow.id, flow);
-    }
-  });
-  return [...latest.values()];
-}
-
-/** Clones an exact published Flow and assigns the next version for its ID. */
-export function createNextReusableFlowVersion(
-  project: Pick<ProjectDraft, 'reusableFlows'>,
-  source: ReusableFlowAsset,
-  patch: Omit<Partial<ReusableFlowAsset>, 'id' | 'version' | 'schemaVersion' | 'createdAt'>,
-): ReusableFlowAsset {
-  const reference = { id: source.id, version: source.version };
-  const canonicalSource = findReusableFlowAsset(project, reference);
-  if (!canonicalSource) {
-    throw new Error(`Reusable Flow source ${versionedReferenceKey(reference)} must match exactly one published version.`);
-  }
-  const highestVersion = project.reusableFlows
-    .filter((flow) => flow.id === canonicalSource.id)
-    .reduce((highest, flow) => Math.max(highest, flow.version), 0);
-  return {
-    ...structuredClone(canonicalSource),
-    ...structuredClone(patch),
-    schemaVersion: 1,
-    id: canonicalSource.id,
-    version: highestVersion + 1,
-    createdAt: canonicalSource.createdAt,
-    updatedAt: new Date().toISOString(),
-  };
-}
-
 /** Lists every reason a Flow cannot be published or executed. */
-export function validateReusableFlow(flow: ReusableFlowAsset): ReusableFlowValidationIssue[] {
+export const validateReusableFlow = (flow: ReusableFlowAsset): ReusableFlowValidationIssue[] => {
   const issues: ReusableFlowValidationIssue[] = [];
   if (
     flow.schemaVersion !== 1 ||
@@ -633,13 +570,13 @@ export function validateReusableFlow(flow: ReusableFlowAsset): ReusableFlowValid
     }
   });
   return issues;
-}
+};
 
 /** Resolves ordered, exact Flow references and refuses every ambiguous Case binding. */
-export function resolveTestCaseReusableFlows(
+export const resolveTestCaseReusableFlows = (
   project: Pick<ProjectDraft, 'reusableFlows'>,
   testCase: Pick<TestCaseDraft, 'assetReferences'>,
-): ReusableFlowResolution {
+): ReusableFlowResolution => {
   const references = testCase.assetReferences?.reusableFlows ?? [];
   const seenFlowIds = new Set<string>();
   const issues: ReusableFlowReferenceIssue[] = [];
@@ -674,7 +611,7 @@ export function resolveTestCaseReusableFlows(
     flows.push(flow);
   });
   return { flows: issues.length ? [] : flows, issues };
-}
+};
 
 export interface ReusableFlowImpactCase {
   reference: VersionedTestAssetReference;
@@ -702,11 +639,11 @@ export interface ReusableFlowCaseUpgradePlan {
 }
 
 /** Computes reverse impact from one exact Flow version without a persisted index. */
-export function analyzeReusableFlowImpact(
+export const analyzeReusableFlowImpact = (
   project: Pick<ProjectDraft, 'reusableFlows' | 'testCases' | 'suites'>,
   source: VersionedTestAssetReference,
   target: VersionedTestAssetReference,
-): ReusableFlowImpact {
+): ReusableFlowImpact => {
   if (source.id !== target.id || target.version <= source.version) {
     return {
       source,
@@ -755,15 +692,15 @@ export function analyzeReusableFlowImpact(
     .filter((reference, index, all) => all.findIndex((candidate) => versionedReferenceKey(candidate) === versionedReferenceKey(reference)) === index)
     .sort((left, right) => left.id.localeCompare(right.id) || left.version - right.version);
   return { source, target, directCases, suites, issues };
-}
+};
 
 /** Plans selected Case next versions and explicit Suite proposals; it never mutates the project. */
-export function planReusableFlowCaseUpgrade(
+export const planReusableFlowCaseUpgrade = (
   project: Pick<ProjectDraft, 'reusableFlows' | 'testCases' | 'suites'>,
   source: VersionedTestAssetReference,
   target: VersionedTestAssetReference,
   selected: VersionedTestAssetReference[],
-): ReusableFlowCaseUpgradePlan {
+): ReusableFlowCaseUpgradePlan => {
   const impact = analyzeReusableFlowImpact(project, source, target);
   if (impact.issues.length) {
     return { updatedCases: [], suiteProposals: [], issues: impact.issues };
@@ -806,7 +743,7 @@ export function planReusableFlowCaseUpgrade(
     }));
   });
   return { updatedCases, suiteProposals, issues: [] };
-}
+};
 
 export type FixtureReferenceIssueKind = 'missing' | 'environmentMismatch';
 
@@ -877,19 +814,19 @@ export interface TestCaseAssetReferences {
   baseline?: VersionedTestAssetReference;
 }
 
-export function createEmptyTestCaseAssetReferences(): TestCaseAssetReferences {
+export const createEmptyTestCaseAssetReferences = (): TestCaseAssetReferences => {
   return {
     fixtures: [],
     reusableFlows: [],
   };
-}
+};
 
 /** Resolves exact fixture versions only; references never follow a latest version implicitly. */
-export function resolveTestCaseFixtures(
+export const resolveTestCaseFixtures = (
   project: Pick<ProjectDraft, 'fixtures'>,
   references: VersionedTestAssetReference[],
   environmentId?: string,
-): FixtureResolution {
+): FixtureResolution => {
   const fixturesByReference = new Map(
     project.fixtures.map((fixture) => [`${fixture.id}@${fixture.version}`, fixture]),
   );
@@ -916,7 +853,7 @@ export function resolveTestCaseFixtures(
     fixtures.push(fixture);
   });
   return { fixtures, issues };
-}
+};
 
 /**
  * A dependency must resolve to its exact version, match the selected
@@ -924,12 +861,12 @@ export function resolveTestCaseFixtures(
  * browser session can begin. Script lifecycle execution additionally requires
  * a matching local trust record and a main-process script executor.
  */
-export function getTestCaseFixtureRunBlocker(
+export const getTestCaseFixtureRunBlocker = (
   project: Pick<ProjectDraft, 'fixtures'>,
   testCase: Pick<TestCaseDraft, 'assetReferences'>,
   environmentId: string,
   scriptTrust: FixtureScriptTrustContext = {},
-): FixtureRunBlocker | undefined {
+): FixtureRunBlocker | undefined => {
   const resolution = resolveTestCaseFixtures(project, testCase.assetReferences?.fixtures ?? [], environmentId);
   const issue = resolution.issues[0];
   if (issue) {
@@ -976,10 +913,10 @@ export function getTestCaseFixtureRunBlocker(
     return { kind: 'executionUnavailable', message };
   }
   return undefined;
-}
+};
 
 /** Returns a normalized safe HTTP declaration, or rejects the whole declaration. */
-export function normalizeFixtureHttpDeclaration(value: unknown): FixtureHttpDeclaration | undefined {
+export const normalizeFixtureHttpDeclaration = (value: unknown): FixtureHttpDeclaration | undefined => {
   const rawHttp = asRecord(value);
   if (!rawHttp || !isFixtureHttpMethod(rawHttp.method)) {
     return undefined;
@@ -1007,14 +944,14 @@ export function normalizeFixtureHttpDeclaration(value: unknown): FixtureHttpDecl
     ...(body === undefined ? {} : { body }),
     ...(responseOutputs === undefined ? {} : { responseOutputs }),
   };
-}
+};
 
 /**
  * Returns only string outputs that are both mapped by the setup HTTP contract
  * and bound to this exact Case. It is renderer-safe because it contains no
  * resolved response value.
  */
-export function getTestCaseFixtureOutputBindingOptions(
+export const getTestCaseFixtureOutputBindingOptions = (
   project: Pick<ProjectDraft, 'fixtures'>,
   testCase: Pick<TestCaseDraft, 'assetReferences' | 'environmentId'>,
 ): Array<{
@@ -1022,7 +959,7 @@ export function getTestCaseFixtureOutputBindingOptions(
   fixtureVersion: number;
   fixtureName: string;
   output: FixtureParameter;
-}> {
+}> => {
   return resolveTestCaseFixtures(
     project,
     testCase.assetReferences?.fixtures ?? [],
@@ -1041,12 +978,12 @@ export function getTestCaseFixtureOutputBindingOptions(
         output,
       }));
   });
-}
+};
 
 /** A Fixture may expose HTTP response outputs only from its setup lifecycle. */
-export function hasValidFixtureHttpOutputConfiguration(
+export const hasValidFixtureHttpOutputConfiguration = (
   fixture: Pick<FixtureAsset, 'setup' | 'cleanup' | 'outputs'>,
-): boolean {
+): boolean => {
   const setupHttp = fixture.setup.mode === 'http' ? normalizeFixtureHttpDeclaration(fixture.setup.http) : undefined;
   const setupMappings = setupHttp?.responseOutputs ?? [];
   if (setupMappings.some((mapping) => !fixture.outputs.some((output) => output.name === mapping.outputName))) {
@@ -1054,20 +991,20 @@ export function hasValidFixtureHttpOutputConfiguration(
   }
   const cleanupHttp = fixture.cleanup?.mode === 'http' ? normalizeFixtureHttpDeclaration(fixture.cleanup.http) : undefined;
   return !(cleanupHttp?.responseOutputs?.length);
-}
+};
 
-export function getFixtureScriptLifecycles(fixture: FixtureAsset): FixtureScriptLifecycle[] {
+export const getFixtureScriptLifecycles = (fixture: FixtureAsset): FixtureScriptLifecycle[] => {
   return [
     ...(fixture.setup.mode === 'script' ? ['setup' as const] : []),
     ...(fixture.cleanup?.mode === 'script' ? ['cleanup' as const] : []),
   ];
-}
+};
 
-export function isFixtureScriptTrusted(
+export const isFixtureScriptTrusted = (
   fixture: FixtureAsset,
   lifecycle: FixtureScriptLifecycle,
   context: FixtureScriptTrustContext = {},
-): boolean {
+): boolean => {
   const declaration = lifecycle === 'setup' ? fixture.setup : fixture.cleanup;
   const script = declaration?.mode === 'script' ? declaration.script : undefined;
   if (!script || !context.projectId || !context.projectDirectory) {
@@ -1083,12 +1020,7 @@ export function isFixtureScriptTrusted(
     record.relativePath === script.relativePath &&
     record.contentHash === script.contentHash
   ));
-}
-
-/** Returns the immutable revision assigned to the next editor save. */
-export function nextTestCaseVersion(version: number): number {
-  return normalizeTestCaseVersion(version) + 1;
-}
+};
 
 export interface PrdPathReference {
   documentId: string;
@@ -1134,87 +1066,6 @@ export interface TestCaseDraft extends Omit<WorkflowDraft, 'kind' | 'steps'> {
   provenance?: TestCaseProvenanceReference[];
   prdPath?: PrdPathReference;
   steps: TestStepDraft[];
-}
-
-function findMatchingTestCaseVersions(
-  project: Pick<ProjectDraft, 'testCases'>,
-  reference: VersionedTestAssetReference,
-): TestCaseDraft[] {
-  return project.testCases.filter((testCase) => (
-    testCase.id === reference.id && normalizeTestCaseVersion(testCase.version) === reference.version
-  ));
-}
-
-/** Finds only the Case revision explicitly requested by the caller. */
-export function findTestCaseVersion(
-  project: Pick<ProjectDraft, 'testCases'>,
-  reference: VersionedTestAssetReference,
-): TestCaseDraft | undefined {
-  const matches = findMatchingTestCaseVersions(project, reference);
-  return matches.length === 1 ? matches[0] : undefined;
-}
-
-/** Returns one highest immutable Case revision for every Case ID. */
-export function listLatestTestCaseVersions(
-  project: Pick<ProjectDraft, 'testCases'>,
-): TestCaseDraft[] {
-  const latest = new Map<string, TestCaseDraft>();
-  const seenVersions = new Set<string>();
-  project.testCases.forEach((testCase) => {
-    const version = normalizeTestCaseVersion(testCase.version);
-    const key = versionedReferenceKey({ id: testCase.id, version });
-    if (seenVersions.has(key)) {
-      throw new Error(`Duplicate Case version ${key}.`);
-    }
-    seenVersions.add(key);
-    const previous = latest.get(testCase.id);
-    if (!previous || normalizeTestCaseVersion(testCase.version) > normalizeTestCaseVersion(previous.version)) {
-      latest.set(testCase.id, testCase);
-    }
-  });
-  return [...latest.values()];
-}
-
-/** Clones a published Case and assigns its next immutable revision. */
-export function createNextTestCaseVersion(
-  project: Pick<ProjectDraft, 'testCases'>,
-  source: TestCaseDraft,
-  patch: Omit<Partial<TestCaseDraft>, 'id' | 'version'>,
-): TestCaseDraft {
-  const sourceReference = { id: source.id, version: normalizeTestCaseVersion(source.version) };
-  const canonicalSource = findTestCaseVersion(project, sourceReference);
-  if (!canonicalSource) {
-    throw new Error(`Case source ${versionedReferenceKey(sourceReference)} must match exactly one published Case version.`);
-  }
-  const highestVersion = project.testCases
-    .filter((candidate) => candidate.id === canonicalSource.id)
-    .reduce((highest, candidate) => Math.max(highest, normalizeTestCaseVersion(candidate.version)), 0);
-  return {
-    ...structuredClone(canonicalSource),
-    ...structuredClone(patch),
-    id: canonicalSource.id,
-    version: highestVersion + 1,
-  };
-}
-
-/**
- * Preserves every historical Case revision and appends at most one transformed
- * revision for each logical Case ID, always derived from that ID's latest
- * canonical published version.
- */
-export function appendLatestTestCaseTransforms(
-  project: Pick<ProjectDraft, 'testCases'>,
-  transform: (testCase: TestCaseDraft) => TestCaseDraft | undefined,
-): TestCaseDraft[] {
-  const appended = listLatestTestCaseVersions(project).flatMap((testCase) => {
-    const transformed = transform(testCase);
-    if (!transformed) {
-      return [];
-    }
-    const { id: _id, version: _version, ...patch } = transformed;
-    return [createNextTestCaseVersion(project, testCase, patch)];
-  });
-  return [...project.testCases, ...appended];
 }
 
 export interface RecordingStepDraft {
@@ -1375,123 +1226,6 @@ export interface ProjectDraft {
   storageStateRefs: StorageStateRef[];
   createdAt: string;
   updatedAt: string;
-}
-
-/** Resolves a Suite without executing it, using only its exact Case revisions. */
-export function resolveSuiteCases(
-  project: Pick<ProjectDraft, 'environments' | 'testCases'>,
-  suite: SuiteAsset,
-): SuiteCaseResolution {
-  const environment = project.environments.find((candidate) => candidate.id === suite.environmentId);
-  const issues: SuiteResolutionIssue[] = [];
-  if (!suite.caseReferences.length) {
-    issues.push({
-      kind: 'emptySuite',
-      message: `Suite ${suite.name}@${suite.version} 未选择任何用例。`,
-    });
-  }
-  if (!environment) {
-    issues.push({
-      kind: 'missingEnvironment',
-      message: `Suite ${suite.name}@${suite.version} 引用了不存在的环境。`,
-    });
-  }
-
-  const referenceKeys = new Set<string>();
-  const duplicateReference = suite.caseReferences.find((reference) => {
-    const key = versionedReferenceKey(reference);
-    if (referenceKeys.has(key)) {
-      return true;
-    }
-    referenceKeys.add(key);
-    return false;
-  });
-  if (duplicateReference) {
-    issues.push({
-      kind: 'duplicateCaseReference',
-      reference: duplicateReference,
-      message: `Suite ${suite.name}@${suite.version} 重复引用了用例 ${duplicateReference.id}@${duplicateReference.version}。`,
-    });
-    return { ...(environment ? { environment } : {}), orderedCases: [], issues };
-  }
-
-  const referencesByKey = new Map(suite.caseReferences.map((reference) => [versionedReferenceKey(reference), reference]));
-  const resolvedByKey = new Map<string, ResolvedSuiteCase>();
-  suite.caseReferences.forEach((reference) => {
-    const matchingCases = findMatchingTestCaseVersions(project, reference);
-    if (matchingCases.length !== 1) {
-      issues.push({
-        kind: matchingCases.length ? 'duplicateCaseVersion' : 'missingCase',
-        reference,
-        message: matchingCases.length
-          ? `Suite 引用的用例 ${reference.id}@${reference.version} 存在重复版本。`
-          : `Suite 未找到用例 ${reference.id}@${reference.version}。`,
-      });
-      return;
-    }
-    const testCase = matchingCases[0]!;
-    resolvedByKey.set(versionedReferenceKey(reference), { reference, testCase });
-  });
-
-  suite.caseReferences.forEach((reference) => {
-    reference.dependsOn.forEach((dependency) => {
-      if (!referencesByKey.has(versionedReferenceKey(dependency))) {
-        issues.push({
-          kind: 'missingDependency',
-          reference,
-          message: `Suite 用例 ${reference.id}@${reference.version} 的前置依赖不存在。`,
-        });
-      }
-    });
-  });
-
-  if (issues.length) {
-    return { ...(environment ? { environment } : {}), orderedCases: [], issues };
-  }
-
-  const remainingDependencies = new Map(
-    suite.caseReferences.map((reference) => [
-      versionedReferenceKey(reference),
-      new Set(reference.dependsOn.map(versionedReferenceKey)),
-    ]),
-  );
-  const orderedCases: ResolvedSuiteCase[] = [];
-  const complete = new Set<string>();
-  while (orderedCases.length < suite.caseReferences.length) {
-    const nextReference = suite.caseReferences.find((reference) => {
-      const key = versionedReferenceKey(reference);
-      return !complete.has(key) && (remainingDependencies.get(key)?.size ?? 0) === 0;
-    });
-    if (!nextReference) {
-      issues.push({
-        kind: 'cyclicDependency',
-        message: `Suite ${suite.name}@${suite.version} 存在循环依赖，当前不会执行。`,
-      });
-      return { ...(environment ? { environment } : {}), orderedCases: [], issues };
-    }
-    const nextKey = versionedReferenceKey(nextReference);
-    const resolved = resolvedByKey.get(nextKey);
-    if (!resolved) {
-      issues.push({
-        kind: 'missingCase',
-        reference: nextReference,
-        message: `Suite 未找到用例 ${nextReference.id}@${nextReference.version}。`,
-      });
-      return { ...(environment ? { environment } : {}), orderedCases: [], issues };
-    }
-    complete.add(nextKey);
-    orderedCases.push(resolved);
-    remainingDependencies.forEach((dependencies) => dependencies.delete(nextKey));
-  }
-  return { ...(environment ? { environment } : {}), orderedCases, issues };
-}
-
-/** @deprecated Use resolveSuiteCases; this compatibility wrapper has identical exact-version behavior. */
-export function resolveSuiteTestCases(
-  project: Pick<ProjectDraft, 'environments' | 'testCases'>,
-  suite: SuiteAsset,
-): SuiteCaseResolution {
-  return resolveSuiteCases(project, suite);
 }
 
 /** A review-only request to materialize project assets in a user-selected directory. */
@@ -2359,6 +2093,14 @@ export const defaultRuntimeProfile: RuntimeProfile = {
   headless: true,
 };
 
+const createEmptyModelSecretRef = (id: string): ModelSecretRef => {
+  return {
+    id,
+    hasKey: false,
+    updatedAt: new Date(0).toISOString(),
+  };
+};
+
 export const defaultMidsceneConfig: MidsceneConfig = {
   modelBaseUrl: '',
   modelSecret: createEmptyModelSecretRef('midscene'),
@@ -2394,13 +2136,13 @@ export const defaultAppearanceConfig: AppearanceConfig = {
 
 const agentModelRoleOrder: AgentModelRole[] = ['planner', 'executor', 'verifier', 'reporter'];
 
-export function resolveAgentModelAssignments({
+export const resolveAgentModelAssignments = ({
   agentModelConfig = defaultAgentModelConfig,
   midsceneConfig,
 }: {
   agentModelConfig?: AgentModelConfig;
   midsceneConfig: MidsceneConfig;
-}): AgentModelAssignment[] {
+}): AgentModelAssignment[] => {
   return agentModelRoleOrder.map((role) => {
     const roleConfig = {
       ...defaultAgentModelConfig[role],
@@ -2432,7 +2174,7 @@ export function resolveAgentModelAssignments({
       hasApiKey: midsceneConfig.modelSecret.hasKey,
     };
   });
-}
+};
 
 export const defaultBrowserSession: BrowserSessionState = {
   id: 'session-idle',
@@ -2580,11 +2322,11 @@ export const initialRunLog: string[] = [];
 const builtInMockProjectId = 'project-demo';
 const builtInMockChatEntryIds = new Set(['chat-001', 'chat-002', 'chat-003']);
 
-export function workflowToTestCase(
+export const workflowToTestCase = (
   workflow: WorkflowDraft,
   groupId = 'group-core',
   environmentId = 'env-staging',
-): TestCaseDraft {
+): TestCaseDraft => {
   const businessGoal = workflow.name.trim() || '未命名测试用例';
   return {
     ...workflow,
@@ -2598,9 +2340,9 @@ export function workflowToTestCase(
     provenance: [],
     steps: workflow.steps.map((step) => ({ ...step })),
   };
-}
+};
 
-export function testCaseToWorkflow(testCase: TestCaseDraft): WorkflowDraft {
+export const testCaseToWorkflow = (testCase: TestCaseDraft): WorkflowDraft => {
   return {
     id: testCase.id,
     kind: testCase.kind === 'recording' ? 'scenario' : testCase.kind,
@@ -2620,9 +2362,9 @@ export function testCaseToWorkflow(testCase: TestCaseDraft): WorkflowDraft {
         body: step.body,
       })),
   };
-}
+};
 
-export function getConfirmedDeterministicTestStep(step: TestStepDraft): AgentPlanStepDraft | undefined {
+export const getConfirmedDeterministicTestStep = (step: TestStepDraft): AgentPlanStepDraft | undefined => {
   if (step.type !== 'ai' || step.execution?.reviewStatus !== 'confirmed') {
     return undefined;
   }
@@ -2664,25 +2406,25 @@ export function getConfirmedDeterministicTestStep(step: TestStepDraft): AgentPla
     return { action: 'scroll', title, instruction, selector };
   }
   return undefined;
-}
+};
 
-export function isConfirmedDeterministicTestStep(step: TestStepDraft): boolean {
+export const isConfirmedDeterministicTestStep = (step: TestStepDraft): boolean => {
   return getConfirmedDeterministicTestStep(step) !== undefined;
-}
+};
 
 /** Returns only the reference; the resolved credential value stays in the main process. */
-export function getConfirmedDeterministicTestInputBinding(
+export const getConfirmedDeterministicTestInputBinding = (
   step: TestStepDraft,
-): TestInputValueBinding | undefined {
+): TestInputValueBinding | undefined => {
   const action = step.execution?.action;
   return step.execution?.reviewStatus === 'confirmed' &&
     (action?.kind === 'input' || action?.kind === 'select') &&
     isTestInputValueBinding(action.binding)
     ? action.binding
     : undefined;
-}
+};
 
-export function getConfirmedExplicitTestAssertion(step: TestStepDraft): ExplicitTestAssertion | undefined {
+export const getConfirmedExplicitTestAssertion = (step: TestStepDraft): ExplicitTestAssertion | undefined => {
   if (step.type !== 'aiAssert' || step.execution?.reviewStatus !== 'confirmed') {
     return undefined;
   }
@@ -2722,9 +2464,9 @@ export function getConfirmedExplicitTestAssertion(step: TestStepDraft): Explicit
   }
 
   return undefined;
-}
+};
 
-export function isAgentRunnableTestCase(testCase: TestCaseDraft): boolean {
+export const isAgentRunnableTestCase = (testCase: TestCaseDraft): boolean => {
   return (
     testCase.steps.length > 0 &&
     testCase.steps.every(
@@ -2735,23 +2477,23 @@ export function isAgentRunnableTestCase(testCase: TestCaseDraft): boolean {
         !((step.type === 'ai' || step.type === 'aiAssert') && step.execution?.reviewStatus === 'confirmed'),
     )
   );
-}
+};
 
-function isUnconfirmedControlledDeterministicInteraction(step: TestStepDraft): boolean {
+const isUnconfirmedControlledDeterministicInteraction = (step: TestStepDraft): boolean => {
   const action = step.execution?.action;
   return step.execution?.reviewStatus === 'needsReview' && Boolean(
     action && [
       'iframe', 'tab', 'upload', 'download', 'hover', 'drag', 'clipboard', 'networkObserve', 'networkMock',
     ].includes(action.kind),
   );
-}
+};
 
-export function getExclusiveRecordingReplayId(testCase: TestCaseDraft): string | undefined {
+export const getExclusiveRecordingReplayId = (testCase: TestCaseDraft): string | undefined => {
   const [step] = testCase.steps;
   return testCase.steps.length === 1 && step?.type === 'recordingReplay' ? step.recordingId : undefined;
-}
+};
 
-export function createDemoProject(): ProjectDraft {
+export const createDemoProject = (): ProjectDraft => {
   const now = new Date().toISOString();
   return {
     id: 'project-demo',
@@ -2859,9 +2601,9 @@ export function createDemoProject(): ProjectDraft {
     prdCoverageTriage: [],
     testCases: initialWorkflows.map((workflow) => workflowToTestCase(workflow)),
   };
-}
+};
 
-export function createInitialStudioState(): StudioState {
+export const createInitialStudioState = (): StudioState => {
   return {
     selectedProjectId: '',
     selectedGroupId: '',
@@ -2888,10 +2630,10 @@ export function createInitialStudioState(): StudioState {
     selectedWorkflowId: '',
     workflows: [],
   };
-}
+};
 
 /** Provides the legacy demo workspace exclusively for isolated UI and state fixtures. */
-export function createDemoStudioState(): StudioState {
+export const createDemoStudioState = (): StudioState => {
   const project = createDemoProject();
   const initialState = createInitialStudioState();
 
@@ -2907,11 +2649,11 @@ export function createDemoStudioState(): StudioState {
     selectedWorkflowId: project.testCases[0]?.id ?? '',
     workflows: project.testCases.map(testCaseToWorkflow),
   };
-}
+};
 
-export function hydrateStudioState(
+export const hydrateStudioState = (
   rawState: Partial<StudioState> | null | undefined,
-): StudioState {
+): StudioState => {
   const initialState = createInitialStudioState();
   if (!rawState) {
     return initialState;
@@ -3033,9 +2775,9 @@ export function hydrateStudioState(
     selectedWorkflowId: selectedTestCaseReference?.id ?? '',
     workflows: selectedProject?.testCases.map(testCaseToWorkflow) ?? initialState.workflows,
   };
-}
+};
 
-function migrateLegacyRunDetail(run: RunDetail): RunDetail {
+const migrateLegacyRunDetail = (run: RunDetail): RunDetail => {
   if ((run as { status?: unknown }).status !== 'neutral') {
     return run;
   }
@@ -3044,9 +2786,9 @@ function migrateLegacyRunDetail(run: RunDetail): RunDetail {
     ...run,
     ...classifyLegacyNeutralRun(run.cancellation),
   };
-}
+};
 
-function migrateLegacyRunSummary(run: RunSummary, detail?: RunDetail): RunSummary {
+const migrateLegacyRunSummary = (run: RunSummary, detail?: RunDetail): RunSummary => {
   if ((run as { status?: unknown }).status !== 'neutral') {
     return run;
   }
@@ -3063,9 +2805,9 @@ function migrateLegacyRunSummary(run: RunSummary, detail?: RunDetail): RunSummar
     ...run,
     ...classifyLegacyNeutralRun(),
   };
-}
+};
 
-function findUnambiguousMatchingRunDetail(summary: RunSummary, details: RunDetail[]): RunDetail | undefined {
+const findUnambiguousMatchingRunDetail = (summary: RunSummary, details: RunDetail[]): RunDetail | undefined => {
   const sameId = details.filter((detail) => detail.id === summary.id);
   const hasProjectId = summary.projectId !== undefined;
   const hasTestCaseId = summary.testCaseId !== undefined;
@@ -3080,9 +2822,9 @@ function findUnambiguousMatchingRunDetail(summary: RunSummary, details: RunDetai
     (!hasEnvironmentId || detail.environmentId === summary.environmentId),
   );
   return matches.length === 1 ? matches[0] : undefined;
-}
+};
 
-function classifyLegacyNeutralRun(cancellationValue?: unknown): Pick<RunDetail, 'status' | 'reason'> {
+const classifyLegacyNeutralRun = (cancellationValue?: unknown): Pick<RunDetail, 'status' | 'reason'> => {
   const cancellation = normalizeLegacyUserCancellation(cancellationValue);
   if (cancellation) {
     return {
@@ -3101,9 +2843,9 @@ function classifyLegacyNeutralRun(cancellationValue?: unknown): Pick<RunDetail, 
       message: 'Legacy neutral run could not be classified from structured evidence.',
     },
   };
-}
+};
 
-function normalizeLegacyUserCancellation(value: unknown): RunCancellation | undefined {
+const normalizeLegacyUserCancellation = (value: unknown): RunCancellation | undefined => {
   if (!value || typeof value !== 'object') {
     return undefined;
   }
@@ -3121,13 +2863,13 @@ function normalizeLegacyUserCancellation(value: unknown): RunCancellation | unde
         cancelledAt: cancellation.cancelledAt,
       }
     : undefined;
-}
+};
 
 /** Drops malformed or stale pointers without reading any external project directory. */
-export function normalizeProjectAssetBindings(
+export const normalizeProjectAssetBindings = (
   rawBindings: unknown,
   projects: Array<Pick<ProjectDraft, 'id'>>,
-): ProjectAssetBinding[] {
+): ProjectAssetBinding[] => {
   if (!Array.isArray(rawBindings)) {
     return [];
   }
@@ -3162,18 +2904,18 @@ export function normalizeProjectAssetBindings(
       boundAt: binding.boundAt,
     }];
   });
-}
+};
 
 /**
  * Renderer saves carry the full editing state and can be queued behind an IPC
  * that records a new asset binding. Preserve existing bindings unless the
  * incoming state supplies a newer pointer for the same surviving project.
  */
-export function mergeProjectAssetBindings(
+export const mergeProjectAssetBindings = (
   currentBindings: unknown,
   incomingBindings: unknown,
   projects: Array<Pick<ProjectDraft, 'id'>>,
-): ProjectAssetBinding[] {
+): ProjectAssetBinding[] => {
   const currentByProjectId = new Map(
     normalizeProjectAssetBindings(currentBindings, projects).map((binding) => [binding.projectId, binding]),
   );
@@ -3191,26 +2933,18 @@ export function mergeProjectAssetBindings(
       : incomingBinding ?? currentBinding;
     return binding ? [binding] : [];
   });
-}
+};
 
-export function isMidsceneConfigured(config: MidsceneConfig): boolean {
+export const isMidsceneConfigured = (config: MidsceneConfig): boolean => {
   return Boolean(
     config.modelBaseUrl.trim() &&
       config.modelSecret.hasKey &&
       config.modelName.trim() &&
       config.modelFamily.trim(),
   );
-}
+};
 
-function createEmptyModelSecretRef(id: string): ModelSecretRef {
-  return {
-    id,
-    hasKey: false,
-    updatedAt: new Date(0).toISOString(),
-  };
-}
-
-function withoutLegacyModelApiKey(config: Partial<AgentRoleModelConfig> | undefined): Partial<AgentRoleModelConfig> {
+const withoutLegacyModelApiKey = (config: Partial<AgentRoleModelConfig> | undefined): Partial<AgentRoleModelConfig> => {
   if (!config) {
     return {};
   }
@@ -3218,9 +2952,9 @@ function withoutLegacyModelApiKey(config: Partial<AgentRoleModelConfig> | undefi
     modelApiKey?: unknown;
   };
   return keyFreeConfig;
-}
+};
 
-function inferWorkflowKind(steps: WorkflowStepDraft[]): WorkflowKind {
+const inferWorkflowKind = (steps: WorkflowStepDraft[]): WorkflowKind => {
   const scores = steps.reduce(
     (current, step) => {
       if (step.type === 'aiAssert') {
@@ -3248,17 +2982,17 @@ function inferWorkflowKind(steps: WorkflowStepDraft[]): WorkflowKind {
   }
 
   return 'scenario';
-}
+};
 
-function normalizeWorkflowDraft(rawWorkflow: WorkflowDraft): WorkflowDraft {
+const normalizeWorkflowDraft = (rawWorkflow: WorkflowDraft): WorkflowDraft => {
   return {
     ...rawWorkflow,
     kind: rawWorkflow.kind ?? inferWorkflowKind(rawWorkflow.steps),
     steps: Array.isArray(rawWorkflow.steps) ? rawWorkflow.steps : [],
   };
-}
+};
 
-function normalizePrdPathReference(rawReference: unknown): PrdPathReference | undefined {
+const normalizePrdPathReference = (rawReference: unknown): PrdPathReference | undefined => {
   if (!rawReference || typeof rawReference !== 'object') {
     return undefined;
   }
@@ -3267,9 +3001,9 @@ function normalizePrdPathReference(rawReference: unknown): PrdPathReference | un
   const documentId = typeof reference.documentId === 'string' ? reference.documentId.trim() : '';
   const pathId = typeof reference.pathId === 'string' ? reference.pathId.trim() : '';
   return documentId && pathId ? { documentId, pathId } : undefined;
-}
+};
 
-function normalizeProvenanceStepIds(value: unknown): string[] {
+const normalizeProvenanceStepIds = (value: unknown): string[] => {
   if (!Array.isArray(value)) {
     return [];
   }
@@ -3278,9 +3012,9 @@ function normalizeProvenanceStepIds(value: unknown): string[] {
     const normalized = normalizedNonEmptyString(stepId);
     return normalized ? [normalized] : [];
   })));
-}
+};
 
-function normalizeTestCaseIntentEntries(value: unknown): string[] {
+const normalizeTestCaseIntentEntries = (value: unknown): string[] => {
   if (!Array.isArray(value)) {
     return [];
   }
@@ -3289,9 +3023,9 @@ function normalizeTestCaseIntentEntries(value: unknown): string[] {
     const normalized = normalizedNonEmptyString(entry);
     return normalized ? [normalized] : [];
   })));
-}
+};
 
-function normalizeTestCaseIntent(value: unknown): TestCaseIntent | undefined {
+const normalizeTestCaseIntent = (value: unknown): TestCaseIntent | undefined => {
   const rawIntent = asRecord(value);
   if (!rawIntent || rawIntent.schemaVersion !== 1) {
     return undefined;
@@ -3308,21 +3042,21 @@ function normalizeTestCaseIntent(value: unknown): TestCaseIntent | undefined {
     preconditions: normalizeTestCaseIntentEntries(rawIntent.preconditions),
     successCriteria: normalizeTestCaseIntentEntries(rawIntent.successCriteria),
   };
-}
+};
 
-export function createTestCaseIntent(
+export const createTestCaseIntent = (
   businessGoal: string,
   options: Pick<TestCaseIntent, 'preconditions' | 'successCriteria'> = { preconditions: [], successCriteria: [] },
-): TestCaseIntent {
+): TestCaseIntent => {
   return {
     schemaVersion: 1,
     businessGoal: businessGoal.trim(),
     preconditions: normalizeTestCaseIntentEntries(options.preconditions),
     successCriteria: normalizeTestCaseIntentEntries(options.successCriteria),
   };
-}
+};
 
-function normalizeTestCaseProvenance(value: unknown): TestCaseProvenanceReference[] {
+const normalizeTestCaseProvenance = (value: unknown): TestCaseProvenanceReference[] => {
   if (!Array.isArray(value)) {
     return [];
   }
@@ -3377,14 +3111,14 @@ function normalizeTestCaseProvenance(value: unknown): TestCaseProvenanceReferenc
     }
   });
   return references;
-}
+};
 
-function createLegacyTestCaseProvenance(
+const createLegacyTestCaseProvenance = (
   source: TestCaseSource,
   prdPath: PrdPathReference | undefined,
   steps: TestStepDraft[],
   recordingsById: Map<string, RecordingAsset>,
-): TestCaseProvenanceReference[] {
+): TestCaseProvenanceReference[] => {
   const references: TestCaseProvenanceReference[] = prdPath
     ? [{ kind: 'prdPath', ...prdPath }]
     : [];
@@ -3406,39 +3140,39 @@ function createLegacyTestCaseProvenance(
     references.push({ kind: 'prdPath', ...recording.prdPath });
   }
   return references;
-}
+};
 
-export function getTestCasePrdPath(testCase: Pick<TestCaseDraft, 'provenance' | 'prdPath'>): PrdPathReference | undefined {
+export const getTestCasePrdPath = (testCase: Pick<TestCaseDraft, 'provenance' | 'prdPath'>): PrdPathReference | undefined => {
   const reference = testCase.provenance?.find(
     (candidate): candidate is Extract<TestCaseProvenanceReference, { kind: 'prdPath' }> => candidate.kind === 'prdPath',
   );
   return reference
     ? { documentId: reference.documentId, pathId: reference.pathId }
     : testCase.prdPath;
-}
+};
 
-export function getPrdCoverageTriageKey(
+export const getPrdCoverageTriageKey = (
   documentId: string,
   pathId: string,
   target: PrdCoverageTarget,
-): string {
+): string => {
   return `${documentId}::${pathId}::${target}`;
-}
+};
 
-export function getPrdCoverageTriageStatus(
+export const getPrdCoverageTriageStatus = (
   covered: boolean,
   decision: Pick<PrdCoverageTriageDecision, 'status'> | undefined,
-): PrdCoverageTriageStatus {
+): PrdCoverageTriageStatus => {
   if (covered) {
     return 'resolved';
   }
   return decision?.status ?? 'pending';
-}
+};
 
-export function prunePrdCoverageTriage(
+export const prunePrdCoverageTriage = (
   documents: PrdDocumentAsset[],
   rawTriage: unknown,
-): PrdCoverageTriageDecision[] {
+): PrdCoverageTriageDecision[] => {
   if (!Array.isArray(rawTriage)) {
     return [];
   }
@@ -3470,25 +3204,25 @@ export function prunePrdCoverageTriage(
     }
   });
   return Array.from(deduplicated.values());
-}
+};
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
+const asRecord = (value: unknown): Record<string, unknown> | undefined => {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown>
     : undefined;
-}
+};
 
-function normalizedNonEmptyString(value: unknown): string | undefined {
+const normalizedNonEmptyString = (value: unknown): string | undefined => {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
-}
+};
 
-function normalizeTestCaseVersion(value: unknown): number {
+const normalizeTestCaseVersion = (value: unknown): number => {
   return typeof value === 'number' && Number.isSafeInteger(value) && value > 0
     ? value
     : 1;
-}
+};
 
-function normalizeVersionedTestAssetReference(value: unknown): VersionedTestAssetReference | undefined {
+const normalizeVersionedTestAssetReference = (value: unknown): VersionedTestAssetReference | undefined => {
   const rawReference = asRecord(value);
   const id = normalizedNonEmptyString(rawReference?.id);
   const version = rawReference?.version;
@@ -3496,13 +3230,13 @@ function normalizeVersionedTestAssetReference(value: unknown): VersionedTestAsse
     return undefined;
   }
   return { id, version };
-}
+};
 
-function versionedReferenceKey(reference: Pick<VersionedTestAssetReference, 'id' | 'version'>): string {
+const versionedReferenceKey = (reference: Pick<VersionedTestAssetReference, 'id' | 'version'>): string => {
   return `${reference.id}@${reference.version}`;
-}
+};
 
-function normalizeTestInputValueBinding(value: unknown): TestInputValueBinding | undefined {
+const normalizeTestInputValueBinding = (value: unknown): TestInputValueBinding | undefined => {
   const rawBinding = asRecord(value);
   if (!rawBinding) {
     return undefined;
@@ -3527,22 +3261,22 @@ function normalizeTestInputValueBinding(value: unknown): TestInputValueBinding |
       : undefined;
   }
   return undefined;
-}
+};
 
-function isTestInputValueBinding(value: unknown): value is TestInputValueBinding {
+const isTestInputValueBinding = (value: unknown): value is TestInputValueBinding => {
   return Boolean(normalizeTestInputValueBinding(value));
-}
+};
 
-function normalizeTestInputBindingTarget(value: unknown): TestInputBindingTarget | undefined {
+const normalizeTestInputBindingTarget = (value: unknown): TestInputBindingTarget | undefined => {
   const rawTarget = asRecord(value);
   const locator = normalizeTestLocatorFingerprint(rawTarget?.locator);
   if (!rawTarget || !locator || (rawTarget.kind !== 'input' && rawTarget.kind !== 'select')) {
     return undefined;
   }
   return { kind: rawTarget.kind, locator };
-}
+};
 
-function normalizeVersionedTestAssetReferences(value: unknown): VersionedTestAssetReference[] {
+const normalizeVersionedTestAssetReferences = (value: unknown): VersionedTestAssetReference[] => {
   if (!Array.isArray(value)) {
     return [];
   }
@@ -3555,9 +3289,9 @@ function normalizeVersionedTestAssetReferences(value: unknown): VersionedTestAss
     }
   });
   return Array.from(references.values());
-}
+};
 
-function normalizeTestCaseAssetReferences(value: unknown): TestCaseAssetReferences {
+const normalizeTestCaseAssetReferences = (value: unknown): TestCaseAssetReferences => {
   const rawReferences = asRecord(value);
   const baseline = normalizeVersionedTestAssetReference(rawReferences?.baseline);
   return {
@@ -3565,9 +3299,9 @@ function normalizeTestCaseAssetReferences(value: unknown): TestCaseAssetReferenc
     reusableFlows: normalizeVersionedTestAssetReferences(rawReferences?.reusableFlows),
     ...(baseline ? { baseline } : {}),
   };
-}
+};
 
-function normalizeFixtureParameter(value: unknown): FixtureParameter | undefined {
+const normalizeFixtureParameter = (value: unknown): FixtureParameter | undefined => {
   const rawParameter = asRecord(value);
   const name = normalizedNonEmptyString(rawParameter?.name);
   if (
@@ -3581,9 +3315,9 @@ function normalizeFixtureParameter(value: unknown): FixtureParameter | undefined
   }
   const description = normalizedNonEmptyString(rawParameter.description);
   return { name, type: rawParameter.type, required: rawParameter.required, ...(description ? { description } : {}) };
-}
+};
 
-function normalizeFixtureLifecycle(value: unknown): FixtureLifecycleDeclaration | undefined {
+const normalizeFixtureLifecycle = (value: unknown): FixtureLifecycleDeclaration | undefined => {
   const rawLifecycle = asRecord(value);
   const summary = normalizedNonEmptyString(rawLifecycle?.summary);
   if (!rawLifecycle || !summary || (rawLifecycle.mode !== 'http' && rawLifecycle.mode !== 'ui' && rawLifecycle.mode !== 'script')) {
@@ -3614,13 +3348,13 @@ function normalizeFixtureLifecycle(value: unknown): FixtureLifecycleDeclaration 
   }
   const requiredEnvironment = normalizeUniqueStrings(rawScript.requiredEnvironment);
   return { mode: 'script', summary, script: { relativePath, contentHash, requiredEnvironment } };
-}
+};
 
-function isFixtureHttpMethod(value: unknown): value is FixtureHttpMethod {
+const isFixtureHttpMethod = (value: unknown): value is FixtureHttpMethod => {
   return value === 'POST' || value === 'PUT' || value === 'PATCH' || value === 'DELETE';
-}
+};
 
-function normalizeFixtureExpectedStatuses(value: unknown): number[] | undefined {
+const normalizeFixtureExpectedStatuses = (value: unknown): number[] | undefined => {
   if (!Array.isArray(value) || !value.length || value.length > 8) {
     return undefined;
   }
@@ -3630,9 +3364,9 @@ function normalizeFixtureExpectedStatuses(value: unknown): number[] | undefined 
   ))
     ? statuses
     : undefined;
-}
+};
 
-function normalizeFixtureHttpResponseOutputMappings(value: unknown): FixtureHttpResponseOutputMapping[] | undefined {
+const normalizeFixtureHttpResponseOutputMappings = (value: unknown): FixtureHttpResponseOutputMapping[] | undefined => {
   if (!Array.isArray(value) || !value.length || value.length > 20) {
     return undefined;
   }
@@ -3660,9 +3394,9 @@ function normalizeFixtureHttpResponseOutputMappings(value: unknown): FixtureHttp
     new Set(normalized.map((mapping) => mapping.jsonPointer)).size === normalized.length
     ? normalized
     : undefined;
-}
+};
 
-function isSafeFixtureHttpPath(value: string): boolean {
+const isSafeFixtureHttpPath = (value: string): boolean => {
   if (
     !value.startsWith('/') ||
     value.startsWith('//') ||
@@ -3679,9 +3413,9 @@ function isSafeFixtureHttpPath(value: string): boolean {
   } catch {
     return false;
   }
-}
+};
 
-export function normalizeFixtureHttpJsonValue(value: unknown, depth = 0): FixtureHttpJsonValue | undefined {
+export const normalizeFixtureHttpJsonValue = (value: unknown, depth = 0): FixtureHttpJsonValue | undefined => {
   if (depth > 8 || value === null || typeof value === 'string' || typeof value === 'boolean') {
     return value === null || typeof value === 'string' || typeof value === 'boolean' ? value : undefined;
   }
@@ -3718,17 +3452,17 @@ export function normalizeFixtureHttpJsonValue(value: unknown, depth = 0): Fixtur
   } catch {
     return undefined;
   }
-}
+};
 
-function isSensitiveFixtureHttpKey(value: string): boolean {
+const isSensitiveFixtureHttpKey = (value: string): boolean => {
   return /(?:api[-_]?key|authorization|cookie|credential|pass(?:word)?|secret|token)/iu.test(value);
-}
+};
 
-function normalizeFixtureAsset(
+const normalizeFixtureAsset = (
   value: unknown,
   environmentIds: Set<string>,
   credentialIds: Set<string>,
-): FixtureAsset | undefined {
+): FixtureAsset | undefined => {
   const rawFixture = asRecord(value);
   const id = normalizedNonEmptyString(rawFixture?.id);
   const name = normalizedNonEmptyString(rawFixture?.name);
@@ -3790,9 +3524,9 @@ function normalizeFixtureAsset(
     createdAt,
     updatedAt,
   };
-}
+};
 
-function normalizeReusableFlowAsset(value: unknown): ReusableFlowAsset | undefined {
+const normalizeReusableFlowAsset = (value: unknown): ReusableFlowAsset | undefined => {
   const rawFlow = asRecord(value);
   const id = normalizedNonEmptyString(rawFlow?.id);
   const name = normalizedNonEmptyString(rawFlow?.name);
@@ -3836,9 +3570,9 @@ function normalizeReusableFlowAsset(value: unknown): ReusableFlowAsset | undefin
     updatedAt,
   };
   return validateReusableFlow(flow).length ? undefined : flow;
-}
+};
 
-function normalizeSuiteCaseReference(value: unknown): SuiteCaseReference | undefined {
+const normalizeSuiteCaseReference = (value: unknown): SuiteCaseReference | undefined => {
   const rawReference = asRecord(value);
   const reference = normalizeVersionedTestAssetReference(rawReference);
   if (!rawReference || !reference || !Array.isArray(rawReference.dependsOn)) {
@@ -3854,9 +3588,9 @@ function normalizeSuiteCaseReference(value: unknown): SuiteCaseReference | undef
     return undefined;
   }
   return { ...reference, dependsOn: normalizedDependencies };
-}
+};
 
-function normalizeSuiteAsset(value: unknown): SuiteAsset | undefined {
+const normalizeSuiteAsset = (value: unknown): SuiteAsset | undefined => {
   const rawSuite = asRecord(value);
   const id = normalizedNonEmptyString(rawSuite?.id);
   const name = normalizedNonEmptyString(rawSuite?.name);
@@ -3935,16 +3669,16 @@ function normalizeSuiteAsset(value: unknown): SuiteAsset | undefined {
     createdAt,
     updatedAt,
   };
-}
+};
 
-function normalizeUniqueStrings(value: unknown): string[] {
+const normalizeUniqueStrings = (value: unknown): string[] => {
   if (!Array.isArray(value)) {
     return [];
   }
   return Array.from(new Set(value.map(normalizedNonEmptyString).filter((item): item is string => Boolean(item))));
-}
+};
 
-function normalizeTestLocatorFingerprint(value: unknown): TestLocatorFingerprint | undefined {
+const normalizeTestLocatorFingerprint = (value: unknown): TestLocatorFingerprint | undefined => {
   const rawLocator = asRecord(value);
   const selector = normalizedNonEmptyString(rawLocator?.selector);
   if (!rawLocator || !selector) {
@@ -3977,9 +3711,9 @@ function normalizeTestLocatorFingerprint(value: unknown): TestLocatorFingerprint
     ...(publicAttributes && Object.keys(publicAttributes).length ? { publicAttributes } : {}),
     quality,
   };
-}
+};
 
-function normalizeTestLocatorQuality(value: unknown): TestLocatorQuality | undefined {
+const normalizeTestLocatorQuality = (value: unknown): TestLocatorQuality | undefined => {
   if (value === 'strong' || value === 'acceptable' || value === 'weak' || value === 'unresolved') {
     return value;
   }
@@ -3992,9 +3726,9 @@ function normalizeTestLocatorQuality(value: unknown): TestLocatorQuality | undef
     return 'unresolved';
   }
   return undefined;
-}
+};
 
-function hasExecutableTestLocator(locator: unknown): locator is TestLocatorFingerprint {
+const hasExecutableTestLocator = (locator: unknown): locator is TestLocatorFingerprint => {
   if (!locator || typeof locator !== 'object') {
     return false;
   }
@@ -4004,27 +3738,27 @@ function hasExecutableTestLocator(locator: unknown): locator is TestLocatorFinge
     Boolean(candidate.selector.trim()) &&
     (candidate.quality === 'strong' || candidate.quality === 'acceptable' || candidate.quality === 'weak')
   );
-}
+};
 
-function normalizeOptionalTimeout(value: unknown): number | undefined {
+const normalizeOptionalTimeout = (value: unknown): number | undefined => {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined;
-}
+};
 
-function normalizeDeterministicNetworkMethod(value: unknown): DeterministicNetworkMethod | undefined {
+const normalizeDeterministicNetworkMethod = (value: unknown): DeterministicNetworkMethod | undefined => {
   return value === 'GET' || value === 'POST' || value === 'PUT' || value === 'PATCH' || value === 'DELETE'
     ? value
     : undefined;
-}
+};
 
-function normalizeDeterministicCoordinate(value: unknown): DeterministicCoordinate | undefined {
+const normalizeDeterministicCoordinate = (value: unknown): DeterministicCoordinate | undefined => {
   const rawPoint = asRecord(value);
   return rawPoint && typeof rawPoint.x === 'number' && Number.isFinite(rawPoint.x) &&
     typeof rawPoint.y === 'number' && Number.isFinite(rawPoint.y)
     ? { x: rawPoint.x, y: rawPoint.y }
     : undefined;
-}
+};
 
-function normalizeDeterministicFileReference(value: unknown): DeterministicFileReference | undefined {
+const normalizeDeterministicFileReference = (value: unknown): DeterministicFileReference | undefined => {
   const rawReference = asRecord(value);
   const id = normalizedNonEmptyString(rawReference?.id);
   if (!rawReference || !id || /[\\/\0]/.test(id) || id === '.' || id === '..' || /^file:/i.test(id)) {
@@ -4037,9 +3771,9 @@ function normalizeDeterministicFileReference(value: unknown): DeterministicFileR
     return { kind: 'fixture', id, version: rawReference.version as number };
   }
   return undefined;
-}
+};
 
-function normalizeDeterministicJsonValue(value: unknown, depth = 0): DeterministicJsonValue | undefined {
+const normalizeDeterministicJsonValue = (value: unknown, depth = 0): DeterministicJsonValue | undefined => {
   if (depth > 16) {
     return undefined;
   }
@@ -4078,10 +3812,10 @@ function normalizeDeterministicJsonValue(value: unknown, depth = 0): Determinist
     entries.push([key, entry]);
   }
   return Object.fromEntries(entries) as { [key: string]: DeterministicJsonValue };
-}
+};
 
 /** Arrays in persisted JSON must be plain, dense, and free of hidden own properties. */
-function isStrictDeterministicJsonArray(value: unknown): value is unknown[] {
+const isStrictDeterministicJsonArray = (value: unknown): value is unknown[] => {
   if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype || Object.getOwnPropertySymbols(value).length) {
     return false;
   }
@@ -4095,10 +3829,10 @@ function isStrictDeterministicJsonArray(value: unknown): value is unknown[] {
     }
   }
   return true;
-}
+};
 
 /** Objects in persisted JSON must have plain data properties with no hidden descriptors. */
-function isStrictDeterministicJsonObject(value: unknown): value is Record<string, unknown> {
+const isStrictDeterministicJsonObject = (value: unknown): value is Record<string, unknown> => {
   if (!value || typeof value !== 'object' || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype) {
     return false;
   }
@@ -4114,9 +3848,9 @@ function isStrictDeterministicJsonObject(value: unknown): value is Record<string
     const descriptor = Object.getOwnPropertyDescriptor(value, name);
     return Boolean(descriptor?.enumerable && 'value' in (descriptor ?? {}));
   });
-}
+};
 
-function normalizeDeterministicTestAction(value: unknown): DeterministicTestAction | undefined {
+const normalizeDeterministicTestAction = (value: unknown): DeterministicTestAction | undefined => {
   const rawAction = asRecord(value);
   if (!rawAction || typeof rawAction.kind !== 'string') {
     return undefined;
@@ -4221,27 +3955,27 @@ function normalizeDeterministicTestAction(value: unknown): DeterministicTestActi
       : undefined;
   }
   return undefined;
-}
+};
 
 /** Pure structural guard for persisted deterministic actions. */
-export function hasValidDeterministicTestActionShape(value: unknown): value is DeterministicTestAction {
+export const hasValidDeterministicTestActionShape = (value: unknown): value is DeterministicTestAction => {
   const normalized = normalizeDeterministicTestAction(value);
   return normalized !== undefined && isLosslesslyCanonicalJsonValue(value, normalized);
-}
+};
 
 /** Hydration may canonicalize only the two legacy locator-quality aliases. */
-function hasHydratableDeterministicTestActionShape(value: unknown): boolean {
+const hasHydratableDeterministicTestActionShape = (value: unknown): boolean => {
   const normalized = normalizeDeterministicTestAction(value);
   return normalized !== undefined && isLosslesslyCanonicalJsonValue(value, normalized, true);
-}
+};
 
 /** Compares against the normalized action without accepting stripped fields or non-JSON values. */
-function isLosslesslyCanonicalJsonValue(
+const isLosslesslyCanonicalJsonValue = (
   value: unknown,
   canonical: unknown,
   allowLegacyLocatorQuality = false,
   propertyName?: string,
-): boolean {
+): boolean => {
   if (value === null || canonical === null) {
     return value === canonical;
   }
@@ -4284,9 +4018,9 @@ function isLosslesslyCanonicalJsonValue(
         );
     })()
   ));
-}
+};
 
-function normalizeExplicitTestAssertion(value: unknown): ExplicitTestAssertion | undefined {
+const normalizeExplicitTestAssertion = (value: unknown): ExplicitTestAssertion | undefined => {
   const rawAssertion = asRecord(value);
   const id = normalizedNonEmptyString(rawAssertion?.id);
   if (!rawAssertion || !id || rawAssertion.version !== 1 || typeof rawAssertion.kind !== 'string') {
@@ -4304,9 +4038,9 @@ function normalizeExplicitTestAssertion(value: unknown): ExplicitTestAssertion |
     return locator && expected ? { id, version: 1, kind: 'locatorTextContains', locator, expected } : undefined;
   }
   return undefined;
-}
+};
 
-function normalizeTestStepExecution(value: unknown): TestStepExecutionDraft | undefined {
+const normalizeTestStepExecution = (value: unknown): TestStepExecutionDraft | undefined => {
   const rawExecution = asRecord(value);
   const intent = normalizedNonEmptyString(rawExecution?.intent);
   if (
@@ -4343,10 +4077,10 @@ function normalizeTestStepExecution(value: unknown): TestStepExecutionDraft | un
     ...(assertion ? { assertion } : {}),
     ...(source && runId && stepId ? { provenance: { source, runId, stepId } } : {}),
   };
-}
+};
 
 /** Rejects malformed execution metadata instead of silently accepting it in durable drafts. */
-export function hasValidTestStepExecution(value: unknown): value is TestStepExecutionDraft {
+export const hasValidTestStepExecution = (value: unknown): value is TestStepExecutionDraft => {
   const rawExecution = asRecord(value);
   if (!rawExecution || Object.keys(rawExecution).some((key) => ![
     'schemaVersion', 'intent', 'reviewStatus', 'actionRisk', 'action', 'inputBindingTarget', 'assertion', 'provenance',
@@ -4365,9 +4099,9 @@ export function hasValidTestStepExecution(value: unknown): value is TestStepExec
     return false;
   }
   return normalizeTestStepExecution(value) !== undefined;
-}
+};
 
-function normalizeTestStepDraft(step: unknown): TestStepDraft | undefined {
+const normalizeTestStepDraft = (step: unknown): TestStepDraft | undefined => {
   const rawStep = asRecord(step);
   if (!rawStep) {
     return undefined;
@@ -4385,9 +4119,9 @@ function normalizeTestStepDraft(step: unknown): TestStepDraft | undefined {
     ...(execution ? { execution } : {}),
     ...(hasMalformedAction ? { preflightBlockReason: 'malformedAction' as const } : {}),
   } as TestStepDraft;
-}
+};
 
-function normalizeStorageStateRef(value: unknown): StorageStateRef | undefined {
+const normalizeStorageStateRef = (value: unknown): StorageStateRef | undefined => {
   const rawRef = asRecord(value);
   const id = normalizedNonEmptyString(rawRef?.id);
   const label = normalizedNonEmptyString(rawRef?.label);
@@ -4416,9 +4150,9 @@ function normalizeStorageStateRef(value: unknown): StorageStateRef | undefined {
     availability: rawRef.availability,
     ...(expiresAt ? { expiresAt } : {}),
   };
-}
+};
 
-function normalizeProjectDraft(rawProject: ProjectDraft): ProjectDraft {
+const normalizeProjectDraft = (rawProject: ProjectDraft): ProjectDraft => {
   const fallback = createEmptyProject(1);
   const storageStateRefs = Array.isArray(rawProject.storageStateRefs)
     ? Array.from(new Map(
@@ -4551,12 +4285,12 @@ function normalizeProjectDraft(rawProject: ProjectDraft): ProjectDraft {
         })
       : fallback.testCases,
   };
-}
+};
 
-function isNewerTerminalRun(
+const isNewerTerminalRun = (
   candidate: { run: RunSummary; index: number },
   current: { run: RunSummary; index: number } | undefined,
-): boolean {
+): boolean => {
   if (!current) {
     return true;
   }
@@ -4569,16 +4303,16 @@ function isNewerTerminalRun(
   // Older state did not always have timestamps. Its persisted history order is
   // the only safe ordering signal, so never infer recency from IDs or titles.
   return candidate.index < current.index;
-}
+};
 
 /**
  * Calculates project-level verification risk from the complete run history.
  * It is intentionally derived, so filters and UI selection cannot change it.
  */
-export function deriveRunCoverageRisk(
+export const deriveRunCoverageRisk = (
   project: ProjectDraft,
   runHistory: RunSummary[],
-): RunCoverageRiskSummary {
+): RunCoverageRiskSummary => {
   const latestTerminalByScope = new Map<string, {
     run: RunSummary & { status: Exclude<RunStatus, 'running'> };
     index: number;
@@ -4617,19 +4351,19 @@ export function deriveRunCoverageRisk(
     verified,
     risks,
   };
-}
+};
 
 /**
  * Creates a portable management report without exposing model configuration,
  * credentials, browser snapshots, artifact paths, or raw page evidence.
  */
-export function deriveProjectRunReport(
+export const deriveProjectRunReport = (
   project: ProjectDraft,
   runHistory: RunSummary[],
   runDetails: RunDetail[],
   generatedAt = new Date().toISOString(),
   redaction: ProjectRunReportRedactionContext = {},
-): ProjectRunReport {
+): ProjectRunReport => {
   const projectRuns = runHistory
     .map((run, index) => ({ run, index }))
     .filter(({ run }) => run.projectId === project.id);
@@ -4750,9 +4484,9 @@ export function deriveProjectRunReport(
     problemRuns,
     nonExecutedRuns,
   }, redaction.knownSecrets);
-}
+};
 
-function redactProjectRunReport(report: ProjectRunReport, knownSecrets: readonly string[] | undefined): ProjectRunReport {
+const redactProjectRunReport = (report: ProjectRunReport, knownSecrets: readonly string[] | undefined): ProjectRunReport => {
   const secrets = [...new Set((knownSecrets ?? []).filter((secret) => typeof secret === 'string' && secret.length > 0))]
     .sort((left, right) => right.length - left.length);
   if (!secrets.length) {
@@ -4766,9 +4500,9 @@ function redactProjectRunReport(report: ProjectRunReport, knownSecrets: readonly
     return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, visit(entry)]));
   };
   return visit(report) as ProjectRunReport;
-}
+};
 
-function isRunStatus(value: unknown): value is RunStatus {
+const isRunStatus = (value: unknown): value is RunStatus => {
   return value === 'running' ||
     value === 'passed' ||
     value === 'failed' ||
@@ -4776,46 +4510,46 @@ function isRunStatus(value: unknown): value is RunStatus {
     value === 'skipped' ||
     value === 'cancelled' ||
     value === 'error';
-}
+};
 
-function isTerminalRunStatus(value: unknown): value is Exclude<RunStatus, 'running'> {
+const isTerminalRunStatus = (value: unknown): value is Exclude<RunStatus, 'running'> => {
   return value === 'passed' ||
     value === 'failed' ||
     value === 'blocked' ||
     value === 'skipped' ||
     value === 'cancelled' ||
     value === 'error';
-}
+};
 
-function isRunProblemStatus(value: unknown): value is RunProblemStatus {
+const isRunProblemStatus = (value: unknown): value is RunProblemStatus => {
   return value === 'failed' ||
     value === 'blocked' ||
     value === 'skipped' ||
     value === 'cancelled' ||
     value === 'error';
-}
+};
 
-function isRunFailureStatus(value: unknown): value is RunFailureStatus {
+const isRunFailureStatus = (value: unknown): value is RunFailureStatus => {
   return value === 'failed' || value === 'error';
-}
+};
 
-function isRunNonExecutedStatus(value: unknown): value is RunNonExecutedStatus {
+const isRunNonExecutedStatus = (value: unknown): value is RunNonExecutedStatus => {
   return value === 'blocked' || value === 'skipped' || value === 'cancelled';
-}
+};
 
-function compareRunHistoryEntriesNewest(
+const compareRunHistoryEntriesNewest = (
   left: { run: RunSummary; index: number },
   right: { run: RunSummary; index: number },
-): number {
+): number => {
   const leftTime = left.run.startedAt ? Date.parse(left.run.startedAt) : Number.NaN;
   const rightTime = right.run.startedAt ? Date.parse(right.run.startedAt) : Number.NaN;
   if (Number.isFinite(leftTime) && Number.isFinite(rightTime)) {
     return rightTime - leftTime;
   }
   return left.index - right.index;
-}
+};
 
-function normalizeVisualDiffMasks(rawMasks: unknown): VisualDiffMask[] {
+const normalizeVisualDiffMasks = (rawMasks: unknown): VisualDiffMask[] => {
   if (!Array.isArray(rawMasks)) {
     return [];
   }
@@ -4848,12 +4582,12 @@ function normalizeVisualDiffMasks(rawMasks: unknown): VisualDiffMask[] {
       height,
     }];
   });
-}
+};
 
-export function createEmptyWorkflow(
+export const createEmptyWorkflow = (
   nextId: number,
   kind: WorkflowKind = 'scenario',
-): WorkflowDraft {
+): WorkflowDraft => {
   return {
     id: `wf-${String(nextId).padStart(3, '0')}`,
     kind,
@@ -4865,9 +4599,9 @@ export function createEmptyWorkflow(
     notes: '在这里补充流程意图、上下文和环境要求。',
     steps: [createStep(kind === 'scenario' ? 'ai' : kind === 'assertion' ? 'aiAssert' : 'aiQuery', nextId)],
   };
-}
+};
 
-export function createEmptyProject(nextId: number): ProjectDraft {
+export const createEmptyProject = (nextId: number): ProjectDraft => {
   const now = new Date().toISOString();
   const environmentId = `env-${Date.now()}`;
   return {
@@ -4909,9 +4643,9 @@ export function createEmptyProject(nextId: number): ProjectDraft {
     ],
     testCases: [],
   };
-}
+};
 
-export function createPrdDocumentAsset({
+export const createPrdDocumentAsset = ({
   name,
   kind,
   size,
@@ -4921,7 +4655,7 @@ export function createPrdDocumentAsset({
   kind: PrdDocumentKind;
   size: number;
   sourceText: string;
-}): PrdDocumentAsset {
+}): PrdDocumentAsset => {
   const id = `doc-${Date.now()}`;
   const analysis = analyzePrdText(sourceText, name, id);
   return {
@@ -4940,9 +4674,9 @@ export function createPrdDocumentAsset({
       analyzedAt: new Date().toISOString(),
     },
   };
-}
+};
 
-export function updatePrdDocumentAnalysis(document: PrdDocumentAsset): PrdDocumentAsset {
+export const updatePrdDocumentAnalysis = (document: PrdDocumentAsset): PrdDocumentAsset => {
   const analysis = analyzePrdText(document.sourceText, document.name, document.id);
   return {
     ...document,
@@ -4955,9 +4689,9 @@ export function updatePrdDocumentAnalysis(document: PrdDocumentAsset): PrdDocume
       analyzedAt: new Date().toISOString(),
     },
   };
-}
+};
 
-export function createTestCaseFromGeneratedPath({
+export const createTestCaseFromGeneratedPath = ({
   path,
   documentId,
   groupId,
@@ -4971,7 +4705,7 @@ export function createTestCaseFromGeneratedPath({
   environmentId: string;
   url: string;
   seed: number;
-}): TestCaseDraft {
+}): TestCaseDraft => {
   const sourceIntent = path.sourceExcerpt?.trim() || path.rationale.trim() || path.title;
   const successCriteria = path.steps
     .filter((step) => step.type === 'aiAssert')
@@ -5005,9 +4739,9 @@ export function createTestCaseFromGeneratedPath({
       id: `step-prd-${Date.now()}-${seed}-${index}`,
     })),
   };
-}
+};
 
-function testStepTypeForAgentAction(action: AgentStep['action']): StepType {
+const testStepTypeForAgentAction = (action: AgentStep['action']): StepType => {
   if (action === 'assert') {
     return 'aiAssert';
   }
@@ -5015,7 +4749,7 @@ function testStepTypeForAgentAction(action: AgentStep['action']): StepType {
     return 'aiQuery';
   }
   return 'ai';
-}
+};
 
 const explicitSensitiveTestDataPattern = /((?:(?:\b(?:password|passwd|passcode|passphrase|pwd|pin|secret|token|cookie|authorization|bearer|api[-_ ]?key)\b)\s*(?:[:=]|with)\s*|(?:密码|口令|密钥|令牌|凭证)\s*(?:[:=]|是|为)\s*))([^\s,，;；。]+)/giu;
 const bareSensitiveTestDataPattern = /((?:(?:\b(?:password|passwd|passcode|passphrase|pwd|pin|secret|token|cookie|authorization|bearer|api[-_ ]?key)\b)|(?:密码|口令|密钥|令牌|凭证))\s+)([^\s,，;；。]+)/giu;
@@ -5027,19 +4761,19 @@ const urlSchemePattern = /^([a-z][a-z0-9+.-]*):(.*)$/iu;
 const hierarchicalUrlPattern = /^[a-z][a-z0-9+.-]*:\/\//iu;
 const quotedSelectorAttributeValuePattern = /(\[[^\]\r\n=]+?=\s*)(["'])([^"'\r\n]*)(\2)/gu;
 
-function isLikelyBareSecretValue(value: string): boolean {
+const isLikelyBareSecretValue = (value: string): boolean => {
   return secretLikeValuePattern.test(value) || bareSecretValueSignalPattern.test(value);
-}
+};
 
-function redactPersistedUrlQuery(query: string): string {
+const redactPersistedUrlQuery = (query: string): string => {
   return query
     .split('&')
     .filter(Boolean)
     .map((parameter) => `${parameter.split('=', 1)[0]}=[已隐藏]`)
     .join('&');
-}
+};
 
-function redactPersistedUrlSyntax(value: string): string {
+const redactPersistedUrlSyntax = (value: string): string => {
   const fragmentIndex = value.indexOf('#');
   const withoutFragment = fragmentIndex >= 0 ? value.slice(0, fragmentIndex) : value;
   const queryIndex = withoutFragment.indexOf('?');
@@ -5057,9 +4791,9 @@ function redactPersistedUrlSyntax(value: string): string {
     ? `${baseUrl.slice(0, authorityStart)}${baseUrl.slice(userInfoIndex + 1)}`
     : baseUrl;
   return queryIndex >= 0 ? `${redactedBaseUrl}?${redactPersistedUrlQuery(query)}` : redactedBaseUrl;
-}
+};
 
-function redactPersistedTestUrl(value: string): string {
+const redactPersistedTestUrl = (value: string): string => {
   const schemeMatch = urlSchemePattern.exec(value);
   if (!schemeMatch) {
     return value;
@@ -5078,35 +4812,35 @@ function redactPersistedTestUrl(value: string): string {
   } catch {
     return redactPersistedUrlSyntax(value);
   }
-}
+};
 
-function redactPersistedTestUrls(value: string): string {
+const redactPersistedTestUrls = (value: string): string => {
   return value.replace(persistedTextUrlPattern, redactPersistedTestUrl);
-}
+};
 
-function redactPersistedKnownInputValues(value: string, unreviewedInputValues: readonly string[]): string {
+const redactPersistedKnownInputValues = (value: string, unreviewedInputValues: readonly string[]): string => {
   return Array.from(new Set(unreviewedInputValues))
     .filter(Boolean)
     .reduce((text, inputValue) => text.split(inputValue).join('[已隐藏]'), value);
-}
+};
 
-function redactPersistedSensitiveTestText(value: string, unreviewedInputValues: readonly string[]): string {
+const redactPersistedSensitiveTestText = (value: string, unreviewedInputValues: readonly string[]): string => {
   return redactPersistedKnownInputValues(value, unreviewedInputValues)
     .replace(explicitSensitiveTestDataPattern, '$1[已隐藏]')
     .replace(bareSensitiveTestDataPattern, (match, prefix: string, candidate: string) =>
       isLikelyBareSecretValue(candidate) ? `${prefix}[已隐藏]` : match,
     );
-}
+};
 
-function redactPersistedTestText(value: string, unreviewedInputValues: readonly string[] = []): string {
+const redactPersistedTestText = (value: string, unreviewedInputValues: readonly string[] = []): string => {
   return redactPersistedSensitiveTestText(redactPersistedTestUrls(value), unreviewedInputValues);
-}
+};
 
-function redactPersistedDirectTestUrl(value: string, unreviewedInputValues: readonly string[] = []): string {
+const redactPersistedDirectTestUrl = (value: string, unreviewedInputValues: readonly string[] = []): string => {
   return redactPersistedSensitiveTestText(redactPersistedTestUrl(value), unreviewedInputValues);
-}
+};
 
-function redactPersistedTestSelector(selector: string, unreviewedInputValues: readonly string[]): string {
+const redactPersistedTestSelector = (selector: string, unreviewedInputValues: readonly string[]): string => {
   const inputsRedacted = redactPersistedKnownInputValues(selector, unreviewedInputValues);
   return inputsRedacted.replace(
     quotedSelectorAttributeValuePattern,
@@ -5115,21 +4849,21 @@ function redactPersistedTestSelector(selector: string, unreviewedInputValues: re
       return redactedValue === attributeValue ? match : `${prefix}${quote}${redactedValue}${quote}`;
     },
   );
-}
+};
 
-function hasUnreviewedAgentInputValue(step: AgentStep): boolean {
+const hasUnreviewedAgentInputValue = (step: AgentStep): boolean => {
   return (step.action === 'input' || step.action === 'select') && typeof step.value === 'string';
-}
+};
 
-function hasSensitiveTestInput(step: AgentStep): boolean {
+const hasSensitiveTestInput = (step: AgentStep): boolean => {
   if (!hasUnreviewedAgentInputValue(step)) {
     return false;
   }
   const context = `${step.title}\n${step.instruction}\n${step.selector ?? ''}`;
   return sensitiveTestDataSignalPattern.test(context) || Boolean(step.value && secretLikeValuePattern.test(step.value));
-}
+};
 
-function testStepBodyForAgentPlanStep(step: AgentStep, unreviewedInputValues: readonly string[]): string {
+const testStepBodyForAgentPlanStep = (step: AgentStep, unreviewedInputValues: readonly string[]): string => {
   let body: string;
   if (step.action === 'navigate' && step.url) {
     body = `打开 ${step.url}`;
@@ -5151,9 +4885,9 @@ function testStepBodyForAgentPlanStep(step: AgentStep, unreviewedInputValues: re
     body = step.instruction.trim();
   }
   return redactPersistedTestText(body, unreviewedInputValues);
-}
+};
 
-function createTestLocatorFingerprint(selector: string): TestLocatorFingerprint {
+const createTestLocatorFingerprint = (selector: string): TestLocatorFingerprint => {
   const normalizedSelector = selector.trim();
   const isPositionalSelector = normalizedSelector.includes(':nth-child(') || normalizedSelector.includes(':nth-of-type(');
   const hasStrongSemanticSignal = /\[(?:data-(?:test(?:id)?|qa)|aria-label|role)\b/i.test(normalizedSelector);
@@ -5168,16 +4902,16 @@ function createTestLocatorFingerprint(selector: string): TestLocatorFingerprint 
           ? 'acceptable'
           : 'unresolved',
   };
-}
+};
 
-function toPositiveTimeout(timeoutMs: number | undefined): number | undefined {
+const toPositiveTimeout = (timeoutMs: number | undefined): number | undefined => {
   return typeof timeoutMs === 'number' && Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : undefined;
-}
+};
 
-function toDeterministicTestAction(
+const toDeterministicTestAction = (
   step: AgentStep,
   unreviewedInputValues: readonly string[],
-): DeterministicTestAction | undefined {
+): DeterministicTestAction | undefined => {
   const selector = step.selector?.trim();
   const redactedSelector = selector ? redactPersistedTestSelector(selector, unreviewedInputValues) : undefined;
   const selectorCanBePersisted = selector === redactedSelector;
@@ -5204,12 +4938,12 @@ function toDeterministicTestAction(
     return { kind: 'scrollTo', locator: createTestLocatorFingerprint(selector) };
   }
   return undefined;
-}
+};
 
-function toInputBindingTarget(
+const toInputBindingTarget = (
   step: AgentStep,
   unreviewedInputValues: readonly string[],
-): TestInputBindingTarget | undefined {
+): TestInputBindingTarget | undefined => {
   if (step.action !== 'input' && step.action !== 'select') {
     return undefined;
   }
@@ -5218,9 +4952,9 @@ function toInputBindingTarget(
   return selector && selector === redactedSelector
     ? { kind: step.action, locator: createTestLocatorFingerprint(selector) }
     : undefined;
-}
+};
 
-function inferTestStepActionRisk(step: AgentStep): TestStepActionRisk {
+const inferTestStepActionRisk = (step: AgentStep): TestStepActionRisk => {
   const intent = `${step.title} ${step.instruction}`.toLocaleLowerCase();
   if (/(提交|删除|支付|审批|发送|购买|submit|delete|pay|approve|send|purchase)/u.test(intent)) {
     return 'high';
@@ -5229,9 +4963,9 @@ function inferTestStepActionRisk(step: AgentStep): TestStepActionRisk {
     return 'medium';
   }
   return 'low';
-}
+};
 
-function createTestStepFromAgentStep({
+const createTestStepFromAgentStep = ({
   step,
   id,
   runId,
@@ -5241,7 +4975,7 @@ function createTestStepFromAgentStep({
   id: string;
   runId: string;
   unreviewedInputValues: readonly string[];
-}): TestStepDraft {
+}): TestStepDraft => {
   const inputValueDescription = hasSensitiveTestInput(step) ? '敏感值（已隐藏）' : '待确认的值';
   const rawIntent = hasUnreviewedAgentInputValue(step)
     ? `${step.action === 'select' ? '选择' : '输入'}${inputValueDescription}${step.selector?.trim() ? `到 ${step.selector.trim()}` : ''}`
@@ -5268,9 +5002,9 @@ function createTestStepFromAgentStep({
       },
     },
   };
-}
+};
 
-export function getTestStepModelRequirement(step: TestStepDraft): TestStepModelRequirement {
+export const getTestStepModelRequirement = (step: TestStepDraft): TestStepModelRequirement => {
   if (step.preflightBlockReason) {
     return 'none';
   }
@@ -5287,14 +5021,14 @@ export function getTestStepModelRequirement(step: TestStepDraft): TestStepModelR
     return 'none';
   }
   return 'required';
-}
+};
 
 /**
  * Task 4 interactions remain deterministic even before Task 5 provides their
  * BrowserRuntime executor. This keeps them behind TestRunner preflight and
  * prevents an unreviewed model fallback.
  */
-function isConfirmedControlledDeterministicInteraction(step: TestStepDraft): boolean {
+const isConfirmedControlledDeterministicInteraction = (step: TestStepDraft): boolean => {
   const action = step.execution?.action as unknown;
   if (step.type !== 'ai' || step.execution?.reviewStatus !== 'confirmed' || !action || typeof action !== 'object') {
     return false;
@@ -5302,7 +5036,7 @@ function isConfirmedControlledDeterministicInteraction(step: TestStepDraft): boo
   const kind = (action as { kind?: unknown }).kind;
   return kind === 'iframe' || kind === 'tab' || kind === 'upload' || kind === 'download' || kind === 'hover' ||
     kind === 'drag' || kind === 'clipboard' || kind === 'networkObserve' || kind === 'networkMock';
-}
+};
 
 /**
  * Converts only a verified natural-language run into an editable test case.
@@ -5310,7 +5044,7 @@ function isConfirmedControlledDeterministicInteraction(step: TestStepDraft): boo
  * type and are excluded when the run carries source-step metadata. Legacy
  * runs retain their complete recorded plan for backward compatibility.
  */
-export function createTestCaseFromAgentRun({
+export const createTestCaseFromAgentRun = ({
   agentRun,
   groupId,
   environmentId,
@@ -5322,7 +5056,7 @@ export function createTestCaseFromAgentRun({
   environmentId: string;
   url: string;
   seed: number;
-}): TestCaseDraft | undefined {
+}): TestCaseDraft | undefined => {
   if (agentRun.intent.source !== 'naturalLanguage' || agentRun.status !== 'passed') {
     return undefined;
   }
@@ -5374,9 +5108,9 @@ export function createTestCaseFromAgentRun({
       }),
     ),
   };
-}
+};
 
-export function createRecordingFromGeneratedPath({
+export const createRecordingFromGeneratedPath = ({
   path,
   documentId,
   groupId,
@@ -5390,7 +5124,7 @@ export function createRecordingFromGeneratedPath({
   environmentId: string;
   startUrl: string;
   seed: number;
-}): RecordingAsset {
+}): RecordingAsset => {
   const now = new Date().toISOString();
   return {
     id: `recording-prd-${Date.now()}-${seed}`,
@@ -5415,21 +5149,21 @@ export function createRecordingFromGeneratedPath({
       detail: step.body,
     })),
   };
-}
+};
 
-export function createEmptyGroup(seed: number): ProjectGroup {
+export const createEmptyGroup = (seed: number): ProjectGroup => {
   return {
     id: `group-${Date.now()}-${seed}`,
     name: `业务分组 ${seed}`,
     description: '按模块、页面或核心流程组织测试用例。',
     createdAt: new Date().toISOString(),
   };
-}
+};
 
-export function createRecordingStep(
+export const createRecordingStep = (
   seed: number,
   kind: RecordingStepKind = 'click',
-): RecordingStepDraft {
+): RecordingStepDraft => {
   const titleMap: Record<RecordingStepKind, string> = {
     navigate: '页面跳转',
     click: '点击控件',
@@ -5454,9 +5188,9 @@ export function createRecordingStep(
     title: titleMap[kind],
     detail: detailMap[kind],
   };
-}
+};
 
-export function createEmptyRecordingAsset({
+export const createEmptyRecordingAsset = ({
   seed,
   source,
   groupId,
@@ -5468,7 +5202,7 @@ export function createEmptyRecordingAsset({
   groupId: string;
   environmentId: string;
   startUrl: string;
-}): RecordingAsset {
+}): RecordingAsset => {
   const now = new Date().toISOString();
   return {
     id: `recording-${Date.now()}-${seed}`,
@@ -5494,9 +5228,9 @@ export function createEmptyRecordingAsset({
             createRecordingStep(seed + 2, 'assert'),
           ],
   };
-}
+};
 
-function formatRecordingReplayBody(recording: RecordingAsset): string {
+const formatRecordingReplayBody = (recording: RecordingAsset): string => {
   const kindLabel: Record<RecordingStepKind, string> = {
     navigate: '跳转',
     click: '点击',
@@ -5516,15 +5250,15 @@ function formatRecordingReplayBody(recording: RecordingAsset): string {
         `${index + 1}. [${kindLabel[step.kind]}] ${step.title} - ${step.detail}${step.pageUrl ? ` (URL: ${step.pageUrl})` : ''}${step.screenshotPath ? ` [截图已记录]` : ''}`,
     ),
   ].join('\n');
-}
+};
 
-export function createTestCaseFromRecording({
+export const createTestCaseFromRecording = ({
   recording,
   seed,
 }: {
   recording: RecordingAsset;
   seed: number;
-}): TestCaseDraft {
+}): TestCaseDraft => {
   const businessGoal = recording.comparisonGoal.trim() || recording.summary.trim() || recording.name;
   return {
     schemaVersion: 2,
@@ -5565,25 +5299,25 @@ export function createTestCaseFromRecording({
       },
     ],
   };
-}
+};
 
-export function findDefaultRecordingForCaseStep(
+export const findDefaultRecordingForCaseStep = (
   recordings: RecordingAsset[],
   groupId: string,
   environmentId: string,
-): RecordingAsset | undefined {
+): RecordingAsset | undefined => {
   return (
     recordings.find((recording) => recording.groupId === groupId && recording.environmentId === environmentId) ??
     recordings.find((recording) => recording.environmentId === environmentId) ??
     recordings.find((recording) => recording.groupId === groupId) ??
     recordings[0]
   );
-}
+};
 
-export function detachRecordingFromTestCases(
+export const detachRecordingFromTestCases = (
   testCases: TestCaseDraft[],
   recordingId: string,
-): { testCases: TestCaseDraft[]; affectedSteps: number } {
+): { testCases: TestCaseDraft[]; affectedSteps: number } => {
   let affectedSteps = 0;
   const nextTestCases = testCases.map((testCase) => ({
     ...testCase,
@@ -5602,13 +5336,13 @@ export function detachRecordingFromTestCases(
   }));
 
   return { testCases: nextTestCases, affectedSteps };
-}
+};
 
-export function createEmptyTestCase(
+export const createEmptyTestCase = (
   seed: number,
   groupId: string,
   environmentId: string,
-): TestCaseDraft {
+): TestCaseDraft => {
   const name = `新的测试用例 ${seed}`;
   return {
     schemaVersion: 2,
@@ -5628,9 +5362,9 @@ export function createEmptyTestCase(
     notes: '描述这个用例覆盖的业务意图、前置条件和关键断言。',
     steps: [createStep('ai', seed)],
   };
-}
+};
 
-export function createStep(type: StepType, seed: number): WorkflowStepDraft {
+export const createStep = (type: StepType, seed: number): WorkflowStepDraft => {
   const titleMap: Record<StepType, string> = {
     ai: '自然语言动作',
     aiAssert: '自然语言断言',
@@ -5648,13 +5382,13 @@ export function createStep(type: StepType, seed: number): WorkflowStepDraft {
           ? '描述你希望成立的页面状态。'
           : '描述你希望从页面提取的信息。',
   };
-}
+};
 
-export function createTestStep(
+export const createTestStep = (
   type: TestStepType,
   seed: number,
   recording?: Pick<RecordingAsset, 'id' | 'name' | 'steps'>,
-): TestStepDraft {
+): TestStepDraft => {
   if (type === 'ai' || type === 'aiAssert' || type === 'aiQuery') {
     return createStep(type, seed);
   }
@@ -5671,9 +5405,9 @@ export function createTestStep(
         : '记录需要人工确认的状态。',
     ...(type === 'recordingReplay' && recording ? { recordingId: recording.id } : {}),
   };
-}
+};
 
-export function createManualStepAutomationReplacement(step: TestStepDraft): TestStepDraft {
+export const createManualStepAutomationReplacement = (step: TestStepDraft): TestStepDraft => {
   if (step.type !== 'manual') {
     return step;
   }
@@ -5691,13 +5425,13 @@ export function createManualStepAutomationReplacement(step: TestStepDraft): Test
     body,
     recordingId: undefined,
   };
-}
+};
 
-export function createReporterFixDraft(
+export const createReporterFixDraft = (
   source: TestCaseDraft,
   reporter: Pick<AgentReporterSummary, 'failureAnalysis' | 'suggestedFixes' | 'recoveryPlan'>,
   seed: number,
-): TestCaseDraft | undefined {
+): TestCaseDraft | undefined => {
   const recoveryPlan = reporter.recoveryPlan;
   const failedStepIndex = recoveryPlan
     ? source.steps.findIndex((step) => step.id === recoveryPlan.failedStepId)
@@ -5743,23 +5477,23 @@ export function createReporterFixDraft(
     notes,
     steps: insertTestStep(copiedSteps, recoveryStep, failedStepIndex),
   };
-}
+};
 
-export function canCreateReporterFixDraft(
+export const canCreateReporterFixDraft = (
   source: TestCaseDraft | undefined,
   reporter: Pick<AgentReporterSummary, 'recoveryPlan'> | undefined,
-): boolean {
+): boolean => {
   return Boolean(
     source
     && reporter?.recoveryPlan
     && source.steps.some((step) => step.id === reporter.recoveryPlan?.failedStepId),
   );
-}
+};
 
-function createReporterRecoveryDraftStep(
+const createReporterRecoveryDraftStep = (
   plan: AgentRecoveryPlan,
   draftId: string,
-): TestStepDraft {
+): TestStepDraft => {
   const actionGuard = '不要点击、输入、选择或导航。';
   const content: Record<AgentRecoveryPlan['strategy'], { title: string; body: string }> = {
     waitForResponse: {
@@ -5790,23 +5524,23 @@ function createReporterRecoveryDraftStep(
     title: recovery.title,
     body: recovery.body,
   };
-}
+};
 
-export function formatReporterRecoveryPlan(plan: AgentRecoveryPlan): string {
+export const formatReporterRecoveryPlan = (plan: AgentRecoveryPlan): string => {
   const target = plan.urlPattern
     ? `接口 ${plan.urlPattern}`
     : plan.selector
       ? `selector ${plan.selector}`
       : '无可靠页面目标';
   return `${plan.strategy}（${target}）：${plan.reason}`;
-}
+};
 
-export function insertTestStep(steps: TestStepDraft[], step: TestStepDraft, index: number): TestStepDraft[] {
+export const insertTestStep = (steps: TestStepDraft[], step: TestStepDraft, index: number): TestStepDraft[] => {
   const insertionIndex = Math.max(0, Math.min(index, steps.length));
   return [...steps.slice(0, insertionIndex), step, ...steps.slice(insertionIndex)];
-}
+};
 
-export function moveTestStep(steps: TestStepDraft[], stepId: string, index: number): TestStepDraft[] {
+export const moveTestStep = (steps: TestStepDraft[], stepId: string, index: number): TestStepDraft[] => {
   const sourceIndex = steps.findIndex((step) => step.id === stepId);
   if (sourceIndex < 0) {
     return steps;
@@ -5818,25 +5552,25 @@ export function moveTestStep(steps: TestStepDraft[], stepId: string, index: numb
   const insertionIndex = sourceIndex < requestedIndex ? requestedIndex - 1 : requestedIndex;
   nextSteps.splice(insertionIndex, 0, step);
   return nextSteps;
-}
+};
 
-export function copyTestStep(steps: TestStepDraft[], stepId: string, copyId: string): TestStepDraft[] {
+export const copyTestStep = (steps: TestStepDraft[], stepId: string, copyId: string): TestStepDraft[] => {
   const sourceIndex = steps.findIndex((step) => step.id === stepId);
   if (sourceIndex < 0) {
     return steps;
   }
 
   return insertTestStep(steps, { ...steps[sourceIndex], id: copyId }, sourceIndex + 1);
-}
+};
 
-export function removeTestStep(steps: TestStepDraft[], stepId: string): TestStepDraft[] {
+export const removeTestStep = (steps: TestStepDraft[], stepId: string): TestStepDraft[] => {
   return steps.filter((step) => step.id !== stepId);
-}
+};
 
-export function getTestCaseRunBlocker(
+export const getTestCaseRunBlocker = (
   testCase: TestCaseDraft,
   recordings: RecordingAsset[],
-): TestCaseRunBlocker | undefined {
+): TestCaseRunBlocker | undefined => {
   if (!testCase.steps.length) {
     return 'emptySteps';
   }
@@ -5849,12 +5583,12 @@ export function getTestCaseRunBlocker(
   }
 
   return undefined;
-}
+};
 
-export function getTestStepRunBlocker(
+export const getTestStepRunBlocker = (
   step: TestStepDraft,
   recordings: RecordingAsset[],
-): TestStepRunBlocker | undefined {
+): TestStepRunBlocker | undefined => {
   if (!step.title.trim()) {
     return 'emptyTitle';
   }
@@ -5866,34 +5600,34 @@ export function getTestStepRunBlocker(
   }
 
   return step.body.trim() ? undefined : 'emptyInstruction';
-}
+};
 
-export function isTestCaseLinkedToGeneratedPath(
+export const isTestCaseLinkedToGeneratedPath = (
   testCase: TestCaseDraft,
   documentId: string,
   path: GeneratedTestPath,
-): boolean {
+): boolean => {
   const prdPath = getTestCasePrdPath(testCase);
   if (prdPath) {
     return prdPath.documentId === documentId && prdPath.pathId === path.id;
   }
 
   return testCase.source === 'prd' && testCase.name === path.title;
-}
+};
 
-export function isRecordingLinkedToGeneratedPath(
+export const isRecordingLinkedToGeneratedPath = (
   recording: RecordingAsset,
   documentId: string,
   path: GeneratedTestPath,
-): boolean {
+): boolean => {
   if (recording.prdPath) {
     return recording.prdPath.documentId === documentId && recording.prdPath.pathId === path.id;
   }
 
   return recording.tags.includes('PRD') && recording.name === `${path.title} 回放草稿`;
-}
+};
 
-function normalizePrdDocument(rawDocument: PrdDocumentAsset): PrdDocumentAsset {
+const normalizePrdDocument = (rawDocument: PrdDocumentAsset): PrdDocumentAsset => {
   return {
     ...rawDocument,
     status: rawDocument.status ?? 'draft',
@@ -5922,7 +5656,7 @@ function normalizePrdDocument(rawDocument: PrdDocumentAsset): PrdDocumentAsset {
           analyzedAt: rawDocument.uploadedAt,
         },
   };
-}
+};
 
 interface PrdRequirementClause {
   content: string;
@@ -5933,33 +5667,33 @@ interface PrdRequirementClause {
 const PRD_REQUIREMENT_LIMIT = 8;
 const PRD_REQUIREMENT_SIGNAL = /支持|必须|应当|需要|默认|仅|不得|不能|禁止|校验|验证|展示|导出|新增|创建|编辑|修改|删除|保存|提交|筛选|过滤|查询|搜索|排序|分页|登录|退出|审批|审核|驳回|流转|上传|下载|选择|切换|允许|拒绝|返回|提示|显示|隐藏|点击|输入|打开|关闭|跳转|加载|刷新|can|must|should|shall|default|only|cannot|validate|display|show|export|create|edit|delete|save|submit|filter|search|sort|paginate|login|approve|upload|download|select|allow|deny|redirect|load|refresh/i;
 
-function normalizePrdRequirement(value: string): string {
+const normalizePrdRequirement = (value: string): string => {
   return value
     .toLocaleLowerCase()
     .replace(/[\s`*_#>~，,。.!！？；;：:（）()\[\]{}「」『』“”"']/g, '');
-}
+};
 
-function stripMarkdownPrefix(value: string): string {
+const stripMarkdownPrefix = (value: string): string => {
   return value
     .replace(/^[-*+]\s+/, '')
     .replace(/^\d+[.)、]\s+/, '')
     .replace(/^>\s?/, '')
     .replace(/\*\*/g, '')
     .trim();
-}
+};
 
-function splitPrdLine(value: string): string[] {
+const splitPrdLine = (value: string): string[] => {
   return value
     .split(/(?<=[。！？；])\s*|(?<=[.!?;])\s+(?=[A-Z])/)
     .map((item) => item.trim())
     .filter(Boolean);
-}
+};
 
-function toPrdSourceExcerpt(section: string | undefined, content: string): string {
+const toPrdSourceExcerpt = (section: string | undefined, content: string): string => {
   return section ? `${section} - ${content}` : content;
-}
+};
 
-function extractPrdRequirementClauses(text: string): PrdRequirementClause[] {
+const extractPrdRequirementClauses = (text: string): PrdRequirementClause[] => {
   const seen = new Set<string>();
   const clauses: PrdRequirementClause[] = [];
   let section: string | undefined;
@@ -6012,9 +5746,9 @@ function extractPrdRequirementClauses(text: string): PrdRequirementClause[] {
   }
 
   return clauses;
-}
+};
 
-function classifyPrdRequirementGroup(requirement: string, section?: string): string {
+const classifyPrdRequirementGroup = (requirement: string, section?: string): string => {
   const text = `${section ?? ''} ${requirement}`.toLocaleLowerCase();
   const has = (keywords: string[]) => keywords.some((keyword) => text.includes(keyword.toLocaleLowerCase()));
 
@@ -6043,9 +5777,9 @@ function classifyPrdRequirementGroup(requirement: string, section?: string): str
     return '异常校验';
   }
   return section || 'PRD 需求';
-}
+};
 
-function inferPrdRequirementPriority(requirement: string): GeneratedTestPath['priority'] {
+const inferPrdRequirementPriority = (requirement: string): GeneratedTestPath['priority'] => {
   const text = requirement.toLocaleLowerCase();
   if (['必须', '不得', '不能', '禁止', '仅', '权限', '登录', '安全', '审批', 'must', 'shall', 'only', 'cannot', 'permission', 'security', 'approval'].some((keyword) => text.includes(keyword))) {
     return 'P0';
@@ -6054,14 +5788,14 @@ function inferPrdRequirementPriority(requirement: string): GeneratedTestPath['pr
     return 'P2';
   }
   return 'P1';
-}
+};
 
-function shortenPrdRequirement(requirement: string, maxLength = 36): string {
+const shortenPrdRequirement = (requirement: string, maxLength = 36): string => {
   const compact = requirement.replace(/\s+/g, ' ').trim();
   return compact.length > maxLength ? `${compact.slice(0, maxLength).trimEnd()}...` : compact;
-}
+};
 
-function createRequirementTestPath(clause: PrdRequirementClause, index: number): Omit<GeneratedTestPath, 'id'> {
+const createRequirementTestPath = (clause: PrdRequirementClause, index: number): Omit<GeneratedTestPath, 'id'> => {
   const scope = clause.section || clause.content;
   return {
     title: clause.section
@@ -6092,9 +5826,9 @@ function createRequirementTestPath(clause: PrdRequirementClause, index: number):
       },
     ],
   };
-}
+};
 
-function createStablePrdPathId(documentId: string, path: Omit<GeneratedTestPath, 'id'>): string {
+const createStablePrdPathId = (documentId: string, path: Omit<GeneratedTestPath, 'id'>): string => {
   const source = `${documentId}:${normalizePrdRequirement(path.sourceExcerpt ?? path.title)}`;
   let hash = 2166136261;
   for (let index = 0; index < source.length; index += 1) {
@@ -6102,9 +5836,9 @@ function createStablePrdPathId(documentId: string, path: Omit<GeneratedTestPath,
     hash = Math.imul(hash, 16777619);
   }
   return `path-${(hash >>> 0).toString(36)}`;
-}
+};
 
-function analyzePrdText(sourceText: string, documentName: string, documentId: string) {
+const analyzePrdText = (sourceText: string, documentName: string, documentId: string) => {
   const text = sourceText.trim();
   if (!text || text.length < 20) {
     return {
@@ -6387,4 +6121,4 @@ function analyzePrdText(sourceText: string, documentName: string, documentId: st
     coverageAreas: Array.from(new Set(coverageAreas)),
     generatedPaths,
   };
-}
+};

@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useI18n } from '../i18n/index.js';
 
-export function BrowserSessionPanel({
+export const BrowserSessionPanel = ({
   session,
   project,
   environment,
@@ -28,7 +28,7 @@ export function BrowserSessionPanel({
   onStartSession: () => void;
   onNavigate: () => void;
   onCapture: () => void;
-}) {
+}) => {
   const { t } = useI18n();
   const tone = session.status === 'error' ? 'failed' : session.status === 'ready' ? 'passed' : 'neutral';
 
@@ -89,4 +89,4 @@ export function BrowserSessionPanel({
         </div>
     </Surface>
   );
-}
+};

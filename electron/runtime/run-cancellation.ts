@@ -10,24 +10,24 @@ export class RunCancelledError extends Error {
   }
 }
 
-export function isRunCancelled(error: unknown): error is RunCancelledError {
+export const isRunCancelled = (error: unknown): error is RunCancelledError => {
   return error instanceof RunCancelledError;
-}
+};
 
-export function throwIfRunCancelled(signal?: AbortSignal): void {
+export const throwIfRunCancelled = (signal?: AbortSignal): void => {
   if (signal?.aborted) {
     throw new RunCancelledError();
   }
-}
+};
 
 /**
  * Links a request-scoped cancellation signal to an operation controller while
  * keeping the operation's own timeout lifecycle independent from the run.
  */
-export function createLinkedAbortController(cancellationSignal?: AbortSignal): {
+export const createLinkedAbortController = (cancellationSignal?: AbortSignal): {
   controller: AbortController;
   dispose: () => void;
-} {
+} => {
   const controller = new AbortController();
   const abort = () => controller.abort();
 
@@ -41,21 +41,21 @@ export function createLinkedAbortController(cancellationSignal?: AbortSignal): {
     controller,
     dispose: () => cancellationSignal?.removeEventListener('abort', abort),
   };
-}
+};
 
-export function createUserRunCancellation(cancelledAt = new Date().toISOString()): RunCancellation {
+export const createUserRunCancellation = (cancelledAt = new Date().toISOString()): RunCancellation => {
   return {
     source: 'user',
     reason: 'userCancelled',
     message: userCancelledRunReason,
     cancelledAt,
   };
-}
+};
 
-export function markAgentRunCancelled(
+export const markAgentRunCancelled = (
   agentRun: AgentRunResult,
   cancellation: RunCancellation,
-): AgentRunResult {
+): AgentRunResult => {
   const agentCancellation: AgentRunCancellation = cancellation;
   const finishedEvent = agentRun.events.find((event) => event.type === 'agent:run-finished');
   const events = agentRun.events.filter((event) => event.type !== 'agent:run-finished');
@@ -87,13 +87,13 @@ export function markAgentRunCancelled(
     endedAt: cancellation.cancelledAt,
     cancellation: agentCancellation,
   };
-}
+};
 
 /**
  * Stops awaiting a browser operation without closing its session. The operation
  * may still settle in Playwright, but its result is intentionally discarded.
  */
-export function awaitWithRunCancellation<T>(operation: Promise<T>, signal?: AbortSignal): Promise<T> {
+export const awaitWithRunCancellation = <T>(operation: Promise<T>, signal?: AbortSignal): Promise<T> => {
   throwIfRunCancelled(signal);
   if (!signal) {
     return operation;
@@ -113,4 +113,4 @@ export function awaitWithRunCancellation<T>(operation: Promise<T>, signal?: Abor
       },
     );
   });
-}
+};

@@ -51,15 +51,15 @@ class InvalidPrdSemanticResponseError extends Error {}
 
 const semanticStepTypes = new Set<SemanticStepType>(['ai', 'aiAssert', 'aiQuery']);
 
-function completionEndpoint(baseUrl: string): string {
+const completionEndpoint = (baseUrl: string): string => {
   const normalized = baseUrl.trim().replace(/\/+$/, '');
   if (!normalized) {
     throw new Error('PRD 模型 Base URL 不能为空');
   }
   return normalized.endsWith('/chat/completions') ? normalized : `${normalized}/chat/completions`;
-}
+};
 
-function requiredString(value: unknown, label: string, maxLength: number): string {
+const requiredString = (value: unknown, label: string, maxLength: number): string => {
   if (typeof value !== 'string' || !value.trim()) {
     throw new InvalidPrdSemanticResponseError(`PRD 模型返回的 ${label} 无效`);
   }
@@ -69,9 +69,9 @@ function requiredString(value: unknown, label: string, maxLength: number): strin
     throw new InvalidPrdSemanticResponseError(`PRD 模型返回的 ${label} 超出长度限制`);
   }
   return normalized;
-}
+};
 
-function parsePathStep(value: unknown, pathIndex: number, stepIndex: number): PrdSemanticPathRefinement['steps'][number] {
+const parsePathStep = (value: unknown, pathIndex: number, stepIndex: number): PrdSemanticPathRefinement['steps'][number] => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new InvalidPrdSemanticResponseError(`PRD 模型返回的 paths[${pathIndex}].steps[${stepIndex}] 无效`);
   }
@@ -87,9 +87,9 @@ function parsePathStep(value: unknown, pathIndex: number, stepIndex: number): Pr
     title: requiredString(record.title, `paths[${pathIndex}].steps[${stepIndex}].title`, 100),
     body: requiredString(record.body, `paths[${pathIndex}].steps[${stepIndex}].body`, 600),
   };
-}
+};
 
-function parsePathRefinement(value: unknown, index: number): PrdSemanticPathRefinement {
+const parsePathRefinement = (value: unknown, index: number): PrdSemanticPathRefinement => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new InvalidPrdSemanticResponseError(`PRD 模型返回的第 ${index + 1} 条路径无效`);
   }
@@ -111,9 +111,9 @@ function parsePathRefinement(value: unknown, index: number): PrdSemanticPathRefi
     rationale: requiredString(record.rationale, `paths[${index}].rationale`, 400),
     steps: record.steps.map((step, stepIndex) => parsePathStep(step, index, stepIndex)),
   };
-}
+};
 
-function parseSemanticPayload(content: string): Omit<PrdSemanticAnalyzerResult, 'modelName'> {
+const parseSemanticPayload = (content: string): Omit<PrdSemanticAnalyzerResult, 'modelName'> => {
   const normalized = content
     .trim()
     .replace(/^```(?:json)?\s*/i, '')
@@ -137,9 +137,9 @@ function parseSemanticPayload(content: string): Omit<PrdSemanticAnalyzerResult, 
     summary: requiredString(record.summary, 'summary', 320),
     paths: record.paths.map(parsePathRefinement),
   };
-}
+};
 
-function semanticAnalyzerSystemPrompt(): string {
+const semanticAnalyzerSystemPrompt = (): string => {
   return [
     '你是 Web 自动化测试的 PRD 语义分析器。只返回 JSON，不要 Markdown。',
     '只可细化输入 candidates 中的现有路径。每个 paths[].pathId 必须精确等于某个候选路径 ID；不得新增、删除或合并候选路径，也不得改写原文摘录。',
@@ -147,9 +147,9 @@ function semanticAnalyzerSystemPrompt(): string {
     '每条路径 1 至 6 步。步骤要能转成测试用例：先准备/进入，再执行，最后断言或提取；没有文档依据时不要编造页面、数据或预期。',
     'summary 仅总结输入 PRD 和候选路径已覆盖的测试意图。',
   ].join('\n');
-}
+};
 
-function modelInput(document: PrdDocumentAsset) {
+const modelInput = (document: PrdDocumentAsset) => {
   return {
     documentName: document.name,
     sourceText: document.sourceText.slice(0, 30_000),
@@ -168,7 +168,7 @@ function modelInput(document: PrdDocumentAsset) {
       })),
     })),
   };
-}
+};
 
 export class OpenAICompatiblePrdSemanticAnalyzer implements PrdSemanticAnalyzer {
   constructor(private readonly fetchImpl: typeof fetch = fetch) {}
@@ -218,14 +218,14 @@ export class OpenAICompatiblePrdSemanticAnalyzer implements PrdSemanticAnalyzer 
   }
 }
 
-function resolveSemanticModelConfig({
+const resolveSemanticModelConfig = ({
   plannerConfig,
   midsceneConfig,
   agentModelConfig,
 }: ResolvedPrdSemanticAnalysisRequest): {
   config?: AgentPlannerModelConfig;
   fallbackReason?: PrdAnalysisFallbackReason;
-} {
+} => {
   if (plannerConfig) {
     return { config: plannerConfig };
   }
@@ -259,12 +259,12 @@ function resolveSemanticModelConfig({
   }
 
   return { config };
-}
+};
 
-function mergeModelRefinements(
+const mergeModelRefinements = (
   document: PrdDocumentAsset,
   result: PrdSemanticAnalyzerResult,
-): PrdDocumentAsset {
+): PrdDocumentAsset => {
   const baselineIds = new Set(document.generatedPaths.map((path) => path.id));
   const refinements = new Map<string, PrdSemanticPathRefinement>();
   for (const refinement of result.paths) {
@@ -305,12 +305,12 @@ function mergeModelRefinements(
       analyzedAt: new Date().toISOString(),
     },
   };
-}
+};
 
-function fallbackResponse(
+const fallbackResponse = (
   document: PrdDocumentAsset,
   fallbackReason: PrdAnalysisFallbackReason,
-): PrdSemanticAnalysisResponse {
+): PrdSemanticAnalysisResponse => {
   return {
     document: {
       ...document,
@@ -323,7 +323,7 @@ function fallbackResponse(
     source: 'rule',
     fallbackReason,
   };
-}
+};
 
 export class PrdSemanticAnalysisRuntime {
   constructor(private readonly analyzer: PrdSemanticAnalyzer = new OpenAICompatiblePrdSemanticAnalyzer()) {}

@@ -137,6 +137,6 @@ export class ModelSecretTransactionCoordinator {
   }
 }
 
-function sameReference(left: ModelSecretRef, right: ModelSecretRef): boolean {
+const sameReference = (left: ModelSecretRef, right: ModelSecretRef): boolean => {
   return left.id === right.id && left.hasKey === right.hasKey && left.updatedAt === right.updatedAt;
-}
+};

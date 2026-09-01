@@ -6,11 +6,11 @@ export interface MainWindowOptionsInput {
   platform: NodeJS.Platform;
 }
 
-export function createMainWindowOptions({
+export const createMainWindowOptions = ({
   icon,
   preloadPath,
   platform,
-}: MainWindowOptionsInput): BrowserWindowConstructorOptions {
+}: MainWindowOptionsInput): BrowserWindowConstructorOptions => {
   return {
     width: 1200,
     height: 760,
@@ -34,4 +34,4 @@ export function createMainWindowOptions({
       nodeIntegration: false,
     },
   };
-}
+};

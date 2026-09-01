@@ -73,7 +73,7 @@ const hashPattern = /^[a-f0-9]{64}$/;
 const unsafeTextPattern = /(?:\bsk-[a-z0-9_-]+|\bapi[_-]?key\b|\bauthorization\b|\bstorage\s*state\b|\braw\s*prompt\b|(?:^|[\s:=])\/[\w./-]+)/i;
 
 /** Creates a frozen, redacted acceptance record only after enforcing the complete pair contract. */
-export function createAcceptanceAttempt(input: AcceptanceAttemptInput): AcceptanceAttempt {
+export const createAcceptanceAttempt = (input: AcceptanceAttemptInput): AcceptanceAttempt => {
   validateAttemptInput(input);
   return deepFreeze({
     schemaVersion: 1 as const,
@@ -93,13 +93,13 @@ export function createAcceptanceAttempt(input: AcceptanceAttemptInput): Acceptan
     flaky: input.flaky,
     humanConclusion: input.humanConclusion,
   });
-}
+};
 
 /** Converts immutable acceptance attempts into a release assertion without inferring missing external work. */
-export function evaluateReleaseGate(
+export const evaluateReleaseGate = (
   matrix: AcceptanceMatrix,
   attempts: readonly AcceptanceAttempt[],
-): ReleaseGateDecision {
+): ReleaseGateDecision => {
   validateMatrix(matrix);
   const reasons: string[] = [];
   const laneStates = matrix.targets.map((target) => {
@@ -126,9 +126,9 @@ export function evaluateReleaseGate(
     stableAttempts: local?.status === 'passed' ? 10 : 0,
     laneStates,
   });
-}
+};
 
-function assessLane(target: AcceptanceTarget, attempts: readonly AcceptanceAttempt[]): AcceptanceLaneState {
+const assessLane = (target: AcceptanceTarget, attempts: readonly AcceptanceAttempt[]): AcceptanceLaneState => {
   const base = { targetId: target.id, kind: target.kind } as const;
   if (!attempts.length) {
     return { ...base, status: 'notRun' };
@@ -147,9 +147,9 @@ function assessLane(target: AcceptanceTarget, attempts: readonly AcceptanceAttem
     return { ...base, status: 'failed' };
   }
   return { ...base, status: 'passed' };
-}
+};
 
-function isPassingStableAttempt(attempt: AcceptanceAttempt): boolean {
+const isPassingStableAttempt = (attempt: AcceptanceAttempt): boolean => {
   return attempt.pairs.length === 20 &&
     attempt.pairs.every(pairPassedAndMatched) &&
     attempt.terminalSummary.passed === 20 &&
@@ -161,9 +161,9 @@ function isPassingStableAttempt(attempt: AcceptanceAttempt): boolean {
     attempt.retries === 0 &&
     !attempt.flaky &&
     attempt.humanConclusion === 'accepted';
-}
+};
 
-function laneReason(kind: AcceptanceTargetKind, status: AcceptanceLaneState['status']): string {
+const laneReason = (kind: AcceptanceTargetKind, status: AcceptanceLaneState['status']): string => {
   const prefix = kind === 'localFixture' ? 'localFixture' : kind;
   if (status === 'notRun') {
     return `${prefix}AcceptanceNotRun`;
@@ -172,9 +172,9 @@ function laneReason(kind: AcceptanceTargetKind, status: AcceptanceLaneState['sta
     return `${prefix}AcceptanceIncomplete`;
   }
   return `${prefix}AcceptanceFailed`;
-}
+};
 
-function validateMatrix(matrix: AcceptanceMatrix): void {
+const validateMatrix = (matrix: AcceptanceMatrix): void => {
   if (!hasExactKeys(matrix, ['schemaVersion', 'targets']) || matrix.schemaVersion !== 1 || !Array.isArray(matrix.targets) || !matrix.targets.length) {
     throw new Error('Acceptance matrix is invalid.');
   }
@@ -193,9 +193,9 @@ function validateMatrix(matrix: AcceptanceMatrix): void {
   if (localTargets !== 1) {
     throw new Error('Acceptance matrix requires exactly one local fixture target.');
   }
-}
+};
 
-function validateAttemptInput(input: AcceptanceAttemptInput): void {
+const validateAttemptInput = (input: AcceptanceAttemptInput): void => {
   if (!hasExactKeys(input, [
     'targetId', 'targetKind', 'targetConfigFingerprint', 'suite', 'projectRevision', 'attempt', 'pairs',
     'terminalSummary', 'retries', 'flaky', 'humanConclusion',
@@ -238,61 +238,61 @@ function validateAttemptInput(input: AcceptanceAttemptInput): void {
   if (containsUnsafeText(input)) {
     throw new Error('Acceptance records must be redacted and cannot contain unsafe text.');
   }
-}
+};
 
-function validateTarget(target: AcceptanceTarget): void {
+const validateTarget = (target: AcceptanceTarget): void => {
   if (!hasExactKeys(target, ['id', 'kind', 'configFingerprint', 'requiredForRelease']) || !validIdentifier(target.id) || !['localFixture', 'staging', 'model'].includes(target.kind) || !isHash(target.configFingerprint) || typeof target.requiredForRelease !== 'boolean') {
     throw new Error('Acceptance target is invalid.');
   }
-}
+};
 
-function validateChildRun(run: AcceptanceChildRun): void {
+const validateChildRun = (run: AcceptanceChildRun): void => {
   if (!hasExactKeys(run, ['status', 'provenanceHash', 'manifestHashes']) || !acceptanceStatuses.includes(run.status) || !isHash(run.provenanceHash) || !Array.isArray(run.manifestHashes) || !run.manifestHashes.length || !run.manifestHashes.every(isHash)) {
     throw new Error('Acceptance child run must include terminal provenance and manifest evidence hashes.');
   }
-}
+};
 
-function validateTerminalSummary(summary: AcceptanceTerminalSummary): void {
+const validateTerminalSummary = (summary: AcceptanceTerminalSummary): void => {
   const names = ['passed', 'failed', 'blocked', 'error', 'cancelled', 'skipped'];
   if (!hasExactKeys(summary, names) || names.some((name) => !Number.isSafeInteger(summary[name as keyof AcceptanceTerminalSummary]) || summary[name as keyof AcceptanceTerminalSummary] < 0)) {
     throw new Error('Acceptance terminal summary is invalid or contains unredacted fields.');
   }
-}
+};
 
-function pairPassedAndMatched(pair: AcceptancePair): boolean {
+const pairPassedAndMatched = (pair: AcceptancePair): boolean => {
   return pair.desktop.status === 'passed' &&
     pair.cli.status === 'passed' &&
     pair.desktop.provenanceHash === pair.cli.provenanceHash &&
     sameHashes(pair.desktop.manifestHashes, pair.cli.manifestHashes);
-}
+};
 
-function sameHashes(left: readonly string[], right: readonly string[]): boolean {
+const sameHashes = (left: readonly string[], right: readonly string[]): boolean => {
   return left.length === right.length && [...left].sort().every((value, index) => value === [...right].sort()[index]);
-}
+};
 
-function cloneChildRun(run: AcceptanceChildRun): AcceptanceChildRun {
+const cloneChildRun = (run: AcceptanceChildRun): AcceptanceChildRun => {
   return { status: run.status, provenanceHash: run.provenanceHash, manifestHashes: [...run.manifestHashes].sort() };
-}
+};
 
-function validIdentifier(value: unknown): value is string {
+const validIdentifier = (value: unknown): value is string => {
   return typeof value === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(value);
-}
+};
 
-function validVersion(value: unknown): value is number {
+const validVersion = (value: unknown): value is number => {
   return typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
-}
+};
 
-function isHash(value: unknown): value is string {
+const isHash = (value: unknown): value is string => {
   return typeof value === 'string' && hashPattern.test(value);
-}
+};
 
-function hasExactKeys(value: unknown, keys: readonly string[]): value is Record<string, unknown> {
+const hasExactKeys = (value: unknown, keys: readonly string[]): value is Record<string, unknown> => {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value) &&
     Object.getOwnPropertyNames(value).length === keys.length &&
     keys.every((key) => Object.prototype.hasOwnProperty.call(value, key));
-}
+};
 
-function containsUnsafeText(value: unknown, seen = new WeakSet<object>()): boolean {
+const containsUnsafeText = (value: unknown, seen = new WeakSet<object>()): boolean => {
   if (typeof value === 'string') {
     return unsafeTextPattern.test(value);
   }
@@ -304,12 +304,12 @@ function containsUnsafeText(value: unknown, seen = new WeakSet<object>()): boole
   }
   seen.add(value);
   return Object.values(value as object).some((entry) => containsUnsafeText(entry, seen));
-}
+};
 
-function deepFreeze<Value>(value: Value): Value {
+const deepFreeze = <Value>(value: Value): Value => {
   if (!value || typeof value !== 'object' || Object.isFrozen(value)) {
     return value;
   }
   Object.values(value).forEach((child) => deepFreeze(child));
   return Object.freeze(value);
-}
+};

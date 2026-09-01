@@ -81,52 +81,52 @@ let prdSemanticAnalysisRuntime: PrdSemanticAnalysisRuntime | null = null;
 let studioStateUpdateQueue: StudioStateUpdateQueue | null = null;
 const approvedProjectAssetDirectories = new Set<string>();
 
-function loadApplicationIcon() {
+const loadApplicationIcon = () => {
   const icon = nativeImage.createFromPath(path.join(app.getAppPath(), 'resources', 'icons', 'testbuddy.png'));
   return icon.isEmpty() ? undefined : icon;
-}
+};
 
-function getStoreOrThrow(): StudioStore {
+const getStoreOrThrow = (): StudioStore => {
   if (!studioStore) {
     throw new Error('Studio store 尚未初始化。');
   }
 
   return studioStore;
-}
+};
 
-function getCredentialStoreOrThrow(): CredentialStore {
+const getCredentialStoreOrThrow = (): CredentialStore => {
   if (!credentialStore) {
     throw new Error('Credential store 尚未初始化。');
   }
 
   return credentialStore;
-}
+};
 
-function getModelSecretStoreOrThrow(): ModelSecretStore {
+const getModelSecretStoreOrThrow = (): ModelSecretStore => {
   if (!modelSecretStore) {
     throw new Error('模型密钥存储尚未初始化。');
   }
 
   return modelSecretStore;
-}
+};
 
-function getModelSecretTransactionCoordinatorOrThrow(): ModelSecretTransactionCoordinator {
+const getModelSecretTransactionCoordinatorOrThrow = (): ModelSecretTransactionCoordinator => {
   if (!modelSecretTransactionCoordinator) {
     throw new Error('模型密钥事务协调器尚未初始化。');
   }
   return modelSecretTransactionCoordinator;
-}
+};
 
-function withCurrentModelConfiguration<T>(
+const withCurrentModelConfiguration = <T>(
   callback: (resolver: ModelConfigResolver, state: StudioState) => Promise<T>,
-): Promise<T> {
+): Promise<T> => {
   return getModelSecretTransactionCoordinatorOrThrow().withConsistentState(
     () => getStoreOrThrow().load(),
     (state) => callback(new ModelConfigResolver(getModelSecretStoreOrThrow()), state),
   );
-}
+};
 
-function createCurrentModelConfigResolver(): LazyModelConfigResolver {
+const createCurrentModelConfigResolver = (): LazyModelConfigResolver => {
   return {
     resolveMidsceneConfig: () => withCurrentModelConfiguration((resolver, state) =>
       resolver.resolveMidsceneConfig(state.midsceneConfig),
@@ -138,10 +138,10 @@ function createCurrentModelConfigResolver(): LazyModelConfigResolver {
       }),
     ),
   };
-}
+};
 
 /** Resolves encrypted values only inside Electron main for redaction and preflight checks. */
-function resolveCurrentKnownSecrets(): Promise<string[]> {
+const resolveCurrentKnownSecrets = (): Promise<string[]> => {
   return withCurrentModelConfiguration(async (resolver, state) => {
     const resolved = await resolver.resolve({
       midsceneConfig: state.midsceneConfig,
@@ -152,71 +152,71 @@ function resolveCurrentKnownSecrets(): Promise<string[]> {
       ...Object.values(resolved.agentModelConfig).map((config) => config.modelApiKey),
     ].filter((value) => value.length > 0))];
   });
-}
+};
 
-function createDeterministicInteractionPreflightPolicy(): DeterministicInteractionPreflightPolicyProvider {
+const createDeterministicInteractionPreflightPolicy = (): DeterministicInteractionPreflightPolicyProvider => {
   return {
     resolve: async () => ({ knownSecrets: await resolveCurrentKnownSecrets() }),
   };
-}
+};
 
-function modelSecretReferenceForScope(state: StudioState, scope: ModelSecretScope): ModelSecretRef {
+const modelSecretReferenceForScope = (state: StudioState, scope: ModelSecretScope): ModelSecretRef => {
   if (scope === 'midscene') {
     return state.midsceneConfig.modelSecret;
   }
   const role = scope.slice('agent:'.length) as AgentModelRole;
   return state.agentModelConfig[role].modelSecret;
-}
+};
 
-function persistModelSecretRef(scope: ModelSecretScope, modelSecret: ModelSecretRef): Promise<void> {
+const persistModelSecretRef = (scope: ModelSecretScope, modelSecret: ModelSecretRef): Promise<void> => {
   return getStudioStateUpdateQueueOrThrow().saveModelSecretRef(scope, modelSecret).then(() => undefined);
-}
+};
 
-function getStudioStateUpdateQueueOrThrow(): StudioStateUpdateQueue {
+const getStudioStateUpdateQueueOrThrow = (): StudioStateUpdateQueue => {
   if (!studioStateUpdateQueue) {
     throw new Error('Studio state 更新队列尚未初始化。');
   }
   return studioStateUpdateQueue;
-}
+};
 
-function getScriptTrustStoreOrThrow(): ScriptTrustStore {
+const getScriptTrustStoreOrThrow = (): ScriptTrustStore => {
   if (!scriptTrustStore) {
     throw new Error('脚本信任存储尚未初始化。');
   }
   return scriptTrustStore;
-}
+};
 
-function getStorageStateStoreOrThrow(): StorageStateStore {
+const getStorageStateStoreOrThrow = (): StorageStateStore => {
   if (!storageStateStore) {
     throw new Error('认证状态存储尚未初始化。');
   }
   return storageStateStore;
-}
+};
 
-function getRuntimeBundleOrThrow(): RuntimeBundle {
+const getRuntimeBundleOrThrow = (): RuntimeBundle => {
   if (!runtimeBundle) {
     throw new Error('Browser runtime 尚未初始化。');
   }
 
   return runtimeBundle;
-}
+};
 
-function getProjectRepositoryOrThrow(): ProjectRepository {
+const getProjectRepositoryOrThrow = (): ProjectRepository => {
   if (!projectRepository) {
     throw new Error('Project repository 尚未初始化。');
   }
   return projectRepository;
-}
+};
 
-function getPrdSemanticAnalysisRuntimeOrThrow(): PrdSemanticAnalysisRuntime {
+const getPrdSemanticAnalysisRuntimeOrThrow = (): PrdSemanticAnalysisRuntime => {
   if (!prdSemanticAnalysisRuntime) {
     prdSemanticAnalysisRuntime = new PrdSemanticAnalysisRuntime();
   }
 
   return prdSemanticAnalysisRuntime;
-}
+};
 
-async function getApprovedProjectAssetDirectory(request: ProjectAssetMigrationRequest): Promise<string> {
+const getApprovedProjectAssetDirectory = async (request: ProjectAssetMigrationRequest): Promise<string> => {
   if (
     !request ||
     typeof request.projectId !== 'string' ||
@@ -237,17 +237,17 @@ async function getApprovedProjectAssetDirectory(request: ProjectAssetMigrationRe
     throw new Error('只能写入本次由用户选择的项目资产目录。');
   }
   return projectDirectory;
-}
+};
 
-function toFixtureScriptTrustStatus(record: Awaited<ReturnType<ScriptTrustStore['approve']>>): FixtureScriptTrustStatus {
+const toFixtureScriptTrustStatus = (record: Awaited<ReturnType<ScriptTrustStore['approve']>>): FixtureScriptTrustStatus => {
   const { projectId: _projectId, projectDirectory: _projectDirectory, schemaVersion: _schemaVersion, ...status } = record;
   return status;
-}
+};
 
-async function getFixtureScriptTrustContext(projectId: string): Promise<{
+const getFixtureScriptTrustContext = async (projectId: string): Promise<{
   projectDirectory?: string;
   records: Awaited<ReturnType<ScriptTrustStore['list']>>;
-}> {
+}> => {
   const state = await getStoreOrThrow().load();
   const binding = normalizeProjectAssetBindings(state.projectAssetBindings, state.projects)
     .find((candidate) => candidate.projectId === projectId);
@@ -261,11 +261,11 @@ async function getFixtureScriptTrustContext(projectId: string): Promise<{
       projectDirectory: binding.projectDirectory,
     }),
   };
-}
+};
 
-async function resolveFixtureScriptTrustRequest(request: FixtureScriptTrustRequest): Promise<{
+const resolveFixtureScriptTrustRequest = async (request: FixtureScriptTrustRequest): Promise<{
   identity: Parameters<ScriptTrustStore['approve']>[0];
-}> {
+}> => {
   if (
     !request ||
     typeof request.projectId !== 'string' ||
@@ -300,9 +300,9 @@ async function resolveFixtureScriptTrustRequest(request: FixtureScriptTrustReque
       contentHash: declaration.script.contentHash,
     },
   };
-}
+};
 
-function createWindow(): BrowserWindow {
+const createWindow = (): BrowserWindow => {
   const icon = loadApplicationIcon();
   const window = new BrowserWindow(createMainWindowOptions({
     icon,
@@ -312,13 +312,13 @@ function createWindow(): BrowserWindow {
 
   void window.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
   return window;
-}
+};
 
-function getRuntimeOrThrow() {
+const getRuntimeOrThrow = () => {
   return getRuntimeBundleOrThrow().studioRuntime;
-}
+};
 
-function registerIpcHandlers(): void {
+const registerIpcHandlers = (): void => {
   ipcMain.handle('studio:load-state', async () => getStoreOrThrow().load());
   ipcMain.handle('studio:save-state', async (_event, state: StudioState) => {
     await getStudioStateUpdateQueueOrThrow().saveRendererState(state);
@@ -587,12 +587,12 @@ function registerIpcHandlers(): void {
       modelConfigResolver: createCurrentModelConfigResolver(),
     });
   });
-}
+};
 
-function safeFileSegment(value: string): string {
+const safeFileSegment = (value: string): string => {
   const normalized = value.trim().replace(/[^a-zA-Z0-9_-]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
   return normalized || 'project';
-}
+};
 
 app.whenReady().then(async () => {
   const icon = loadApplicationIcon();

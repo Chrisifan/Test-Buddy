@@ -2,7 +2,7 @@ import type * as React from 'react';
 
 import { cn } from '@/lib/utils';
 
-function Card({ className, ...props }: React.ComponentProps<'div'>) {
+const Card = ({ className, ...props }: React.ComponentProps<'div'>) => {
   return (
     <div
       className={cn(
@@ -13,9 +13,9 @@ function Card({ className, ...props }: React.ComponentProps<'div'>) {
       {...props}
     />
   );
-}
+};
 
-function CardHeader({ className, ...props }: React.ComponentProps<'div'>) {
+const CardHeader = ({ className, ...props }: React.ComponentProps<'div'>) => {
   return (
     <div
       className={cn('flex flex-col space-y-1 p-[var(--density-panel-padding)]', className)}
@@ -23,9 +23,9 @@ function CardHeader({ className, ...props }: React.ComponentProps<'div'>) {
       {...props}
     />
   );
-}
+};
 
-function CardTitle({ className, ...props }: React.ComponentProps<'div'>) {
+const CardTitle = ({ className, ...props }: React.ComponentProps<'div'>) => {
   return (
     <div
       className={cn('font-semibold leading-none tracking-tight', className)}
@@ -33,9 +33,9 @@ function CardTitle({ className, ...props }: React.ComponentProps<'div'>) {
       {...props}
     />
   );
-}
+};
 
-function CardDescription({ className, ...props }: React.ComponentProps<'div'>) {
+const CardDescription = ({ className, ...props }: React.ComponentProps<'div'>) => {
   return (
     <div
       className={cn('text-[length:var(--font-size-control)] text-muted-foreground', className)}
@@ -43,13 +43,13 @@ function CardDescription({ className, ...props }: React.ComponentProps<'div'>) {
       {...props}
     />
   );
-}
+};
 
-function CardContent({ className, ...props }: React.ComponentProps<'div'>) {
+const CardContent = ({ className, ...props }: React.ComponentProps<'div'>) => {
   return <div className={cn('p-[var(--density-panel-padding)] pt-0', className)} data-slot="card-content" {...props} />;
-}
+};
 
-function CardFooter({ className, ...props }: React.ComponentProps<'div'>) {
+const CardFooter = ({ className, ...props }: React.ComponentProps<'div'>) => {
   return (
     <div
       className={cn('flex items-center p-[var(--density-panel-padding)] pt-0', className)}
@@ -57,6 +57,6 @@ function CardFooter({ className, ...props }: React.ComponentProps<'div'>) {
       {...props}
     />
   );
-}
+};
 
 export { Card, CardHeader, CardFooter, CardTitle, CardDescription, CardContent };

@@ -150,18 +150,18 @@ export class ModelSecretStore {
   }
 }
 
-function requiredSecretValue(value: string): string {
+const requiredSecretValue = (value: string): string => {
   if (!value.trim()) {
     throw new Error('模型密钥不能为空。');
   }
   return value;
-}
+};
 
-function modelSecretReference(
+const modelSecretReference = (
   scope: ModelSecretScope,
   hasKey: boolean,
   reference?: ModelSecretRef,
-): ModelSecretRef {
+): ModelSecretRef => {
   if (!reference) {
     return { id: scope, hasKey, updatedAt: new Date().toISOString() };
   }
@@ -174,9 +174,9 @@ function modelSecretReference(
     throw new Error('模型密钥引用无效。');
   }
   return { ...reference };
-}
+};
 
-function isStoredModelSecret(value: unknown): value is StoredModelSecret {
+const isStoredModelSecret = (value: unknown): value is StoredModelSecret => {
   if (!value || typeof value !== 'object') {
     return false;
   }
@@ -185,26 +185,26 @@ function isStoredModelSecret(value: unknown): value is StoredModelSecret {
     record.hasKey === true &&
     typeof record.updatedAt === 'string' && !Number.isNaN(Date.parse(record.updatedAt)) &&
     typeof record.encryptedValue === 'string' && record.encryptedValue.startsWith('safe:');
-}
+};
 
-function isModelSecretScope(value: unknown): value is ModelSecretScope {
+const isModelSecretScope = (value: unknown): value is ModelSecretScope => {
   return value === 'midscene' || value === 'agent:planner' || value === 'agent:executor' ||
     value === 'agent:verifier' || value === 'agent:reporter';
-}
+};
 
-function assertModelSecretScope(scope: unknown): asserts scope is ModelSecretScope {
+const assertModelSecretScope: (scope: unknown) => asserts scope is ModelSecretScope = (scope) => {
   if (!isModelSecretScope(scope)) {
     throw new Error('模型密钥范围无效。');
   }
-}
+};
 
-function toModelSecretRef(record: StoredModelSecret): ModelSecretRef {
+const toModelSecretRef = (record: StoredModelSecret): ModelSecretRef => {
   return {
     id: record.id,
     hasKey: record.hasKey,
     updatedAt: record.updatedAt,
   };
-}
+};
 
 const electronModelSecretProtection: ModelSecretProtection = {
   encrypt(value) {
@@ -232,7 +232,7 @@ const electronModelSecretProtection: ModelSecretProtection = {
 
 const requireElectron = createRequire(import.meta.url);
 
-function loadElectronSafeStorage(): ElectronSafeStorage | undefined {
+const loadElectronSafeStorage = (): ElectronSafeStorage | undefined => {
   try {
     const electron = requireElectron('electron') as unknown;
     if (!electron || typeof electron !== 'object') {
@@ -243,9 +243,9 @@ function loadElectronSafeStorage(): ElectronSafeStorage | undefined {
   } catch {
     return undefined;
   }
-}
+};
 
-function isElectronSafeStorage(value: unknown): value is ElectronSafeStorage {
+const isElectronSafeStorage = (value: unknown): value is ElectronSafeStorage => {
   if (!value || typeof value !== 'object') {
     return false;
   }
@@ -253,4 +253,4 @@ function isElectronSafeStorage(value: unknown): value is ElectronSafeStorage {
   return typeof candidate.isEncryptionAvailable === 'function' &&
     typeof candidate.encryptString === 'function' &&
     typeof candidate.decryptString === 'function';
-}
+};

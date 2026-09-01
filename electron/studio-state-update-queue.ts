@@ -97,7 +97,7 @@ export class StudioStateUpdateQueue {
   }
 }
 
-export function mergeRendererStudioState(current: StudioState, incoming: StudioState): StudioState {
+export const mergeRendererStudioState = (current: StudioState, incoming: StudioState): StudioState => {
   const merged = {
     ...incoming,
     projectAssetBindings: mergeProjectAssetBindings(
@@ -109,10 +109,10 @@ export function mergeRendererStudioState(current: StudioState, incoming: StudioS
     suiteRunRecords: current.suiteRunRecords,
   };
   return preserveCurrentModelSecretRefs(current, merged);
-}
+};
 
 /** Merges Suite records emitted by trusted main-process runtime persistence. */
-export function mergeRuntimeStudioState(current: StudioState, incoming: StudioState): StudioState {
+export const mergeRuntimeStudioState = (current: StudioState, incoming: StudioState): StudioState => {
   const merged = {
     ...incoming,
     projectAssetBindings: mergeProjectAssetBindings(
@@ -123,12 +123,12 @@ export function mergeRuntimeStudioState(current: StudioState, incoming: StudioSt
     suiteRunRecords: mergeRuntimeSuiteRunRecords(current.suiteRunRecords, incoming.suiteRunRecords),
   };
   return preserveCurrentModelSecretRefs(current, merged);
-}
+};
 
-function mergeRuntimeSuiteRunRecords(
+const mergeRuntimeSuiteRunRecords = (
   current: readonly SuiteRunRecord[],
   incoming: readonly SuiteRunRecord[],
-): SuiteRunRecord[] {
+): SuiteRunRecord[] => {
   const currentById = new Map(current.map((record) => [record.id, record]));
   const merged = incoming.map((record) => {
     const persisted = currentById.get(record.id);
@@ -139,12 +139,12 @@ function mergeRuntimeSuiteRunRecords(
     return record;
   });
   return [...merged, ...currentById.values()];
-}
+};
 
-function preferredSuiteRunRecord(
+const preferredSuiteRunRecord = (
   current: SuiteRunRecord,
   incoming: SuiteRunRecord,
-): SuiteRunRecord {
+): SuiteRunRecord => {
   const currentTerminal = current.status !== 'running';
   const incomingTerminal = incoming.status !== 'running';
   if (currentTerminal !== incomingTerminal) {
@@ -160,31 +160,31 @@ function preferredSuiteRunRecord(
     return incomingFinishedAt > currentFinishedAt ? incoming : current;
   }
   return durableSuiteFacts(incoming) > durableSuiteFacts(current) ? incoming : current;
-}
+};
 
-function completionTime(record: SuiteRunRecord): number {
+const completionTime = (record: SuiteRunRecord): number => {
   const timestamp = record.finishedAt ? Date.parse(record.finishedAt) : Number.NaN;
   return Number.isFinite(timestamp) ? timestamp : 0;
-}
+};
 
-function durableSuiteFacts(record: SuiteRunRecord): number {
+const durableSuiteFacts = (record: SuiteRunRecord): number => {
   const members = record.members ?? [];
   return record.memberRunIds.length * 3 + members.length * 4 +
     members.filter((member) => member.runId).length +
     (record.reasonCode ? 1 : 0) +
     Object.values(record.summary).reduce((total, count) => total + count, 0);
-}
+};
 
 export const modelApiKeyValidationErrorMessage = '渲染进程状态包含不允许的模型密钥字段。';
 
 /** Reject raw model keys from untrusted IPC payloads without exposing their values. */
-export function assertNoRendererModelApiKey(value: unknown): void {
+export const assertNoRendererModelApiKey = (value: unknown): void => {
   if (containsModelApiKey(value, new WeakSet<object>())) {
     throw new Error(modelApiKeyValidationErrorMessage);
   }
-}
+};
 
-function containsModelApiKey(value: unknown, visited: WeakSet<object>): boolean {
+const containsModelApiKey = (value: unknown, visited: WeakSet<object>): boolean => {
   if (!value || typeof value !== 'object') {
     return false;
   }
@@ -196,13 +196,13 @@ function containsModelApiKey(value: unknown, visited: WeakSet<object>): boolean 
   return Object.entries(value).some(([key, nestedValue]) =>
     key === 'modelApiKey' || containsModelApiKey(nestedValue, visited),
   );
-}
+};
 
-function withModelSecretRef(
+const withModelSecretRef = (
   state: StudioState,
   scope: ModelSecretScope,
   modelSecret: ModelSecretRef,
-): StudioState {
+): StudioState => {
   if (scope === 'midscene') {
     return {
       ...state,
@@ -224,9 +224,9 @@ function withModelSecretRef(
       },
     },
   };
-}
+};
 
-function preserveCurrentModelSecretRefs(current: StudioState, incoming: StudioState): StudioState {
+const preserveCurrentModelSecretRefs = (current: StudioState, incoming: StudioState): StudioState => {
   return {
     ...incoming,
     midsceneConfig: {
@@ -253,4 +253,4 @@ function preserveCurrentModelSecretRefs(current: StudioState, incoming: StudioSt
       },
     },
   };
-}
+};

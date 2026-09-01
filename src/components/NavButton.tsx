@@ -4,7 +4,7 @@ import { cn } from '@/lib/utils';
 
 import { Button } from '@/components/ui/button';
 
-export function NavButton({
+export const NavButton = ({
   active,
   icon,
   label,
@@ -16,7 +16,7 @@ export function NavButton({
   label: string;
   showLabel?: boolean;
   onClick: () => void;
-}) {
+}) => {
   return (
     <Button
       aria-label={label}
@@ -36,4 +36,4 @@ export function NavButton({
       {showLabel ? <span className="truncate text-sm font-medium">{label}</span> : <span className="sr-only">{label}</span>}
     </Button>
   );
-}
+};

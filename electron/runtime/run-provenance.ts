@@ -57,12 +57,12 @@ export type RerunPlan =
  * Copies only immutable execution identity into a history-safe record. The
  * raw endpoint and API key are transient inputs and never enter the result.
  */
-export function createRunProvenance(
+export const createRunProvenance = (
   snapshot: ProjectSnapshot,
   testCase: TestCaseDraft,
   environment: ProjectEnvironment,
   runtimeMetadata: RunProvenanceRuntimeMetadata,
-): RunProvenance {
+): RunProvenance => {
   const assetReferences = testCase.assetReferences;
   return deepFreeze({
     ...createRunProvenanceBase(snapshot, environment, runtimeMetadata),
@@ -71,16 +71,16 @@ export function createRunProvenance(
     reusableFlows: (assetReferences?.reusableFlows ?? []).map((reference) => exactReference(reference, 'reusable Flow')),
     baselines: assetReferences?.baseline ? [exactReference(assetReferences.baseline, 'Baseline')] : [],
   });
-}
+};
 
 /** Freezes a Suite parent identity without inventing a representative Case. */
-export function createSuiteRunProvenance(
+export const createSuiteRunProvenance = (
   snapshot: ProjectSnapshot,
   suite: SuiteAsset,
   environment: ProjectEnvironment,
   runtimeMetadata: RunProvenanceRuntimeMetadata,
   parentRunId: string,
-): SuiteRunProvenance {
+): SuiteRunProvenance => {
   if (!parentRunId.trim()) {
     throw new Error('Suite provenance requires a parent run ID.');
   }
@@ -94,13 +94,13 @@ export function createSuiteRunProvenance(
       parentRunId,
     },
   });
-}
+};
 
-function createRunProvenanceBase(
+const createRunProvenanceBase = (
   snapshot: ProjectSnapshot,
   environment: ProjectEnvironment,
   runtimeMetadata: RunProvenanceRuntimeMetadata,
-): Omit<RunProvenance, 'testCase' | 'suite' | 'fixtures' | 'reusableFlows' | 'baselines'> {
+): Omit<RunProvenance, 'testCase' | 'suite' | 'fixtures' | 'reusableFlows' | 'baselines'> => {
   const modelProvider = nonEmpty(runtimeMetadata.model.provider);
   const modelName = nonEmpty(runtimeMetadata.model.name);
   const endpoint = nonEmpty(runtimeMetadata.model.endpoint);
@@ -133,16 +133,16 @@ function createRunProvenanceBase(
     },
     createdAt: runtimeMetadata.createdAt,
   };
-}
+};
 
 /**
  * Resolves a historical run against its recorded bound revision. It never
  * loads a current project or selects an unversioned/latest asset.
  */
-export async function resolveRerunPlan(
+export const resolveRerunPlan = async (
   repository: Pick<ProjectRepository, 'loadBound'>,
   provenance: RunProvenance,
-): Promise<RerunPlan> {
+): Promise<RerunPlan> => {
   if (provenance.source === 'legacyStudioStore' || provenance.reproducibility === 'legacy') {
     return blocked(legacyRerunReason());
   }
@@ -181,24 +181,24 @@ export async function resolveRerunPlan(
     reusableFlows: reusableFlows as ReusableFlowAsset[],
     environment: environment!,
   };
-}
+};
 
-function exactReference(
+const exactReference = (
   reference: Pick<VersionedTestAssetReference, 'id'> & { version?: number },
   label: string,
-): VersionedTestAssetReference {
+): VersionedTestAssetReference => {
   const version = reference.version;
   if (!reference.id.trim() || typeof version !== 'number' || !Number.isSafeInteger(version) || version < 1) {
     throw new Error(`${label} provenance requires an exact versioned reference.`);
   }
   return { id: reference.id, version };
-}
+};
 
-function copyReference(reference: VersionedTestAssetReference): RerunMissingReference {
+const copyReference = (reference: VersionedTestAssetReference): RerunMissingReference => {
   return { id: reference.id, version: reference.version };
-}
+};
 
-function redactProjectUrl(value: string): string {
+const redactProjectUrl = (value: string): string => {
   const candidate = value.trim();
   try {
     const parsed = new URL(candidate);
@@ -217,16 +217,16 @@ function redactProjectUrl(value: string): string {
   const authority = withoutQuery.slice(authorityStart, authorityEnd);
   const host = authority.slice(authority.lastIndexOf('@') + 1);
   return `${withoutQuery.slice(0, authorityStart)}${host}${withoutQuery.slice(authorityEnd)}`;
-}
+};
 
-function endpointFingerprint(endpoint: string): string | undefined {
+const endpointFingerprint = (endpoint: string): string | undefined => {
   const canonicalEndpoint = canonicalizeEndpoint(endpoint);
   return canonicalEndpoint
     ? `sha256:${createHash('sha256').update(canonicalEndpoint, 'utf8').digest('hex')}`
     : undefined;
-}
+};
 
-function canonicalizeEndpoint(endpoint: string): string | undefined {
+const canonicalizeEndpoint = (endpoint: string): string | undefined => {
   try {
     const parsed = new URL(endpoint);
     if (!parsed.protocol || !parsed.host) {
@@ -240,23 +240,23 @@ function canonicalizeEndpoint(endpoint: string): string | undefined {
   } catch {
     return undefined;
   }
-}
+};
 
-function findFixture(
+const findFixture = (
   project: Pick<ProjectDraft, 'fixtures'>,
   reference: VersionedTestAssetReference,
-): FixtureAsset | undefined {
+): FixtureAsset | undefined => {
   return project.fixtures.find((fixture) => fixture.id === reference.id && fixture.version === reference.version);
-}
+};
 
-function findReusableFlow(
+const findReusableFlow = (
   project: Pick<ProjectDraft, 'reusableFlows'>,
   reference: VersionedTestAssetReference,
-): ReusableFlowAsset | undefined {
+): ReusableFlowAsset | undefined => {
   return project.reusableFlows.find((flow) => flow.id === reference.id && flow.version === reference.version);
-}
+};
 
-function repositoryRerunReason(error: unknown): RunReason | undefined {
+const repositoryRerunReason = (error: unknown): RunReason | undefined => {
   const code = repositoryErrorCode(error);
   if (!code) {
     return undefined;
@@ -271,9 +271,9 @@ function repositoryRerunReason(error: unknown): RunReason | undefined {
     code: 'missingAssetVersion',
     message: 'The recorded project revision is unavailable from its bound project assets.',
   };
-}
+};
 
-function repositoryErrorCode(error: unknown): ProjectRepositoryError['code'] | undefined {
+const repositoryErrorCode = (error: unknown): ProjectRepositoryError['code'] | undefined => {
   if (error instanceof ProjectRepositoryError) {
     return error.code;
   }
@@ -288,35 +288,35 @@ function repositoryErrorCode(error: unknown): ProjectRepositoryError['code'] | u
     code === 'projectRevisionChanged'
     ? code
     : undefined;
-}
+};
 
-function legacyRerunReason(): RunReason {
+const legacyRerunReason = (): RunReason => {
   return {
     code: 'legacyAmbiguousNeutral',
     message: 'Historical rerun is unavailable because this run was not captured from a versioned project snapshot.',
   };
-}
+};
 
-function missingAssetReason(): RunReason {
+const missingAssetReason = (): RunReason => {
   return {
     code: 'missingAssetVersion',
     message: 'One or more recorded asset versions are unavailable for this historical rerun.',
   };
-}
+};
 
-function blocked(reason: RunReason, missingReferences: RerunMissingReference[] = []): RerunPlan {
+const blocked = (reason: RunReason, missingReferences: RerunMissingReference[] = []): RerunPlan => {
   return { status: 'blocked', reason, missingReferences };
-}
+};
 
-function nonEmpty(value: string | undefined): string | undefined {
+const nonEmpty = (value: string | undefined): string | undefined => {
   const trimmed = value?.trim();
   return trimmed ? trimmed : undefined;
-}
+};
 
-function deepFreeze<Value>(value: Value): Value {
+const deepFreeze = <Value>(value: Value): Value => {
   if (!value || typeof value !== 'object' || Object.isFrozen(value)) {
     return value;
   }
   Object.values(value).forEach((child) => deepFreeze(child));
   return Object.freeze(value);
-}
+};

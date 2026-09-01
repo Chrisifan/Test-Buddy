@@ -9,14 +9,14 @@ export interface LatestAcceptanceReportVerification {
 }
 
 /** Verifies the newest complete retained report without overwriting older evidence. */
-export async function verifyLatestAcceptanceReport(
+export const verifyLatestAcceptanceReport = async (
   outputDirectory: string,
-): Promise<LatestAcceptanceReportVerification> {
+): Promise<LatestAcceptanceReportVerification> => {
   const reportPath = await findLatestCompleteAcceptanceReport(outputDirectory);
   return { reportPath, decision: await verifyAcceptanceReport(reportPath) };
-}
+};
 
-async function findLatestCompleteAcceptanceReport(outputDirectory: string): Promise<string> {
+const findLatestCompleteAcceptanceReport = async (outputDirectory: string): Promise<string> => {
   const candidates = await Promise.all((await fs.readdir(outputDirectory, { withFileTypes: true }))
     .filter((entry) => entry.isDirectory() && entry.name.startsWith('runs-'))
     .map(async (entry) => {
@@ -39,13 +39,13 @@ async function findLatestCompleteAcceptanceReport(outputDirectory: string): Prom
     throw new Error('No complete retained acceptance report exists.');
   }
   return latest.reportPath;
-}
+};
 
-async function main(): Promise<void> {
+const main = async (): Promise<void> => {
   const outputDirectory = process.argv[2] ?? path.resolve('.acceptance', 'local');
   const result = await verifyLatestAcceptanceReport(outputDirectory);
   process.stdout.write(`${result.reportPath}\n`);
-}
+};
 
 if (process.argv[1]?.endsWith('verify-latest-acceptance-report.js')) {
   void main().catch((error) => {

@@ -365,20 +365,20 @@ export interface AgentRunResult {
   cancellation?: AgentRunCancellation;
 }
 
-function lastFailureEvent(events: AgentRunEvent[]): AgentRunEvent | undefined {
+const lastFailureEvent = (events: AgentRunEvent[]): AgentRunEvent | undefined => {
   return [...events].reverse().find((event) => event.type === 'agent:step-failed' && event.stepId)
     ?? [...events].reverse().find(
       (event) => event.stepId && event.verification && event.verification.status !== 'passed',
     );
-}
+};
 
 /**
  * Builds the only recovery instruction a Reporter draft may insert. The model
  * never chooses this action: it is derived from the persisted execution trace.
  */
-export function deriveAgentRecoveryPlan(
+export const deriveAgentRecoveryPlan = (
   run: Pick<AgentRunResult, 'events' | 'plan'>,
-): AgentRecoveryPlan | undefined {
+): AgentRecoveryPlan | undefined => {
   const failedEvent = lastFailureEvent(run.events);
   const failedStepId = failedEvent?.stepId;
   if (!failedStepId) {
@@ -447,14 +447,14 @@ export function deriveAgentRecoveryPlan(
   // No reliable selector or response target exists. Observation is the only
   // safe draft step because it cannot mutate browser state.
   return { failedStepId, strategy: 'observe', reason };
-}
+};
 
 export interface AgentRunRequest {
   intent: AgentIntent;
   projectId?: string;
 }
 
-export function createAgentIntent({
+export const createAgentIntent = ({
   source,
   prompt,
   projectId,
@@ -465,7 +465,7 @@ export function createAgentIntent({
   documentId,
   targetUrl,
   page,
-}: Omit<AgentIntent, 'id' | 'createdAt'>): AgentIntent {
+}: Omit<AgentIntent, 'id' | 'createdAt'>): AgentIntent => {
   const intent: AgentIntent = {
     id: `agent-intent-${Date.now()}`,
     source,
@@ -483,8 +483,8 @@ export function createAgentIntent({
   if (page) intent.page = page;
 
   return intent;
-}
+};
 
-export function isTerminalAgentEvent(event: AgentRunEvent): boolean {
+export const isTerminalAgentEvent = (event: AgentRunEvent): boolean => {
   return event.type === 'agent:run-finished' || event.type === 'agent:step-failed';
-}
+};

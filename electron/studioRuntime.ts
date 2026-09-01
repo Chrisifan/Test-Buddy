@@ -282,30 +282,30 @@ export interface RunDeterministicStepResponse {
   agentRun: AgentRunResult;
 }
 
-function nowLabel(): string {
+const nowLabel = (): string => {
   const now = new Date();
   return `${now.getHours().toString().padStart(2, '0')}:${now
     .getMinutes()
     .toString()
     .padStart(2, '0')}`;
-}
+};
 
-function describeRuntimeProfile(profile: RuntimeProfile): string {
+const describeRuntimeProfile = (profile: RuntimeProfile): string => {
   return `${profile.browser} / ${profile.viewport} / ${profile.headless ? 'headless' : 'headed'} / ${profile.baseUrl}`;
-}
+};
 
-function formatDuration(durationMs: number): string {
+const formatDuration = (durationMs: number): string => {
   const totalSeconds = durationMs > 0 ? Math.ceil(durationMs / 1_000) : 0;
   const hours = Math.floor(totalSeconds / 3_600);
   const minutes = Math.floor((totalSeconds % 3_600) / 60);
   const seconds = totalSeconds % 60;
   return [hours, minutes, seconds].map((value) => String(value).padStart(2, '0')).join(':');
-}
+};
 
-function createWorkflowRunDetail(
+const createWorkflowRunDetail = (
   request: RunWorkflowRequest,
   agentRun: AgentRunResult,
-): RunDetail {
+): RunDetail => {
   const elapsedMs = Math.max(0, Date.parse(agentRun.endedAt ?? agentRun.startedAt) - Date.parse(agentRun.startedAt));
   const outcome = terminalAgentRunOutcome(agentRun, runReason('unsupportedAction', agentRun.summary));
   return {
@@ -361,13 +361,13 @@ function createWorkflowRunDetail(
     ...(outcome.reason ? { reason: outcome.reason } : {}),
     ...(agentRun.failureReason ? { failureReason: agentRun.failureReason } : {}),
   };
-}
+};
 
-function isSupportedDeterministicPlanStep(
+const isSupportedDeterministicPlanStep = (
   step: AgentPlanStepDraft,
   assertion?: ExplicitTestAssertion,
   inputBinding?: TestInputValueBinding,
-): boolean {
+): boolean => {
   if (step.action === 'assert') {
     return Boolean(assertion);
   }
@@ -381,25 +381,25 @@ function isSupportedDeterministicPlanStep(
     return Boolean(step.selector?.trim() && inputBinding);
   }
   return step.action === 'wait' && (Boolean(step.selector?.trim()) || Boolean(step.timeoutMs && step.timeoutMs > 0));
-}
+};
 
 /**
  * Deterministic input values are resolved only in the main process immediately
  * before browser dispatch. Never let a caller-provided plan value reach run
  * evidence, even when this API is used outside TestRunner.
  */
-function sanitizeDeterministicPlanStep(step: AgentPlanStepDraft): AgentPlanStepDraft {
+const sanitizeDeterministicPlanStep = (step: AgentPlanStepDraft): AgentPlanStepDraft => {
   if (step.action !== 'input' && step.action !== 'select') {
     return step;
   }
   const { value: _value, ...safeStep } = step;
   return safeStep;
-}
+};
 
-function createDeterministicRunDetail(
+const createDeterministicRunDetail = (
   request: RunDeterministicStepRequest,
   agentRun: AgentRunResult,
-): RunDetail {
+): RunDetail => {
   const elapsedMs = Math.max(0, Date.parse(agentRun.endedAt ?? agentRun.startedAt) - Date.parse(agentRun.startedAt));
   const plannedStep = agentRun.plan.steps.find((step) => step.sourceStepType === request.sourceStep.type);
   const sourceStepId = plannedStep?.id;
@@ -450,14 +450,14 @@ function createDeterministicRunDetail(
     ...(outcome.reason ? { reason: outcome.reason } : {}),
     ...(agentRun.failureReason ? { failureReason: agentRun.failureReason } : {}),
   };
-}
+};
 
 interface TerminalAgentOutcome {
   status: Exclude<RunStatus, 'running'>;
   reason?: RunReason;
 }
 
-function terminalAgentRunOutcome(agentRun: AgentRunResult, fallback: RunReason): TerminalAgentOutcome {
+const terminalAgentRunOutcome = (agentRun: AgentRunResult, fallback: RunReason): TerminalAgentOutcome => {
   if (agentRun.cancellation) {
     return { status: 'cancelled', reason: runReason('userCancelled', agentRun.cancellation.message) };
   }
@@ -477,9 +477,9 @@ function terminalAgentRunOutcome(agentRun: AgentRunResult, fallback: RunReason):
     return { status: 'blocked', reason: fallback };
   }
   return { status: 'error', reason: runReason('executorError', 'Agent runtime did not produce a terminal result.') };
-}
+};
 
-function terminalAgentStatus(status: AgentRunStatus): Exclude<RunStatus, 'running'> {
+const terminalAgentStatus = (status: AgentRunStatus): Exclude<RunStatus, 'running'> => {
   if (status === 'passed') {
     return 'passed';
   }
@@ -490,22 +490,22 @@ function terminalAgentStatus(status: AgentRunStatus): Exclude<RunStatus, 'runnin
     return 'blocked';
   }
   return 'error';
-}
+};
 
-function deterministicFallbackReason(request: RunDeterministicStepRequest, message: string): RunReason {
+const deterministicFallbackReason = (request: RunDeterministicStepRequest, message: string): RunReason => {
   const code = request.inputBinding?.kind === 'credential'
     ? 'credentialUnavailable'
     : request.inputBinding?.kind === 'fixtureOutput'
       ? 'fixturePreflight'
       : 'unsupportedAction';
   return runReason(code, message);
-}
+};
 
-function runReason(code: RunReason['code'], message: string): RunReason {
+const runReason = (code: RunReason['code'], message: string): RunReason => {
   return { code, message };
-}
+};
 
-function appendTraceArtifact(agentRun: AgentRunResult, trace: RunArtifact): AgentRunResult {
+const appendTraceArtifact = (agentRun: AgentRunResult, trace: RunArtifact): AgentRunResult => {
   const artifact: AgentArtifact = {
     id: `${agentRun.runId}-artifact-trace`,
     type: 'trace',
@@ -529,13 +529,13 @@ function appendTraceArtifact(agentRun: AgentRunResult, trace: RunArtifact): Agen
     ],
     artifacts: [...agentRun.artifacts, artifact],
   };
-}
+};
 
-function makeAssistantReply(
+const makeAssistantReply = (
   mode: ChatCommandRequest['mode'],
   prompt: string,
   runtimeProfile: RuntimeProfile,
-): string {
+): string => {
   if (mode === 'aiAssert') {
     return `主进程已接收断言指令：${prompt}。当前运行配置为 ${describeRuntimeProfile(runtimeProfile)}，等接入 MidScene 后，这里会替换成真实断言执行结果。`;
   }
@@ -545,14 +545,14 @@ function makeAssistantReply(
   }
 
   return `主进程已接收动作指令：${prompt}。当前运行配置为 ${describeRuntimeProfile(runtimeProfile)}，前端和桌面端的命令流已经打通。`;
-}
+};
 
-function extractExplicitUrl(text: string): string | undefined {
+const extractExplicitUrl = (text: string): string | undefined => {
   const match = text.match(/https?:\/\/[^\s"'<>，。；、)）\]]+/i);
   return match?.[0];
-}
+};
 
-function extractClickIntent(text: string): { selector?: string; target?: string } | undefined {
+const extractClickIntent = (text: string): { selector?: string; target?: string } | undefined => {
   const selectorMatch = text.match(/(?:点击|click)\s*(`[^`]+`|#[\w-]+|\.[\w-]+|\[[^\]]+\])/i);
   if (selectorMatch?.[1]) {
     return { selector: selectorMatch[1].replace(/^`|`$/g, '') };
@@ -561,9 +561,9 @@ function extractClickIntent(text: string): { selector?: string; target?: string 
   const targetMatch = text.match(/(?:点击|click)\s*([^，。；,.、\n]+)/i);
   const target = targetMatch?.[1]?.trim();
   return target ? { target } : undefined;
-}
+};
 
-function extractInputIntent(text: string): { selector?: string; target?: string; value: string } | undefined {
+const extractInputIntent = (text: string): { selector?: string; target?: string; value: string } | undefined => {
   const selectorInput = text.match(
     /(?:在|向|给|输入到|填入)\s*(`[^`]+`|#[\w-]+|\.[\w-]+|\[[^\]]+\])\s*(?:中|里)?\s*(?:输入|填入|填写)\s*([^，。；,\n]+)/i,
   );
@@ -591,9 +591,9 @@ function extractInputIntent(text: string): { selector?: string; target?: string;
   }
 
   return undefined;
-}
+};
 
-function extractSelectIntent(text: string): { selector?: string; target?: string; value: string } | undefined {
+const extractSelectIntent = (text: string): { selector?: string; target?: string; value: string } | undefined => {
   const selectorSelect = text.match(
     /(?:在|向|给)?\s*(`[^`]+`|#[\w-]+|\.[\w-]+|\[[^\]]+\])\s*(?:中|里)?\s*(?:选择|选中|select)\s*([^，。；,\n]+)/i,
   );
@@ -607,17 +607,17 @@ function extractSelectIntent(text: string): { selector?: string; target?: string
   }
 
   return undefined;
-}
+};
 
-function extractQueryIntent(text: string): { target?: string } {
+const extractQueryIntent = (text: string): { target?: string } => {
   const match = text.match(
     /(?:提取|读取|查询|获取|extract|query)\s*(?:(?:当前)?页面(?:中|里|的)?\s*)?(.+?)(?:[。；，,\n]|$)/i,
   );
   const target = normalizeCapturedValue(match?.[1] ?? '');
   return target ? { target } : {};
-}
+};
 
-function extractWaitMs(text: string): number | undefined {
+const extractWaitMs = (text: string): number | undefined => {
   const milliseconds = text.match(/(?:等待|wait)[\s\S]{0,100}?(\d+)\s*(?:毫秒|ms)/i);
   if (milliseconds?.[1]) {
     return Math.min(Math.max(Number.parseInt(milliseconds[1], 10), 0), 30_000);
@@ -634,9 +634,9 @@ function extractWaitMs(text: string): number | undefined {
   }
 
   return undefined;
-}
+};
 
-function extractDirectWaitIntent(text: string): ExecutionIntent['waitIntent'] | undefined {
+const extractDirectWaitIntent = (text: string): ExecutionIntent['waitIntent'] | undefined => {
   if (!/(?:等待|wait)/i.test(text)) {
     return undefined;
   }
@@ -661,9 +661,9 @@ function extractDirectWaitIntent(text: string): ExecutionIntent['waitIntent'] | 
     ...(responseUrlPattern ? { urlPattern: responseUrlPattern } : {}),
     strategy,
   };
-}
+};
 
-function extractScrollIntent(text: string): { selector?: string; x?: number; y?: number } | undefined {
+const extractScrollIntent = (text: string): { selector?: string; x?: number; y?: number } | undefined => {
   if (!/(?:滚动|scroll)/i.test(text)) {
     return undefined;
   }
@@ -672,30 +672,30 @@ function extractScrollIntent(text: string): { selector?: string; x?: number; y?:
     return { selector: selectorMatch[1].replace(/^`|`$/g, '') };
   }
   return { y: /(?:向上|上滚|scroll\s+up)/i.test(text) ? -800 : 800 };
-}
+};
 
-function isNetworkIdleWaitInstruction(text: string): boolean {
+const isNetworkIdleWaitInstruction = (text: string): boolean => {
   return /(?:network\s*idle|networkidle|网络空闲|接口稳定|请求稳定|数据稳定|等待接口|等待请求)/i.test(text);
-}
+};
 
-function isChartStableWaitInstruction(text: string): boolean {
+const isChartStableWaitInstruction = (text: string): boolean => {
   return /(?:(?:图表|趋势图|折线图|柱状图|饼图|chart|graph).*(?:稳定|渲染完成|加载完成|绘制完成|stable|rendered|loaded)|(?:稳定|渲染完成|加载完成|绘制完成|stable|rendered|loaded).*(?:图表|趋势图|折线图|柱状图|饼图|chart|graph))/i.test(
     text,
   );
-}
+};
 
-function isDataReadyWaitInstruction(text: string): boolean {
+const isDataReadyWaitInstruction = (text: string): boolean => {
   return /(?:(?:数据|表格|列表|结果|订单|记录|table|grid|list|rows?).*(?:就绪|加载完成|加载完毕|返回完成|渲染完成|ready|loaded|available)|(?:等待|wait).*(?:数据|表格|列表|结果|table|grid|list|rows?).*(?:完成|就绪|ready|loaded))/i.test(
     text,
   );
-}
+};
 
-function extractApiPath(text: string): string | undefined {
+const extractApiPath = (text: string): string | undefined => {
   const match = text.match(/\/api\/[^\s"'<>，。；、)）\]]+/i);
   return match?.[0];
-}
+};
 
-function extractResponseUrlPattern(step: AgentPlanStepDraft): string | undefined {
+const extractResponseUrlPattern = (step: AgentPlanStepDraft): string | undefined => {
   const candidates = [step.target, step.url, step.instruction].filter((value): value is string => Boolean(value?.trim()));
   for (const candidate of candidates) {
     const trimmed = candidate.trim();
@@ -709,25 +709,25 @@ function extractResponseUrlPattern(step: AgentPlanStepDraft): string | undefined
     }
   }
   return undefined;
-}
+};
 
-function resolveScrollIntent(step: AgentPlanStepDraft): { selector?: string; x?: number; y?: number } {
+const resolveScrollIntent = (step: AgentPlanStepDraft): { selector?: string; x?: number; y?: number } => {
   const value = `${step.value ?? ''} ${step.instruction}`;
   const y = /(?:up|向上|上滚)/i.test(value) ? -800 : /(?:down|向下|下滚|scroll|滚动)/i.test(value) ? 800 : undefined;
   return {
     ...(step.selector ? { selector: step.selector } : {}),
     ...(y !== undefined ? { y } : {}),
   };
-}
+};
 
-function normalizeCapturedValue(value: string): string {
+const normalizeCapturedValue = (value: string): string => {
   return value
     .trim()
     .replace(/^["'`“”‘’]+|["'`“”‘’]+$/g, '')
     .trim();
-}
+};
 
-function extractAssertionIntent(text: string): ExplicitAssertionIntent | undefined {
+const extractAssertionIntent = (text: string): ExplicitAssertionIntent | undefined => {
   const tableTargetMatch = text.match(/(?:表格|table)\s*(?:「([^」]+)」|“([^”]+)”|["'`]([^"'`]+)["'`])/i);
   const tableName = normalizeCapturedValue(tableTargetMatch?.[1] ?? tableTargetMatch?.[2] ?? tableTargetMatch?.[3] ?? '');
   if (tableTargetMatch && tableName) {
@@ -1030,15 +1030,15 @@ function extractAssertionIntent(text: string): ExplicitAssertionIntent | undefin
   }
 
   return undefined;
-}
+};
 
-function evaluateExplicitAssertion(
+const evaluateExplicitAssertion = (
   assertion: ExplicitAssertionIntent,
   session: BrowserSessionState | undefined,
   pageText?: string,
   observation?: Partial<Pick<AgentObservation, 'tables' | 'charts'>>,
   domInspection?: AgentDomInspection,
-): AssertionEvaluation {
+): AssertionEvaluation => {
   if (
     assertion.kind === 'domSelectorExists' ||
     assertion.kind === 'domSelectorVisible' ||
@@ -1139,9 +1139,9 @@ function evaluateExplicitAssertion(
     evidence,
     failureReason: `${targetLabel}不包含「${assertion.expected}」。`,
   };
-}
+};
 
-function toExplicitAssertionIntent(assertion: ExplicitTestAssertion): ExplicitAssertionIntent {
+const toExplicitAssertionIntent = (assertion: ExplicitTestAssertion): ExplicitAssertionIntent => {
   switch (assertion.kind) {
     case 'urlContains':
       return { kind: 'urlContains', expected: assertion.expected, label: '当前 URL 包含' };
@@ -1164,9 +1164,9 @@ function toExplicitAssertionIntent(assertion: ExplicitTestAssertion): ExplicitAs
         domSelector: assertion.locator.selector,
       };
   }
-}
+};
 
-function normalizeSortDirection(value: string): 'ascending' | 'descending' | undefined {
+const normalizeSortDirection = (value: string): 'ascending' | 'descending' | undefined => {
   const normalized = value.trim().toLowerCase();
   if (normalized === '升序' || normalized === 'ascending' || normalized === 'asc') {
     return 'ascending';
@@ -1175,29 +1175,29 @@ function normalizeSortDirection(value: string): 'ascending' | 'descending' | und
     return 'descending';
   }
   return undefined;
-}
+};
 
-function normalizeChartTrend(value: string): 'rising' | 'falling' | 'flat' | 'mixed' | undefined {
+const normalizeChartTrend = (value: string): 'rising' | 'falling' | 'flat' | 'mixed' | undefined => {
   const normalized = value.trim().toLowerCase();
   if (normalized === '上升' || normalized === 'rising') return 'rising';
   if (normalized === '下降' || normalized === 'falling') return 'falling';
   if (normalized === '平稳' || normalized === 'flat') return 'flat';
   if (normalized === 'mixed') return 'mixed';
   return undefined;
-}
+};
 
-function formatChartTrend(trend: NonNullable<ExplicitAssertionIntent['chartTrend']>): string {
+const formatChartTrend = (trend: NonNullable<ExplicitAssertionIntent['chartTrend']>): string => {
   return trend === 'rising' ? '上升' : trend === 'falling' ? '下降' : trend === 'flat' ? '平稳' : 'mixed';
-}
+};
 
-function evidenceCompletenessLabel(value: 'complete' | 'partial' | 'unknown' | undefined): string {
+const evidenceCompletenessLabel = (value: 'complete' | 'partial' | 'unknown' | undefined): string => {
   return value === 'complete' ? '完整' : value === 'partial' ? '局部/虚拟化' : '未知';
-}
+};
 
-function requireCompleteTableEvidence(
+const requireCompleteTableEvidence = (
   assertion: ExplicitAssertionIntent,
   tables: NonNullable<AgentObservation['tables']>,
-): { tables: NonNullable<AgentObservation['tables']> } | { pending: AssertionEvaluation } {
+): { tables: NonNullable<AgentObservation['tables']> } | { pending: AssertionEvaluation } => {
   const completeTables = tables.filter((table) => table.evidenceCompleteness === 'complete');
   if (completeTables.length) {
     return { tables: completeTables };
@@ -1212,12 +1212,12 @@ function requireCompleteTableEvidence(
       evidence,
     },
   };
-}
+};
 
-function requireCompleteChartEvidence(
+const requireCompleteChartEvidence = (
   assertion: ExplicitAssertionIntent,
   charts: NonNullable<AgentObservation['charts']>,
-): { charts: NonNullable<AgentObservation['charts']> } | { pending: AssertionEvaluation } {
+): { charts: NonNullable<AgentObservation['charts']> } | { pending: AssertionEvaluation } => {
   const completeCharts = charts.filter((chart) => chart.evidenceCompleteness === 'complete');
   if (completeCharts.length) {
     return { charts: completeCharts };
@@ -1232,12 +1232,12 @@ function requireCompleteChartEvidence(
       evidence,
     },
   };
-}
+};
 
-function evaluateChartCountAssertion(
+const evaluateChartCountAssertion = (
   assertion: ExplicitAssertionIntent,
   charts: NonNullable<AgentObservation['charts']>,
-): AssertionEvaluation {
+): AssertionEvaluation => {
   const expectedCount = Number.parseInt(assertion.expected, 10);
   const chartTitles = charts.map((chart) => chart.title || `图表 #${chart.index}`).join('、');
   const evidence = `实际观察到 ${charts.length} 个图表${chartTitles ? `：${chartTitles}` : ''}`;
@@ -1257,12 +1257,12 @@ function evaluateChartCountAssertion(
     evidence,
     failureReason: `${assertion.label}不等于「${assertion.expected}」。`,
   };
-}
+};
 
-function evaluateDomAssertion(
+const evaluateDomAssertion = (
   assertion: ExplicitAssertionIntent,
   inspection: AgentDomInspection | undefined,
-): AssertionEvaluation {
+): AssertionEvaluation => {
   const selector = assertion.domSelector ?? assertion.expected;
   const evidence = inspection
     ? `${inspection.selector}：${inspection.found ? (inspection.visible ? '已找到且可见' : '已找到但不可见') : '未找到'}${inspection.text ? `；文本：${inspection.text}` : ''}${inspection.attribute ? `；属性 ${inspection.attribute.name}：${inspection.attribute.value ?? '未设置'}` : ''}`
@@ -1293,12 +1293,12 @@ function evaluateDomAssertion(
     evidence,
     failureReason,
   };
-}
+};
 
-function evaluateChartFieldAssertion(
+const evaluateChartFieldAssertion = (
   assertion: ExplicitAssertionIntent,
   charts: NonNullable<AgentObservation['charts']>,
-): AssertionEvaluation {
+): AssertionEvaluation => {
   const isTitleAssertion = assertion.kind === 'chartTitleEquals';
   const values = charts.flatMap((chart) => (isTitleAssertion ? [chart.title].filter(Boolean) : chart.legends ?? []));
   const evidence = isTitleAssertion
@@ -1320,12 +1320,12 @@ function evaluateChartFieldAssertion(
     evidence,
     failureReason: `${assertion.label}${isTitleAssertion ? '不等于' : '不包含'}「${assertion.expected}」。`,
   };
-}
+};
 
-function evaluateChartRenderedAssertion(
+const evaluateChartRenderedAssertion = (
   assertion: ExplicitAssertionIntent,
   charts: NonNullable<AgentObservation['charts']>,
-): AssertionEvaluation {
+): AssertionEvaluation => {
   const evidence = charts.length
     ? charts
         .map((chart) => {
@@ -1350,12 +1350,12 @@ function evaluateChartRenderedAssertion(
     evidence,
     failureReason: '未观察到已渲染图表。',
   };
-}
+};
 
-function evaluateChartEvidenceAssertion(
+const evaluateChartEvidenceAssertion = (
   assertion: ExplicitAssertionIntent,
   charts: NonNullable<AgentObservation['charts']>,
-): AssertionEvaluation {
+): AssertionEvaluation => {
   if (assertion.kind === 'chartSeriesTrend' || assertion.kind === 'chartTrend') {
     const completeness = requireCompleteChartEvidence(assertion, charts);
     if ('pending' in completeness) {
@@ -1512,12 +1512,12 @@ function evaluateChartEvidenceAssertion(
         evidence,
         failureReason: `${assertion.label}不匹配「${assertion.expected}」。`,
       };
-}
+};
 
-function evaluateTableCellAssertion(
+const evaluateTableCellAssertion = (
   assertion: ExplicitAssertionIntent,
   tables: NonNullable<AgentObservation['tables']>,
-): AssertionEvaluation {
+): AssertionEvaluation => {
   const rowIndex = assertion.rowIndex ?? 0;
   const columnIndex = assertion.columnIndex ?? 0;
   const tableWithCell = tables.find((table) => table.sampleRows[rowIndex - 1]?.[columnIndex - 1] !== undefined);
@@ -1542,12 +1542,12 @@ function evaluateTableCellAssertion(
     evidence,
     failureReason: `${assertion.label}不等于「${assertion.expected}」。`,
   };
-}
+};
 
-function evaluateTableColumnContainsAssertion(
+const evaluateTableColumnContainsAssertion = (
   assertion: ExplicitAssertionIntent,
   tables: NonNullable<AgentObservation['tables']>,
-): AssertionEvaluation {
+): AssertionEvaluation => {
   const columnName = assertion.columnName ?? '';
   const expectedValue = assertion.expected.replace(`${columnName} 包含 `, '');
   const columnEvidence = tables.flatMap((table) => {
@@ -1582,12 +1582,12 @@ function evaluateTableColumnContainsAssertion(
     evidence,
     failureReason: `表格列不包含「${expectedValue}」。`,
   };
-}
+};
 
-function evaluateTableColumnSumAssertion(
+const evaluateTableColumnSumAssertion = (
   assertion: ExplicitAssertionIntent,
   tables: NonNullable<AgentObservation['tables']>,
-): AssertionEvaluation {
+): AssertionEvaluation => {
   const completeness = requireCompleteTableEvidence(assertion, tables);
   if ('pending' in completeness) {
     return completeness.pending;
@@ -1626,9 +1626,9 @@ function evaluateTableColumnSumAssertion(
     evidence,
     failureReason: `${assertion.label}不等于「${expectedText}」。`,
   };
-}
+};
 
-function parseNumericCell(value: string): number | undefined {
+const parseNumericCell = (value: string): number | undefined => {
   const normalized = value.replace(/,/g, '').trim();
   if (!/^-?\d+(?:\.\d+)?$/.test(normalized)) {
     return undefined;
@@ -1636,16 +1636,16 @@ function parseNumericCell(value: string): number | undefined {
 
   const parsed = Number.parseFloat(normalized);
   return Number.isFinite(parsed) ? parsed : undefined;
-}
+};
 
-function formatNumber(value: number): string {
+const formatNumber = (value: number): string => {
   return Number.isInteger(value) ? String(value) : String(Number(value.toFixed(6)));
-}
+};
 
-function evaluateTableSortAssertion(
+const evaluateTableSortAssertion = (
   assertion: ExplicitAssertionIntent,
   tables: NonNullable<AgentObservation['tables']>,
-): AssertionEvaluation {
+): AssertionEvaluation => {
   const completeness = requireCompleteTableEvidence(assertion, tables);
   if ('pending' in completeness) {
     return completeness.pending;
@@ -1685,9 +1685,9 @@ function evaluateTableSortAssertion(
     evidence,
     failureReason: `${assertion.label}不匹配「${assertion.expected}」。`,
   };
-}
+};
 
-function inferTableSortEvidence(table: NonNullable<AgentObservation['tables']>[number], column: string): string[] {
+const inferTableSortEvidence = (table: NonNullable<AgentObservation['tables']>[number], column: string): string[] => {
   const inferred = inferTableSortDirection(table, column);
   if (!inferred) {
     return [];
@@ -1696,12 +1696,12 @@ function inferTableSortEvidence(table: NonNullable<AgentObservation['tables']>[n
   const columnIndex = table.headers.findIndex((header) => header === column);
   const values = table.sampleRows.map((row) => row[columnIndex]).filter((value): value is string => Boolean(value));
   return [`${table.caption || `表格 #${table.index}`}：${column} inferred ${inferred} (${values.join(' / ')})`];
-}
+};
 
-function inferTableSortDirection(
+const inferTableSortDirection = (
   table: NonNullable<AgentObservation['tables']>[number],
   column: string,
-): 'ascending' | 'descending' | undefined {
+): 'ascending' | 'descending' | undefined => {
   const columnIndex = table.headers.findIndex((header) => header === column);
   if (columnIndex < 0) {
     return undefined;
@@ -1727,20 +1727,20 @@ function inferTableSortDirection(
     return 'descending';
   }
   return undefined;
-}
+};
 
-function compareSortValues(left: string | number, right: string | number): number {
+const compareSortValues = (left: string | number, right: string | number): number => {
   if (typeof left === 'number' && typeof right === 'number') {
     return left - right;
   }
 
   return String(left).localeCompare(String(right), 'zh-CN', { numeric: true });
-}
+};
 
-function evaluateTableCountAssertion(
+const evaluateTableCountAssertion = (
   assertion: ExplicitAssertionIntent,
   tables: NonNullable<AgentObservation['tables']>,
-): AssertionEvaluation {
+): AssertionEvaluation => {
   const expectedCount = Number.parseInt(assertion.expected, 10);
   const isRowCount = assertion.kind === 'tableRowCount';
   if (isRowCount) {
@@ -1773,12 +1773,12 @@ function evaluateTableCountAssertion(
     evidence,
     failureReason: `${assertion.label}不等于「${assertion.expected}」。`,
   };
-}
+};
 
-function evaluateTableStateAssertion(
+const evaluateTableStateAssertion = (
   assertion: ExplicitAssertionIntent,
   tables: NonNullable<AgentObservation['tables']>,
-): AssertionEvaluation {
+): AssertionEvaluation => {
   const tableLabel = (table: NonNullable<AgentObservation['tables']>[number]) => table.caption || `表格 #${table.index}`;
   const paginationKey =
     assertion.kind === 'tableCurrentPage'
@@ -1863,9 +1863,9 @@ function evaluateTableStateAssertion(
         evidence,
         failureReason: `${assertion.label}不等于「${assertion.expected}」。`,
       };
-}
+};
 
-function summarizeTables(tables: NonNullable<AgentObservation['tables']>): string {
+const summarizeTables = (tables: NonNullable<AgentObservation['tables']>): string => {
   return tables
     .map((table) =>
       [
@@ -1882,29 +1882,29 @@ function summarizeTables(tables: NonNullable<AgentObservation['tables']>): strin
         .join(' / '),
     )
     .join(' | ');
-}
+};
 
-function selectAssertionTables(
+const selectAssertionTables = (
   tables: NonNullable<AgentObservation['tables']>,
   tableName: string | undefined,
-): NonNullable<AgentObservation['tables']> {
+): NonNullable<AgentObservation['tables']> => {
   if (!tableName) {
     return tables;
   }
   return tables.filter((table) => table.caption === tableName);
-}
+};
 
-function selectAssertionCharts(
+const selectAssertionCharts = (
   charts: NonNullable<AgentObservation['charts']>,
   chartName: string | undefined,
-): NonNullable<AgentObservation['charts']> {
+): NonNullable<AgentObservation['charts']> => {
   if (!chartName) {
     return charts;
   }
   return charts.filter((chart) => chart.title === chartName);
-}
+};
 
-function summarizeCharts(charts: NonNullable<AgentObservation['charts']>): string {
+const summarizeCharts = (charts: NonNullable<AgentObservation['charts']>): string => {
   return charts
     .map((chart) =>
       [
@@ -1921,47 +1921,47 @@ function summarizeCharts(charts: NonNullable<AgentObservation['charts']>): strin
         .join(' / '),
     )
     .join(' | ');
-}
+};
 
-function toAssertionEvaluation(result: SemanticActionResult): AssertionEvaluation {
+const toAssertionEvaluation = (result: SemanticActionResult): AssertionEvaluation => {
   return {
     status: result.status,
     summary: result.message,
     evidence: result.evidence ?? result.message,
     ...(result.failureReason ? { failureReason: result.failureReason } : {}),
   };
-}
+};
 
-function toVerifierAssertionEvaluation(result: AgentVerifierResult): AssertionEvaluation {
+const toVerifierAssertionEvaluation = (result: AgentVerifierResult): AssertionEvaluation => {
   return {
     status: result.status,
     summary: result.summary,
     evidence: result.evidence,
     ...(result.failureReason ? { failureReason: result.failureReason } : {}),
   };
-}
+};
 
-function createPendingSemanticEvaluation(message: string): AssertionEvaluation {
+const createPendingSemanticEvaluation = (message: string): AssertionEvaluation => {
   return {
     status: 'neutral',
     summary: message,
     evidence: '语义动作未执行，未生成页面判断证据。',
   };
-}
+};
 
-function addUsageBucket(left: AgentUsageBucket | undefined, right: AgentUsageBucket): AgentUsageBucket {
+const addUsageBucket = (left: AgentUsageBucket | undefined, right: AgentUsageBucket): AgentUsageBucket => {
   return {
     calls: (left?.calls ?? 0) + right.calls,
     promptTokens: (left?.promptTokens ?? 0) + right.promptTokens,
     completionTokens: (left?.completionTokens ?? 0) + right.completionTokens,
     totalTokens: (left?.totalTokens ?? 0) + right.totalTokens,
   };
-}
+};
 
-function mergeExecutionMetrics(
+const mergeExecutionMetrics = (
   left: AgentExecutionMetrics | undefined,
   right: AgentExecutionMetrics | undefined,
-): AgentExecutionMetrics | undefined {
+): AgentExecutionMetrics | undefined => {
   if (!left) return right;
   if (!right) return left;
 
@@ -2000,58 +2000,58 @@ function mergeExecutionMetrics(
     byIntent,
     byModel,
   };
-}
+};
 
-function withReplanningCycle(metrics: AgentExecutionMetrics): AgentExecutionMetrics {
+const withReplanningCycle = (metrics: AgentExecutionMetrics): AgentExecutionMetrics => {
   return {
     ...metrics,
     replanningCycles: Math.max(1, metrics.replanningCycles ?? 0),
   };
-}
+};
 
-function withReplanningCycleLimit(
+const withReplanningCycleLimit = (
   metrics: AgentExecutionMetrics,
   replanningCycleLimit: number,
-): AgentExecutionMetrics {
+): AgentExecutionMetrics => {
   return {
     ...metrics,
     replanningCycleLimit: Math.max(metrics.replanningCycleLimit ?? 0, replanningCycleLimit),
   };
-}
+};
 
-function resolvePlannerReplanningCycleLimit(request: ChatCommandRequest): number {
+const resolvePlannerReplanningCycleLimit = (request: ChatCommandRequest): number => {
   const parsed = Number.parseInt(request.midsceneConfig?.replanningCycleLimit ?? '', 10);
   return Number.isFinite(parsed) && parsed > 0 ? Math.min(parsed, 10) : 1;
-}
+};
 
-function withRetryAttempt(metrics: AgentExecutionMetrics): AgentExecutionMetrics {
+const withRetryAttempt = (metrics: AgentExecutionMetrics): AgentExecutionMetrics => {
   return {
     ...metrics,
     retryAttempts: (metrics.retryAttempts ?? 0) + 1,
   };
-}
+};
 
-function withDynamicWaitAttempt(metrics: AgentExecutionMetrics): AgentExecutionMetrics {
+const withDynamicWaitAttempt = (metrics: AgentExecutionMetrics): AgentExecutionMetrics => {
   return {
     ...metrics,
     dynamicWaitAttempts: (metrics.dynamicWaitAttempts ?? 0) + 1,
   };
-}
+};
 
-function withSelectorFallbackAttempt(metrics: AgentExecutionMetrics): AgentExecutionMetrics {
+const withSelectorFallbackAttempt = (metrics: AgentExecutionMetrics): AgentExecutionMetrics => {
   return {
     ...metrics,
     selectorFallbackAttempts: (metrics.selectorFallbackAttempts ?? 0) + 1,
   };
-}
+};
 
-function canRetryFailedStep(step: AgentPlanStepDraft): boolean {
+const canRetryFailedStep = (step: AgentPlanStepDraft): boolean => {
   if (step.action === 'navigate') return Boolean(step.url);
   if (step.action === 'click' || step.action === 'input' || step.action === 'select') return Boolean(step.selector);
   return step.action === 'wait' || step.action === 'scroll' || step.action === 'observe';
-}
+};
 
-function shouldRetryFailedExecution(step: AgentPlanStepDraft, execution: PlannedAgentStepExecution): boolean {
+const shouldRetryFailedExecution = (step: AgentPlanStepDraft, execution: PlannedAgentStepExecution): boolean => {
   if (
     execution.recoveryStrategy === 'replaceSelector' ||
     execution.recoveryStrategy === 'replanNavigation' ||
@@ -2061,12 +2061,12 @@ function shouldRetryFailedExecution(step: AgentPlanStepDraft, execution: Planned
     return false;
   }
   return canRetryFailedStep(step);
-}
+};
 
-function canWaitBeforeRetry(
+const canWaitBeforeRetry = (
   step: AgentPlanStepDraft,
   recoveryStrategy?: AgentRecoveryStrategy,
-): boolean {
+): boolean => {
   if (recoveryStrategy === 'waitForReadiness') {
     return true;
   }
@@ -2074,12 +2074,12 @@ function canWaitBeforeRetry(
     return canRetryFailedStep(step);
   }
   return (step.action === 'click' || step.action === 'input' || step.action === 'select') && Boolean(step.selector);
-}
+};
 
-function shouldWaitForDataReady(
+const shouldWaitForDataReady = (
   step: AgentPlanStepDraft,
   failedExecution?: PlannedAgentStepExecution,
-): boolean {
+): boolean => {
   if (failedExecution?.recoveryStrategy !== 'waitForReadiness') {
     return false;
   }
@@ -2093,12 +2093,12 @@ function shouldWaitForDataReady(
     .filter(Boolean)
     .join(' ');
   return /\b(?:table|tables|list|grid|data|dataset|rows?|chart)\b|表格|列表|数据|行数据|图表/i.test(context);
-}
+};
 
-function responseUrlPatternForNetworkRecovery(
+const responseUrlPatternForNetworkRecovery = (
   step: AgentPlanStepDraft,
   failedExecution?: PlannedAgentStepExecution,
-): string | undefined {
+): string | undefined => {
   if (
     failedExecution?.recoveryStrategy !== 'waitForReadiness' ||
     failedExecution.failureCategory !== 'network'
@@ -2106,31 +2106,31 @@ function responseUrlPatternForNetworkRecovery(
     return undefined;
   }
   return extractResponseUrlPattern(step);
-}
+};
 
-function canUseSelectorFallback(step: AgentPlanStepDraft): boolean {
+const canUseSelectorFallback = (step: AgentPlanStepDraft): boolean => {
   return (step.action === 'click' || step.action === 'input' || step.action === 'select') && Boolean(step.selector);
-}
+};
 
-function shouldTrySelectorFallback(
+const shouldTrySelectorFallback = (
   step: AgentPlanStepDraft,
   execution: PlannedAgentStepExecution,
-): boolean {
+): boolean => {
   return execution.recoveryStrategy === 'replaceSelector' && canUseSelectorFallback(step);
-}
+};
 
-function canReplanFailedStep(step: AgentPlanStepDraft): boolean {
+const canReplanFailedStep = (step: AgentPlanStepDraft): boolean => {
   return ['navigate', 'click', 'input', 'wait', 'scroll', 'select', 'observe'].includes(step.action);
-}
+};
 
-function shouldReplanFailedExecution(
+const shouldReplanFailedExecution = (
   step: AgentPlanStepDraft,
   execution: PlannedAgentStepExecution,
-): boolean {
+): boolean => {
   return canReplanFailedStep(step) && execution.recoveryStrategy !== 'stopAndReport';
-}
+};
 
-function completedActionIdentity(step: AgentPlanStepDraft): string | undefined {
+const completedActionIdentity = (step: AgentPlanStepDraft): string | undefined => {
   if (step.action === 'navigate' && step.url) {
     return `navigate:url:${step.url}`;
   }
@@ -2142,12 +2142,12 @@ function completedActionIdentity(step: AgentPlanStepDraft): string | undefined {
     return target && step.value !== undefined ? `${step.action}:${target}:value:${step.value}` : undefined;
   }
   return undefined;
-}
+};
 
-function removeCompletedActionReplays(
+const removeCompletedActionReplays = (
   plan: AgentPlanDraft,
   completedSteps: AgentPlanStepDraft[],
-): { plan: AgentPlanDraft; skippedStepCount: number } {
+): { plan: AgentPlanDraft; skippedStepCount: number } => {
   const completedActions = new Set(completedSteps.map(completedActionIdentity).filter(Boolean));
   if (!completedActions.size) {
     return { plan, skippedStepCount: 0 };
@@ -2167,15 +2167,15 @@ function removeCompletedActionReplays(
       : plan,
     skippedStepCount,
   };
-}
+};
 
 type CompletedPlannerStep = NonNullable<AgentPlannerRequest['completedSteps']>[number];
 
-function appendCompletedPlannerSteps(
+const appendCompletedPlannerSteps = (
   previousSteps: CompletedPlannerStep[],
   currentPlan: AgentPlanDraft,
   executions: PlannedAgentStepExecution[],
-): CompletedPlannerStep[] {
+): CompletedPlannerStep[] => {
   const currentSteps = executions.flatMap((execution) => {
     if (execution.status !== 'passed') {
       return [];
@@ -2200,7 +2200,7 @@ function appendCompletedPlannerSteps(
     ];
   });
   return [...previousSteps, ...currentSteps].map((step, index) => ({ ...step, stepIndex: index + 1 }));
-}
+};
 
 interface SelectorFallbackCandidate {
   selector: string;
@@ -2230,29 +2230,29 @@ const selectorFallbackStopWords = new Set([
   '选择',
 ]);
 
-function normalizeSelectorToken(value: string): string {
+const normalizeSelectorToken = (value: string): string => {
   return value
     .toLowerCase()
     .replace(/[`"'“”‘’#[\].=_-]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
-}
+};
 
-function tokenizeSelectorContext(value: string): Set<string> {
+const tokenizeSelectorContext = (value: string): Set<string> => {
   return new Set(
     normalizeSelectorToken(value)
       .split(' ')
       .map((token) => token.trim())
       .filter((token) => token.length >= 2 && !selectorFallbackStopWords.has(token)),
   );
-}
+};
 
-function extractSelectorFromInteractiveElement(element: string): string | undefined {
+const extractSelectorFromInteractiveElement = (element: string): string | undefined => {
   const selectorMatch = element.match(/((?:#[\w-]+)|(?:\.[\w-]+)|(?:\[[^\]]+\])|(?:[a-z][\w-]*\[[^\]]+\]))\s*$/i);
   return selectorMatch?.[1];
-}
+};
 
-function isSelectorFallbackActionCompatible(action: AgentPlanStepDraft['action'], source: string): boolean {
+const isSelectorFallbackActionCompatible = (action: AgentPlanStepDraft['action'], source: string): boolean => {
   const normalized = source.toLowerCase();
   if (action === 'click') {
     return /^(button|a)\b/.test(normalized) || /\brole="?button"?|\brole="?link"?/.test(normalized);
@@ -2264,9 +2264,9 @@ function isSelectorFallbackActionCompatible(action: AgentPlanStepDraft['action']
     return /^select\b/.test(normalized);
   }
   return false;
-}
+};
 
-function hasSelectorFallbackTokenOverlap(contextTokens: Set<string>, sourceTokens: Set<string>): boolean {
+const hasSelectorFallbackTokenOverlap = (contextTokens: Set<string>, sourceTokens: Set<string>): boolean => {
   return [...sourceTokens].some((sourceToken) =>
     [...contextTokens].some(
       (contextToken) =>
@@ -2275,12 +2275,12 @@ function hasSelectorFallbackTokenOverlap(contextTokens: Set<string>, sourceToken
         (sourceToken.length >= 3 && contextToken.length >= 3 && sourceToken.includes(contextToken)),
     ),
   );
-}
+};
 
-function resolveSelectorFallbackCandidates(
+const resolveSelectorFallbackCandidates = (
   step: AgentPlanStepDraft,
   interactiveElements: string[] | undefined,
-): SelectorFallbackCandidate[] {
+): SelectorFallbackCandidate[] => {
   if (!canUseSelectorFallback(step) || !interactiveElements?.length || !step.selector) {
     return [];
   }
@@ -2311,9 +2311,9 @@ function resolveSelectorFallbackCandidates(
   }
 
   return candidates;
-}
+};
 
-function createReporterMarkdown(result: AgentReporterResult): string {
+const createReporterMarkdown = (result: AgentReporterResult): string => {
   return [
     `# ${result.summary}`,
     '',
@@ -2326,12 +2326,12 @@ function createReporterMarkdown(result: AgentReporterResult): string {
     '## 修复建议',
     ...(result.suggestedFixes.length ? result.suggestedFixes.map((item) => `- ${item}`) : ['- 暂无明确建议。']),
   ].join('\n');
-}
+};
 
-function plannerConfigForRequest(request: ResolvedChatCommandRequest): {
+const plannerConfigForRequest = (request: ResolvedChatCommandRequest): {
   config?: AgentPlannerModelConfig;
   fallbackReason?: string;
-} {
+} => {
   const role = request.agentModelConfig?.planner;
   if (!role) {
     return {};
@@ -2361,12 +2361,12 @@ function plannerConfigForRequest(request: ResolvedChatCommandRequest): {
     return { fallbackReason: 'Planner 模型配置不完整' };
   }
   return { config };
-}
+};
 
-function verifierConfigForRequest(request: ResolvedChatCommandRequest): {
+const verifierConfigForRequest = (request: ResolvedChatCommandRequest): {
   config?: AgentVerifierModelConfig;
   fallbackReason?: string;
-} {
+} => {
   const role = request.agentModelConfig?.verifier;
   if (!role) {
     return {};
@@ -2396,12 +2396,12 @@ function verifierConfigForRequest(request: ResolvedChatCommandRequest): {
     return { fallbackReason: 'Verifier 模型配置不完整' };
   }
   return { config };
-}
+};
 
-function reporterConfigForRequest(request: ResolvedChatCommandRequest): {
+const reporterConfigForRequest = (request: ResolvedChatCommandRequest): {
   config?: AgentReporterModelConfig;
   fallbackReason?: string;
-} {
+} => {
   const role = request.agentModelConfig?.reporter;
   if (!role) {
     return {};
@@ -2431,42 +2431,42 @@ function reporterConfigForRequest(request: ResolvedChatCommandRequest): {
     return { fallbackReason: 'Reporter 模型配置不完整' };
   }
   return { config };
-}
+};
 
-async function resolvePlannerConfigForRequest(request: ResolvedChatCommandRequest): Promise<{
+const resolvePlannerConfigForRequest = async (request: ResolvedChatCommandRequest): Promise<{
   config?: AgentPlannerModelConfig;
   fallbackReason?: string;
-}> {
+}> => {
   return request.modelConfigResolver
     ? request.modelConfigResolver.resolveAgentProviderConfig('planner')
     : plannerConfigForRequest(request);
-}
+};
 
-async function resolveVerifierConfigForRequest(request: ResolvedChatCommandRequest): Promise<{
+const resolveVerifierConfigForRequest = async (request: ResolvedChatCommandRequest): Promise<{
   config?: AgentVerifierModelConfig;
   fallbackReason?: string;
-}> {
+}> => {
   return request.modelConfigResolver
     ? request.modelConfigResolver.resolveAgentProviderConfig('verifier')
     : verifierConfigForRequest(request);
-}
+};
 
-async function resolveReporterConfigForRequest(request: ResolvedChatCommandRequest): Promise<{
+const resolveReporterConfigForRequest = async (request: ResolvedChatCommandRequest): Promise<{
   config?: AgentReporterModelConfig;
   fallbackReason?: string;
-}> {
+}> => {
   return request.modelConfigResolver
     ? request.modelConfigResolver.resolveAgentProviderConfig('reporter')
     : reporterConfigForRequest(request);
-}
+};
 
-function resolveMidsceneConfigForRequest(request: ResolvedChatCommandRequest) {
+const resolveMidsceneConfigForRequest = (request: ResolvedChatCommandRequest) => {
   return request.modelConfigResolver
     ? request.modelConfigResolver.resolveMidsceneConfig()
     : Promise.resolve(request.midsceneConfig);
-}
+};
 
-function resolveExecutionIntent(request: ChatCommandRequest, plannedStep?: AgentPlanStepDraft): ExecutionIntent {
+const resolveExecutionIntent = (request: ChatCommandRequest, plannedStep?: AgentPlanStepDraft): ExecutionIntent => {
   if (!plannedStep) {
     const assertionIntent = extractAssertionIntent(request.prompt);
     const explicitUrl = extractExplicitUrl(request.prompt);
@@ -2568,13 +2568,13 @@ function resolveExecutionIntent(request: ChatCommandRequest, plannedStep?: Agent
     return { extractIntent: { ...(plannedStep.target ? { target: plannedStep.target } : {}) } };
   }
   return {};
-}
+};
 
-function isObservationIntent(text: string): boolean {
+const isObservationIntent = (text: string): boolean => {
   return /(?:观察|查看|读取|检查|分析)(?:一下)?(?:当前)?页面|(?:observe|inspect)\s+(?:the\s+)?(?:current\s+)?page/i.test(text);
-}
+};
 
-function createPrimaryExecution(browserPreparation: BrowserPreparationResult) {
+const createPrimaryExecution = (browserPreparation: BrowserPreparationResult) => {
   if (browserPreparation.assertion) {
     return {
       primaryAction: 'assert' as const,
@@ -2663,11 +2663,11 @@ function createPrimaryExecution(browserPreparation: BrowserPreparationResult) {
   }
 
   return {};
-}
+};
 
-function toBrowserSessionSnapshot(
+const toBrowserSessionSnapshot = (
   session: BrowserSessionState | undefined,
-): PlannedAgentStepExecution['browserSession'] | undefined {
+): PlannedAgentStepExecution['browserSession'] | undefined => {
   if (!session) {
     return undefined;
   }
@@ -2677,12 +2677,12 @@ function toBrowserSessionSnapshot(
     ...(session.pageTitle ? { pageTitle: session.pageTitle } : {}),
     ...(session.screenshotPath ? { screenshotPath: session.screenshotPath } : {}),
   };
-}
+};
 
-function classifyFailureReason(
+const classifyFailureReason = (
   failureReason: string | undefined,
   step?: AgentPlanStepDraft,
-): AgentFailureCategory | undefined {
+): AgentFailureCategory | undefined => {
   if (!failureReason) {
     return undefined;
   }
@@ -2713,11 +2713,11 @@ function classifyFailureReason(
     return 'runtime';
   }
   return 'runtime';
-}
+};
 
-function recoveryStrategyForFailure(
+const recoveryStrategyForFailure = (
   failureCategory: AgentFailureCategory | undefined,
-): AgentRecoveryStrategy | undefined {
+): AgentRecoveryStrategy | undefined => {
   if (!failureCategory) {
     return undefined;
   }
@@ -2738,13 +2738,13 @@ function recoveryStrategyForFailure(
     return 'retryAfterWait';
   }
   return 'replanFromCurrentState';
-}
+};
 
-function toPlannedStepExecution(
+const toPlannedStepExecution = (
   step: AgentPlanStepDraft,
   stepIndex: number,
   preparation: BrowserPreparationResult,
-): PlannedAgentStepExecution {
+): PlannedAgentStepExecution => {
   const browserSession = toBrowserSessionSnapshot(preparation.session);
   if (preparation.assertionEvaluation) {
     const failureCategory = classifyFailureReason(preparation.assertionEvaluation.failureReason, step);
@@ -2820,7 +2820,7 @@ function toPlannedStepExecution(
     ...(preparation.observation ? { observation: preparation.observation } : {}),
     ...(preparation.executionMetrics ? { metrics: preparation.executionMetrics } : {}),
   };
-}
+};
 
 export class StudioRuntime {
   private sessionActive = false;

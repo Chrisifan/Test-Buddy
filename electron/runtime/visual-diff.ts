@@ -29,11 +29,11 @@ export interface VisualDiffResult {
   diffPath?: string;
 }
 
-function getMaskedPixelOffsets(
+const getMaskedPixelOffsets = (
   masks: VisualDiffMask[] | undefined,
   width: number,
   height: number,
-): Set<number> {
+): Set<number> => {
   const maskedOffsets = new Set<number>();
   (masks ?? []).forEach((mask) => {
     const x = Math.min(100, Math.max(0, mask.x));
@@ -51,11 +51,11 @@ function getMaskedPixelOffsets(
     }
   });
   return maskedOffsets;
-}
+};
 
-function hasValidPixelBuffer(image: VisualDiffImage): boolean {
+const hasValidPixelBuffer = (image: VisualDiffImage): boolean => {
   return image.width > 0 && image.height > 0 && image.pixels.length === image.width * image.height * 4;
-}
+};
 
 export class PixelVisualDiffService {
   constructor(private readonly imageAdapter: VisualDiffImageAdapter) {}

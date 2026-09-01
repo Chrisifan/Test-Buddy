@@ -165,7 +165,7 @@ interface LegacyModelKeyMigration {
   existingRef?: ModelSecretRef;
 }
 
-function collectLegacyModelKeyMigrations(state: StudioState): LegacyModelKeyMigration[] {
+const collectLegacyModelKeyMigrations = (state: StudioState): LegacyModelKeyMigration[] => {
   const migrations: LegacyModelKeyMigration[] = [];
   const midsceneKey = legacyModelApiKey(state.midsceneConfig);
   if (midsceneKey !== undefined) {
@@ -187,17 +187,17 @@ function collectLegacyModelKeyMigrations(state: StudioState): LegacyModelKeyMigr
     }
   });
   return migrations;
-}
+};
 
-function legacyModelApiKey(config: unknown): string | undefined {
+const legacyModelApiKey = (config: unknown): string | undefined => {
   if (!config || typeof config !== 'object') {
     return undefined;
   }
   const value = (config as { modelApiKey?: unknown }).modelApiKey;
   return typeof value === 'string' ? value : undefined;
-}
+};
 
-function existingModelSecretRef(config: unknown, scope: ModelSecretScope): ModelSecretRef | undefined {
+const existingModelSecretRef = (config: unknown, scope: ModelSecretScope): ModelSecretRef | undefined => {
   if (!config || typeof config !== 'object') {
     return undefined;
   }
@@ -210,17 +210,17 @@ function existingModelSecretRef(config: unknown, scope: ModelSecretScope): Model
     return undefined;
   }
   return { id: scope, hasKey: ref.hasKey, updatedAt: ref.updatedAt };
-}
+};
 
-function replaceLegacyModelKey<T extends object>(config: T, modelSecret: ModelSecretRef): T & { modelSecret: ModelSecretRef } {
+const replaceLegacyModelKey = <T extends object>(config: T, modelSecret: ModelSecretRef): T & { modelSecret: ModelSecretRef } => {
   const { modelApiKey: _legacyModelApiKey, ...keyFreeConfig } = config as T & { modelApiKey?: unknown };
   return { ...keyFreeConfig, modelSecret } as T & { modelSecret: ModelSecretRef };
-}
+};
 
-function emptyModelSecretRef(scope: ModelSecretScope): ModelSecretRef {
+const emptyModelSecretRef = (scope: ModelSecretScope): ModelSecretRef => {
   return {
     id: scope,
     hasKey: false,
     updatedAt: new Date(0).toISOString(),
   };
-}
+};

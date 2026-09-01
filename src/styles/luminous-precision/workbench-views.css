@@ -1,0 +1,578 @@
+/*
+ * Figma workbench realignment
+ *
+ * The supplied desktop screens share one deliberately compact information
+ * hierarchy. This final layer composes existing page primitives; measurements
+ * refer to the system density variables so pages cannot grow their own scale.
+ */
+.page-header {
+  min-height: 48px;
+  padding: 0 0 var(--density-gap);
+}
+
+.page-header h1 {
+  font-size: 20px;
+  font-weight: 650;
+  line-height: 28px;
+}
+
+.page-header-actions {
+  min-height: var(--density-control-height);
+  gap: var(--density-gap);
+}
+
+.page-header-statuses > *,
+.case-editor-tag,
+.project-card-status {
+  min-height: 20px;
+  border: 0;
+  border-radius: var(--control-radius);
+  padding: 2px 6px;
+  font-size: var(--font-size-meta);
+  font-weight: 600;
+  line-height: 15px;
+}
+
+.page-header-meta {
+  min-height: 20px;
+  padding: 2px 6px;
+}
+
+.motion-page-body {
+  padding: 0 8px 8px 0;
+}
+
+.metric-tile {
+  min-height: 80px;
+  border-radius: var(--panel-radius);
+  padding: var(--density-panel-padding);
+}
+
+.metric-tile p:first-child,
+.project-overview-metric p,
+.project-card-metrics dt {
+  font-size: var(--font-size-meta);
+  line-height: 15px;
+}
+
+.metric-tile p:nth-child(2) {
+  font-size: 20px;
+  line-height: 28px;
+}
+
+.designer-split,
+.workflow-studio,
+.case-workbench,
+.document-studio {
+  border-color: var(--panel-border);
+  border-radius: var(--panel-radius);
+}
+
+.designer-panel-header,
+.designer-minibar {
+  padding: var(--density-panel-padding);
+}
+
+.designer-panel-body,
+.case-step-inspector-body {
+  padding: var(--density-panel-padding);
+}
+
+/* Overview: four scan-first metrics, a capability band, and a fixed run history. */
+.home-dashboard .page-header {
+  align-items: end;
+}
+
+.home-dashboard-layout {
+  display: grid;
+  gap: var(--density-section-gap);
+}
+
+.home-summary-grid.home-metric-grid {
+  gap: var(--density-gap);
+}
+
+.home-metric-card {
+  min-height: 86px;
+  padding: var(--density-panel-padding);
+}
+
+.home-metric-card .home-glyph {
+  display: flex;
+  width: 32px;
+  height: 32px;
+}
+
+.home-metric-card .home-text {
+  font-size: 20px;
+  line-height: 24px;
+}
+
+.home-main-band,
+.home-main-content {
+  gap: var(--density-gap);
+}
+
+.home-entry-panel,
+.home-insights-panel,
+.home-recent-runs-panel {
+  padding: var(--density-panel-padding);
+}
+
+.home-entry-grid,
+.home-insight-grid {
+  gap: var(--density-gap);
+}
+
+.home-entry-card {
+  min-height: 146px;
+  padding: var(--density-panel-padding);
+}
+
+.home-entry-card .home-mini-icon {
+  width: 36px;
+  height: 36px;
+  margin-bottom: 4px;
+}
+
+.home-empty-main {
+  max-width: 860px;
+  gap: 16px;
+  padding: 24px;
+}
+
+.home-empty-hero {
+  padding: 24px;
+}
+
+.home-empty-orb {
+  width: 48px;
+  height: 48px;
+}
+
+.home-empty-rocket svg {
+  width: 28px;
+  height: 28px;
+}
+
+.home-empty-title {
+  font-size: 24px;
+  line-height: 32px;
+}
+
+.home-empty-grid {
+  gap: var(--density-gap);
+}
+
+.home-empty-card {
+  min-height: 170px;
+  padding: var(--density-panel-padding);
+}
+
+/* Keep the compact home mark from inheriting the legacy large rocket dimensions. */
+.home-empty-hero {
+  min-height: 0;
+  padding: 28px 24px 24px;
+}
+
+.home-empty-orb {
+  width: 48px;
+  height: 48px;
+  flex: 0 0 48px;
+  margin-bottom: 8px;
+}
+
+.home-empty-rocket {
+  width: 40px;
+  height: 40px;
+  border: 0;
+  border-radius: var(--control-radius);
+  background: transparent;
+  box-shadow: none;
+}
+
+.home-empty-rocket svg {
+  width: 24px;
+  height: 24px;
+}
+
+.home-empty-kicker {
+  margin: 0 0 6px;
+  line-height: 14px;
+}
+
+/* Projects: Figma's three-column asset inventory. */
+.project-overview-scroll {
+  padding-right: 8px;
+}
+
+.project-overview {
+  display: grid;
+  gap: var(--density-section-gap);
+}
+
+.project-overview-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--density-gap);
+}
+
+.project-overview-metric {
+  min-height: 92px;
+  padding: var(--density-panel-padding);
+}
+
+.project-overview-metric strong {
+  margin-top: 8px;
+  font-size: 22px;
+  line-height: 28px;
+}
+
+.project-card-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--density-gap);
+}
+
+.project-card,
+.project-create-card {
+  min-height: 246px;
+  padding: var(--density-panel-padding);
+}
+
+.project-card-topline {
+  margin-bottom: 12px;
+}
+
+.project-card-copy h2,
+.project-create-card-title {
+  font-size: 16px;
+  line-height: 24px;
+}
+
+.project-card-copy p,
+.project-create-card-description {
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.project-card-metrics {
+  margin-top: auto;
+  padding-top: 12px;
+}
+
+.project-card-footer {
+  margin: 12px calc(var(--density-panel-padding) * -1) calc(var(--density-panel-padding) * -1);
+  padding: 10px var(--density-panel-padding);
+}
+
+/* Requirements: a fixed document library beside the source/path workspace. */
+.document-studio {
+  display: grid;
+  grid-template-columns: minmax(236px, 28%) minmax(0, 1fr);
+  min-height: 0;
+  overflow: hidden;
+}
+
+.document-asset-area {
+  min-height: 0;
+  border-right: 1px solid var(--panel-border);
+  overflow: auto;
+}
+
+.document-summary-strip {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  border: 0;
+  border-bottom: 1px solid var(--panel-border);
+  border-radius: 0;
+  background: var(--card);
+  padding: var(--density-panel-padding);
+}
+
+.document-summary-strip .document-summary-metrics {
+  display: block;
+}
+
+.document-summary-strip .document-summary-metrics > span {
+  display: none;
+}
+
+.document-summary-strip .document-summary-metrics::before {
+  color: var(--muted-foreground);
+  content: 'RECENT DOCUMENTS';
+  font-size: var(--font-size-meta);
+  font-weight: 700;
+  line-height: 15px;
+}
+
+.document-summary-strip > .flex {
+  display: none;
+}
+
+.document-asset-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0;
+}
+
+.document-asset-card {
+  min-height: 116px;
+  border: 0;
+  border-bottom: 1px solid var(--panel-border);
+  border-radius: 0;
+  box-shadow: none;
+  padding: var(--density-panel-padding);
+}
+
+.document-asset-card:hover,
+.document-asset-card.is-active {
+  border-color: var(--panel-border);
+  background: color-mix(in srgb, var(--primary) 5%, var(--card));
+  box-shadow: inset 4px 0 var(--primary);
+}
+
+.document-asset-card h3 {
+  margin-top: -32px;
+  padding-left: 38px;
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.document-asset-card > p {
+  margin-top: 12px;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.document-asset-card footer {
+  margin-top: 8px;
+  font-size: var(--font-size-meta);
+}
+
+.document-side-panel {
+  display: grid;
+  min-height: 0;
+  grid-template-columns: minmax(260px, 0.82fr) minmax(320px, 1.18fr);
+  grid-template-rows: minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.document-intake,
+.document-inspector {
+  min-height: 0;
+  overflow: auto;
+  border: 0;
+  border-radius: 0;
+  padding: var(--density-panel-padding);
+}
+
+.document-intake {
+  border-right: 1px solid var(--panel-border);
+}
+
+.document-intake h2,
+.document-inspector h2 {
+  font-size: 16px;
+  line-height: 24px;
+}
+
+.document-intake textarea {
+  min-height: 240px !important;
+}
+
+.document-inspector > .grid:first-of-type {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--density-gap);
+}
+
+.document-path-card {
+  border-radius: var(--control-radius);
+  padding: var(--density-panel-padding);
+  box-shadow: none;
+}
+
+.document-path-card h3 {
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.document-path-source {
+  margin-top: 8px;
+  color: var(--on-surface-variant);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.document-path-source > span {
+  margin-right: 4px;
+  color: var(--primary);
+  font-weight: 600;
+}
+
+/* Case editor: dedicated flow canvas and a fixed property rail. */
+.case-workbench {
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 37%);
+}
+
+.case-step-list {
+  padding: 24px var(--density-panel-padding);
+}
+
+.case-step-flow-sequence {
+  width: min(100%, 520px);
+}
+
+.case-step-row {
+  padding: var(--density-panel-padding);
+}
+
+.case-step-inspector-header {
+  min-height: 48px;
+  padding: 0 var(--density-panel-padding);
+}
+
+/* Natural language: three simultaneous columns, as in the planner reference. */
+.nl-metric-grid {
+  display: none;
+}
+
+.designer-split.nl-workbench,
+.nl-workbench {
+  grid-template-columns: minmax(220px, 0.88fr) minmax(280px, 1fr) minmax(250px, 0.96fr);
+  height: 100%;
+}
+
+.nl-command-panel {
+  grid-column: 1;
+  min-width: 0;
+}
+
+.nl-workspace-stage {
+  display: contents;
+}
+
+.nl-browser-panel > .designer-browser-stage {
+  grid-column: 2;
+  min-width: 0;
+  margin: var(--density-panel-padding);
+}
+
+.nl-browser-panel > .nl-evidence-grid {
+  grid-column: 3;
+  grid-row: 1;
+  display: grid;
+  min-height: 0;
+  grid-template-columns: 1fr;
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: var(--density-gap);
+  padding: var(--density-panel-padding);
+}
+
+.nl-evidence-grid > .tech-panel {
+  min-height: 0;
+  overflow: auto;
+  border-radius: var(--panel-radius);
+  padding: var(--density-panel-padding);
+}
+
+.nl-command-panel .designer-panel-header,
+.nl-command-composer {
+  padding: var(--density-panel-padding);
+}
+
+.nl-command-composer textarea {
+  min-height: 76px;
+}
+
+/* Recording: browser canvas takes priority; asset/timeline rail stays actionable. */
+.designer-split.recording-console,
+.recording-console {
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 34%);
+}
+
+.recording-console .designer-browser-stage {
+  min-height: 0;
+}
+
+.recording-console .designer-browser-viewport {
+  padding: 24px;
+}
+
+.recording-console .designer-browser-mock {
+  max-width: 560px;
+  padding: 20px;
+}
+
+.recording-console .designer-panel:last-child .designer-panel-header,
+.recording-console .designer-panel:last-child .designer-panel-body {
+  padding: var(--density-panel-padding);
+}
+
+/* Run records: compact list/detail hierarchy matching the execution reference. */
+.designer-split.run-workbench,
+.run-workbench {
+  grid-template-columns: minmax(208px, 24%) minmax(0, 1fr);
+  height: 100%;
+}
+
+.run-workbench > .designer-panel:first-child .designer-panel-header {
+  padding: var(--density-panel-padding);
+}
+
+.run-workbench > .designer-panel:first-child .designer-panel-body {
+  gap: 0;
+  padding: 0;
+}
+
+.run-workbench .designer-case-row {
+  border: 0;
+  border-bottom: 1px solid var(--panel-border);
+  border-radius: 0;
+  padding: var(--density-panel-padding);
+}
+
+.run-workbench .designer-case-row.is-active {
+  box-shadow: inset 4px 0 var(--error);
+}
+
+.run-detail-stage {
+  padding: var(--density-panel-padding);
+}
+
+@media (max-width: 1180px) {
+  .project-overview-metrics,
+  .project-card-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .document-side-panel,
+  .nl-workbench,
+  .recording-console,
+  .case-workbench {
+    grid-template-columns: minmax(0, 1fr) minmax(280px, 38%);
+  }
+
+  .nl-browser-panel > .nl-evidence-grid {
+    display: none;
+  }
+}
+
+@media (max-width: 860px) {
+  .project-overview-metrics,
+  .project-card-grid,
+  .document-studio,
+  .document-side-panel,
+  .case-workbench,
+  .recording-console,
+  .run-workbench {
+    grid-template-columns: 1fr;
+  }
+
+  .document-asset-area,
+  .document-intake {
+    border-right: 0;
+    border-bottom: 1px solid var(--panel-border);
+  }
+}
+

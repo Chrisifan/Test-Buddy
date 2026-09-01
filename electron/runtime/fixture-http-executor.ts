@@ -152,11 +152,11 @@ export class FixtureHttpExecutor implements FixtureLifecycleExecutor {
 }
 
 /** Extracts declared top-level response values without retaining the source body. */
-export function extractFixtureHttpResponseOutputs(
+export const extractFixtureHttpResponseOutputs = (
   fixture: Pick<FixtureAsset, 'outputs'>,
   mappings: NonNullable<ReturnType<typeof normalizeFixtureHttpDeclaration>>['responseOutputs'],
   responseBody: unknown,
-): Record<string, FixtureHttpJsonValue> | undefined {
+): Record<string, FixtureHttpJsonValue> | undefined => {
   if (!mappings?.length || !responseBody || typeof responseBody !== 'object' || Array.isArray(responseBody)) {
     return undefined;
   }
@@ -171,13 +171,13 @@ export function extractFixtureHttpResponseOutputs(
     outputValues[output.name] = value as FixtureHttpJsonValue;
   }
   return outputValues;
-}
+};
 
-async function readFixtureHttpResponseOutputs(
+const readFixtureHttpResponseOutputs = async (
   fixture: FixtureAsset,
   mappings: NonNullable<ReturnType<typeof normalizeFixtureHttpDeclaration>>['responseOutputs'],
   response: Response,
-): Promise<Record<string, FixtureHttpJsonValue> | undefined> {
+): Promise<Record<string, FixtureHttpJsonValue> | undefined> => {
   const contentLength = response.headers.get('content-length');
   if (contentLength && (!/^\d+$/u.test(contentLength) || Number(contentLength) > FIXTURE_HTTP_RESPONSE_BODY_LIMIT)) {
     return undefined;
@@ -191,9 +191,9 @@ async function readFixtureHttpResponseOutputs(
   } catch {
     return undefined;
   }
-}
+};
 
-function isCompatibleFixtureOutputValue(value: unknown, type: FixtureAsset['outputs'][number]['type']): boolean {
+const isCompatibleFixtureOutputValue = (value: unknown, type: FixtureAsset['outputs'][number]['type']): boolean => {
   if (type === 'string') {
     return typeof value === 'string' && new TextEncoder().encode(value).byteLength <= FIXTURE_HTTP_OUTPUT_VALUE_LIMIT;
   }
@@ -205,9 +205,9 @@ function isCompatibleFixtureOutputValue(value: unknown, type: FixtureAsset['outp
   }
   const normalized = normalizeFixtureHttpJsonValue(value);
   return normalized !== undefined && JSON.stringify(normalized).length <= FIXTURE_HTTP_OUTPUT_VALUE_LIMIT;
-}
+};
 
-export function resolveFixtureHttpTarget(environment: Pick<ProjectEnvironment, 'url'>, path: string): URL | undefined {
+export const resolveFixtureHttpTarget = (environment: Pick<ProjectEnvironment, 'url'>, path: string): URL | undefined => {
   try {
     const root = new URL(environment.url);
     if (root.protocol !== 'http:' && root.protocol !== 'https:') {
@@ -218,4 +218,4 @@ export function resolveFixtureHttpTarget(environment: Pick<ProjectEnvironment, '
   } catch {
     return undefined;
   }
-}
+};

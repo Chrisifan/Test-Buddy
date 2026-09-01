@@ -1,11 +1,10 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-
 import { describe, expect, it } from 'vitest';
+
+import { readLuminousPrecisionCss } from './luminous-precision.test-utils.js';
 
 describe('application shell navigation', () => {
   it('uses a themed frosted-glass surface for the main navigation rail', () => {
-    const styles = readFileSync(resolve(process.cwd(), 'src/styles/luminous-precision.css'), 'utf8');
+    const styles = readLuminousPrecisionCss();
     const railRule = styles.match(/\.app-rail\s*\{([\s\S]*?)\n\}/)?.[1] ?? '';
     const darkRailRule = styles.match(/\.dark \.app-rail\s*\{([\s\S]*?)\n\}/)?.[1] ?? '';
     const railOverlayRule = styles.match(/\.app-rail::before\s*\{([\s\S]*?)\n\}/)?.[1] ?? '';
@@ -40,7 +39,7 @@ describe('application shell navigation', () => {
   });
 
   it('uses the top bar as a native drag region without disabling its controls', () => {
-    const styles = readFileSync(resolve(process.cwd(), 'src/styles/luminous-precision.css'), 'utf8');
+    const styles = readLuminousPrecisionCss();
     const topbarRule = styles.match(/\.app-topbar\s*\{([\s\S]*?)\n\}/)?.[1] ?? '';
     const searchRule = styles.match(/\.app-search\s*\{([\s\S]*?)\n\}/)?.[1] ?? '';
     const actionsRule = styles.match(/\.app-topbar-actions\s*\{([\s\S]*?)\n\}/)?.[1] ?? '';
@@ -51,7 +50,7 @@ describe('application shell navigation', () => {
   });
 
   it('keeps planner and evidence rails reachable at intermediate widths', () => {
-    const styles = readFileSync(resolve(process.cwd(), 'src/styles/luminous-precision.css'), 'utf8');
+    const styles = readLuminousPrecisionCss();
     const responsiveStart = styles.indexOf('@media (max-width: 1120px)');
     const responsiveEnd = styles.indexOf('/* Keep modal proportions', responsiveStart);
     const responsive = styles.slice(responsiveStart, responsiveEnd);

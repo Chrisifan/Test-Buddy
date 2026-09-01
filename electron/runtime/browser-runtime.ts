@@ -168,16 +168,16 @@ export interface ControlledDeterministicActionResult {
   artifacts: RunArtifact[];
 }
 
-function describeBrowserLaunchFailure(error: unknown): string {
+const describeBrowserLaunchFailure = (error: unknown): string => {
   const message = error instanceof Error ? error.message : String(error);
   if (/executable doesn't exist|playwright install/i.test(message)) {
     return '未检测到 Playwright 浏览器内核。请安装 Chromium 后重新启动受控浏览器会话。';
   }
 
   return '浏览器启动失败，请检查浏览器运行环境后重试。';
-}
+};
 
-function screenshotCheckpointLabel(checkpoint: RunScreenshotCheckpoint): string {
+const screenshotCheckpointLabel = (checkpoint: RunScreenshotCheckpoint): string => {
   if (checkpoint === 'postStep') {
     return '步骤后页面截图';
   }
@@ -185,17 +185,17 @@ function screenshotCheckpointLabel(checkpoint: RunScreenshotCheckpoint): string 
     return '失败页面截图';
   }
   return '运行起始截图';
-}
+};
 
 /** Query strings can contain tokens; diagnostic evidence retains origin and path only. */
-function redactDiagnosticUrl(value: string): string {
+const redactDiagnosticUrl = (value: string): string => {
   try {
     const url = new URL(value);
     return `${url.origin}${url.pathname}`;
   } catch {
     return '[invalid-url]';
   }
-}
+};
 
 export class BrowserRuntime {
   private browser: PlaywrightBrowser | null = null;
@@ -1967,25 +1967,25 @@ export class BrowserRuntime {
   }
 }
 
-function extractUrlFromDetail(detail: string): string {
+const extractUrlFromDetail = (detail: string): string => {
   return detail.match(/https?:\/\/\S+/)?.[0] ?? '';
-}
+};
 
-function normalizeWaitMs(timeoutMs: number | undefined): number {
+const normalizeWaitMs = (timeoutMs: number | undefined): number => {
   if (!Number.isFinite(timeoutMs)) {
     return 1_000;
   }
   return Math.min(Math.max(Math.round(timeoutMs ?? 1_000), 0), 30_000);
-}
+};
 
-function normalizeStableMs(stableMs: number | undefined): number {
+const normalizeStableMs = (stableMs: number | undefined): number => {
   if (!Number.isFinite(stableMs)) {
     return 500;
   }
   return Math.min(Math.max(Math.round(stableMs ?? 500), 0), 5_000);
-}
+};
 
-function normalizeRecordingEvent(event: unknown, fallbackUrl: string): RecordingCapturedEvent | null {
+const normalizeRecordingEvent = (event: unknown, fallbackUrl: string): RecordingCapturedEvent | null => {
   if (!event || typeof event !== 'object') {
     return null;
   }
@@ -2032,7 +2032,7 @@ function normalizeRecordingEvent(event: unknown, fallbackUrl: string): Recording
     selector: payload.selector,
     value: payload.value,
   };
-}
+};
 
 const recorderScript = String.raw`
 (() => {
@@ -2128,23 +2128,23 @@ const recorderScript = String.raw`
 })();
 `;
 
-async function loadPlaywright(): Promise<PlaywrightModule | null> {
+const loadPlaywright = async (): Promise<PlaywrightModule | null> => {
   try {
     return (await import('playwright')) as unknown as PlaywrightModule;
   } catch {
     return null;
   }
-}
+};
 
-function composeEnvironmentUrl(environment: ProjectEnvironment): string {
+const composeEnvironmentUrl = (environment: ProjectEnvironment): string => {
   const base = environment.url.replace(/\/$/, '');
   const pathPart = environment.entryPath.startsWith('/')
     ? environment.entryPath
     : `/${environment.entryPath}`;
   return `${base}${pathPart}`;
-}
+};
 
-function viewportFor(viewport: ProjectEnvironment['viewport']) {
+const viewportFor = (viewport: ProjectEnvironment['viewport']) => {
   if (viewport === 'mobile') {
     return { width: 390, height: 844 };
   }
@@ -2152,4 +2152,4 @@ function viewportFor(viewport: ProjectEnvironment['viewport']) {
     return { width: 1440, height: 900 };
   }
   return { width: 1600, height: 1000 };
-}
+};

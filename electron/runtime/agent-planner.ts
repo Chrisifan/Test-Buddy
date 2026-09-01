@@ -76,26 +76,26 @@ const supportedActions = new Set<AgentStepAction>([
   'extract',
 ]);
 
-function completionEndpoint(baseUrl: string): string {
+const completionEndpoint =(baseUrl: string): string => {
   const normalized = baseUrl.trim().replace(/\/+$/, '');
   if (!normalized) {
     throw new Error('Planner 模型 Base URL 不能为空');
   }
   return normalized.endsWith('/chat/completions') ? normalized : `${normalized}/chat/completions`;
-}
+};
 
-function requiredString(value: unknown, label: string): string {
+const requiredString =(value: unknown, label: string): string => {
   if (typeof value !== 'string' || !value.trim()) {
     throw new Error(`Planner 返回的 ${label} 无效`);
   }
   return value.trim();
-}
+};
 
-function optionalString(value: unknown): string | undefined {
+const optionalString =(value: unknown): string | undefined => {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
-}
+};
 
-function parsePlanStep(value: unknown, index: number): AgentPlanStepDraft {
+const parsePlanStep =(value: unknown, index: number): AgentPlanStepDraft => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error(`Planner 返回的第 ${index + 1} 个步骤无效`);
   }
@@ -119,9 +119,9 @@ function parsePlanStep(value: unknown, index: number): AgentPlanStepDraft {
       ? { timeoutMs: Math.round(raw.timeoutMs) }
       : {}),
   };
-}
+};
 
-function parsePlan(content: string): AgentPlanDraft {
+const parsePlan =(content: string): AgentPlanDraft => {
   const normalized = content
     .trim()
     .replace(/^```(?:json)?\s*/i, '')
@@ -152,18 +152,18 @@ function parsePlan(content: string): AgentPlanDraft {
       : [],
     steps: record.steps.map(parsePlanStep),
   };
-}
+};
 
-function usageBucket(promptTokens: number, completionTokens: number, totalTokens: number): AgentUsageBucket {
+const usageBucket =(promptTokens: number, completionTokens: number, totalTokens: number): AgentUsageBucket => {
   return {
     calls: 1,
     promptTokens,
     completionTokens,
     totalTokens,
   };
-}
+};
 
-function plannerSystemPrompt(): string {
+const plannerSystemPrompt =(): string => {
   return [
     '你是 Web 自动化测试 Planner。只返回 JSON，不要 Markdown。',
     '输出结构：{"title":string,"summary":string,"risks":string[],"steps":Step[]}。',
@@ -173,7 +173,7 @@ function plannerSystemPrompt(): string {
     '当请求提供 completedSteps 时，其中步骤已经在当前页面成功完成。只输出从当前状态继续所需的后续步骤，不要重新输出或执行已完成步骤；如需确认状态，使用 observe 或 assert。',
     '最多 12 步。不要声称执行已经成功。',
   ].join('\n');
-}
+};
 
 export class OpenAICompatibleAgentPlanner implements AgentPlanner {
   constructor(private readonly fetchImpl: typeof fetch = fetch) {}

@@ -19,7 +19,7 @@ const stateIcons: Record<RunTone, RunStateIcon> = {
   neutral: CircleDashed,
 };
 
-export function RunState({ tone, className }: { tone: RunTone; className?: string }) {
+export const RunState = ({ tone, className }: { tone: RunTone; className?: string }) => {
   const { t } = useI18n();
   const Icon = stateIcons[tone];
 
@@ -39,4 +39,4 @@ export function RunState({ tone, className }: { tone: RunTone; className?: strin
       <span>{t(`common.status.${tone}`)}</span>
     </span>
   );
-}
+};

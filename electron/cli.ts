@@ -112,7 +112,7 @@ export interface CliRunSummary {
 
 class CliUsageError extends Error {}
 
-export function parseCliArguments(argv: string[]): ParsedCommand {
+export const parseCliArguments = (argv: string[]): ParsedCommand => {
   const argumentsWithoutScriptSeparator = argv[0] === '--' ? argv.slice(1) : argv;
   if (!argumentsWithoutScriptSeparator.length || argumentsWithoutScriptSeparator.includes('--help') || argumentsWithoutScriptSeparator.includes('-h')) {
     return { kind: 'help' };
@@ -173,9 +173,9 @@ export function parseCliArguments(argv: string[]): ParsedCommand {
     ...(singleValue('--junit') ? { junitPath: singleValue('--junit') } : {}),
     ...(singleValue('--json') ? { jsonPath: singleValue('--json') } : {}),
   };
-}
+};
 
-export function renderJUnitReport(summary: CliRunSummary): string {
+export const renderJUnitReport = (summary: CliRunSummary): string => {
   const elapsedSeconds = Math.max(
     0,
     (new Date(summary.endedAt).getTime() - new Date(summary.startedAt).getTime()) / 1_000,
@@ -238,13 +238,13 @@ ${cases}${cases ? '\n' : ''}${parentOutput}
 ${cases}
 </testsuite>
 `;
-}
+};
 
-function toSuiteJUnitResult(
+const toSuiteJUnitResult = (
   results: readonly CliCaseResult[],
   suite: CliSuiteRunInfo,
   member: SuiteRunMemberRecord,
-): CliCaseResult {
+): CliCaseResult => {
   const matching = results.find((result) =>
     result.testCaseId === member.testCaseId && result.provenance?.testCase.version === member.testCaseVersion,
   ) ?? results.find((result) => result.testCaseId === member.testCaseId);
@@ -263,9 +263,9 @@ function toSuiteJUnitResult(
     flaky: member.flaky,
     provenance: member.provenance,
   };
-}
+};
 
-function renderJUnitCases(results: readonly CliCaseResult[], indent: string, includeSuiteMetadata: boolean): string {
+const renderJUnitCases = (results: readonly CliCaseResult[], indent: string, includeSuiteMetadata: boolean): string => {
   return results.map((result) => {
     const metadata = includeSuiteMetadata
       ? `${result.runId ? ` runId="${escapeXml(result.runId)}"` : ''} attempts="${result.attempts ?? 0}" flaky="${result.flaky ? 'true' : 'false'}"`
@@ -283,21 +283,21 @@ function renderJUnitCases(results: readonly CliCaseResult[], indent: string, inc
         : `${indent}  <skipped message="${reason}"/>`;
     return `${testcase}\n${outcome}\n${output}\n${indent}</testcase>`;
   }).join('\n');
-}
+};
 
-function junitCounts(results: readonly Pick<CliCaseResult, 'status'>[]): { failed: number; error: number; skipped: number } {
+const junitCounts = (results: readonly Pick<CliCaseResult, 'status'>[]): { failed: number; error: number; skipped: number } => {
   return {
     failed: results.filter((result) => result.status === 'failed').length,
     error: results.filter((result) => result.status === 'error').length,
     skipped: results.filter((result) => result.status === 'blocked' || result.status === 'skipped' || result.status === 'cancelled').length,
   };
-}
+};
 
-function durationBetween(startedAt: string, finishedAt: string): number {
+const durationBetween = (startedAt: string, finishedAt: string): number => {
   return Math.max(0, (Date.parse(finishedAt) - Date.parse(startedAt)) / 1_000);
-}
+};
 
-export async function executeCliCommand(command: Exclude<ParsedCommand, { kind: 'help' }>): Promise<CliRunSummary> {
+export const executeCliCommand = async (command: Exclude<ParsedCommand, { kind: 'help' }>): Promise<CliRunSummary> => {
   const dataDir = path.resolve(command.dataDir);
   const store = new StudioStore(dataDir);
   const rawState = await loadExistingState(store);
@@ -550,9 +550,9 @@ export async function executeCliCommand(command: Exclude<ParsedCommand, { kind: 
     await writeFile(jsonPath, `${JSON.stringify(summary, null, 2)}\n`);
   }
   return summary;
-}
+};
 
-export async function main(argv = process.argv.slice(2)): Promise<number> {
+export const main = async (argv = process.argv.slice(2)): Promise<number> => {
   try {
     const command = parseCliArguments(argv);
     if (command.kind === 'help') {
@@ -566,21 +566,21 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     process.stdout.write(`${JSON.stringify({ status: 'error', error: messageFor(error) })}\n`);
     return error instanceof CliUsageError ? 2 : 1;
   }
-}
+};
 
-function selectSuite(projectSnapshot: ProjectSnapshot, reference: VersionedTestAssetReference): SuiteAsset {
+const selectSuite = (projectSnapshot: ProjectSnapshot, reference: VersionedTestAssetReference): SuiteAsset => {
   const suite = findSuiteAsset(projectSnapshot.project, reference);
   if (!suite) {
     throw new CliUsageError(`项目 ${projectSnapshot.project.id} 中未找到 Suite：${reference.id}@${reference.version}`);
   }
   return suite;
-}
+};
 
-function selectTestCase(
+const selectTestCase = (
   projectSnapshot: ProjectSnapshot,
   reference: VersionedTestAssetReference,
   environmentOverrideId?: string,
-): { testCase: TestCaseDraft; environment: ProjectEnvironment } {
+): { testCase: TestCaseDraft; environment: ProjectEnvironment } => {
   const project = projectSnapshot.project;
   const testCase = findTestCaseVersion(project, reference);
   if (!testCase) {
@@ -592,9 +592,9 @@ function selectTestCase(
     throw new CliUsageError(`项目 ${project.id} 中未找到环境 ID：${environmentId}`);
   }
   return { testCase, environment };
-}
+};
 
-function parseVersionedReference(value: string, option: string): VersionedTestAssetReference {
+const parseVersionedReference = (value: string, option: string): VersionedTestAssetReference => {
   const separator = value.lastIndexOf('@');
   const id = separator > 0 ? value.slice(0, separator).trim() : '';
   const version = separator > 0 ? Number(value.slice(separator + 1)) : Number.NaN;
@@ -602,13 +602,13 @@ function parseVersionedReference(value: string, option: string): VersionedTestAs
     throw new CliUsageError(`${option} 必须使用 <id@version> 格式。`);
   }
   return { id, version };
-}
+};
 
-async function loadExistingState(store: StudioStore): Promise<StudioState> {
+const loadExistingState = async (store: StudioStore): Promise<StudioState> => {
   return store.loadExisting();
-}
+};
 
-function hasCliPlannerModelConfig(state: StudioState): boolean {
+const hasCliPlannerModelConfig = (state: StudioState): boolean => {
   const planner = state.agentModelConfig.planner;
   if (!planner.enabled) {
     return false;
@@ -621,16 +621,16 @@ function hasCliPlannerModelConfig(state: StudioState): boolean {
     );
   }
   return isMidsceneConfigured(state.midsceneConfig);
-}
+};
 
-async function loadProjectSnapshot(store: StudioStore, projectId: string): Promise<ProjectSnapshot> {
+const loadProjectSnapshot = async (store: StudioStore, projectId: string): Promise<ProjectSnapshot> => {
   return new ProjectRepository({ studioStore: store }).load(projectId);
-}
+};
 
-function createSerializedRunHistoryPersister(
+const createSerializedRunHistoryPersister = (
   store: Pick<StudioStore, 'loadExisting' | 'save'>,
   getBrowserSession: () => BrowserSessionState,
-): (result: RunTestCaseResponse, environment: ProjectEnvironment) => Promise<void> {
+): (result: RunTestCaseResponse, environment: ProjectEnvironment) => Promise<void> => {
   let pending = Promise.resolve();
   return async (result, environment) => {
     const persistence = pending.then(async () => {
@@ -640,23 +640,23 @@ function createSerializedRunHistoryPersister(
     pending = persistence.catch(() => undefined);
     return persistence;
   };
-}
+};
 
-function createSerializedSuiteRunHistoryPersister(
+const createSerializedSuiteRunHistoryPersister = (
   store: Pick<StudioStore, 'loadExisting' | 'save'>,
-): (record: SuiteRunRecord) => Promise<void> {
+): (record: SuiteRunRecord) => Promise<void> => {
   return async (record) => {
     const latestState = hydrateStudioState(await store.loadExisting());
     await store.save(appendSuiteRunToStudioState(latestState, record));
   };
-}
+};
 
-function createCliSuiteRunRecord(
+const createCliSuiteRunRecord = (
   provenance: SuiteRunProvenance,
   result: SuiteRunResult,
   results: readonly CliCaseResult[],
   persistedChildRunIds: ReadonlySet<string>,
-): SuiteRunRecord {
+): SuiteRunRecord => {
   const summary: SuiteRunRecord['summary'] = {
     passed: 0,
     failed: 0,
@@ -698,13 +698,13 @@ function createCliSuiteRunRecord(
     members,
     summary,
   };
-}
+};
 
-function createCliSuiteParent(
+const createCliSuiteParent = (
   snapshot: ProjectSnapshot,
   suite: SuiteAsset,
   state: StudioState,
-): { provenance: SuiteRunProvenance; record: SuiteRunRecord } {
+): { provenance: SuiteRunProvenance; record: SuiteRunRecord } => {
   const parentRunId = createCliSuiteRunId();
   const environment = suiteRunEnvironment(snapshot, suite);
   const provenance = createCliSuiteRunProvenance(snapshot, suite, environment, state, parentRunId);
@@ -720,9 +720,9 @@ function createCliSuiteParent(
       summary: emptyCliSuiteSummary(),
     },
   };
-}
+};
 
-function toCliSuiteRunInfo(record: SuiteRunRecord, result: SuiteRunResult): CliSuiteRunInfo {
+const toCliSuiteRunInfo = (record: SuiteRunRecord, result: SuiteRunResult): CliSuiteRunInfo => {
   if (!record.finishedAt || record.status === 'running') {
     throw new Error('CLI Suite summary requires a terminal parent record.');
   }
@@ -740,9 +740,9 @@ function toCliSuiteRunInfo(record: SuiteRunRecord, result: SuiteRunResult): CliS
     provenance: record.provenance,
     ...(result.reason ? { reason: structuredClone(result.reason) } : {}),
   };
-}
+};
 
-function emptyCliSuiteSummary(): SuiteRunRecord['summary'] {
+const emptyCliSuiteSummary = (): SuiteRunRecord['summary'] => {
   return {
     passed: 0,
     failed: 0,
@@ -751,13 +751,13 @@ function emptyCliSuiteSummary(): SuiteRunRecord['summary'] {
     cancelled: 0,
     error: 0,
   };
-}
+};
 
-function updateRunningCliSuiteRunRecord(
+const updateRunningCliSuiteRunRecord = (
   record: SuiteRunRecord,
   attemptedResults: ReadonlyMap<string, CliCaseResult>,
   persistedChildRunIds: ReadonlySet<string>,
-): SuiteRunRecord {
+): SuiteRunRecord => {
   const members = cliSuiteMembersFromResults(attemptedResults.values(), persistedChildRunIds);
   return {
     ...record,
@@ -766,14 +766,14 @@ function updateRunningCliSuiteRunRecord(
     members,
     summary: cliSuiteSummaryFromMembers(members),
   };
-}
+};
 
-function terminalizeCliSuiteRunRecord(
+const terminalizeCliSuiteRunRecord = (
   record: SuiteRunRecord,
   error: unknown,
   attemptedResults: ReadonlyMap<string, CliCaseResult>,
   persistedChildRunIds: ReadonlySet<string>,
-): SuiteRunRecord {
+): SuiteRunRecord => {
   const cancelled = isRunCancelled(error);
   const members = cliSuiteMembersFromResults(attemptedResults.values(), persistedChildRunIds);
   return {
@@ -785,12 +785,12 @@ function terminalizeCliSuiteRunRecord(
     members,
     summary: cliSuiteSummaryFromMembers(members),
   };
-}
+};
 
-function cliSuiteMembersFromResults(
+const cliSuiteMembersFromResults = (
   results: Iterable<CliCaseResult>,
   persistedChildRunIds: ReadonlySet<string>,
-): SuiteRunMemberRecord[] {
+): SuiteRunMemberRecord[] => {
   return Array.from(results, (result) => {
     if (!result.provenance) {
       throw new Error(`CLI Suite child ${result.testCaseId} is missing frozen provenance.`);
@@ -807,21 +807,21 @@ function cliSuiteMembersFromResults(
       provenance: structuredClone(result.provenance),
     };
   });
-}
+};
 
-function cliSuiteSummaryFromMembers(
+const cliSuiteSummaryFromMembers = (
   members: readonly SuiteRunMemberRecord[],
-): SuiteRunRecord['summary'] {
+): SuiteRunRecord['summary'] => {
   return members.reduce((summary, member) => ({
     ...summary,
     [member.status]: summary[member.status] + 1,
   }), emptyCliSuiteSummary());
-}
+};
 
-function appendMissingSuiteResults(
+const appendMissingSuiteResults = (
   results: CliCaseResult[],
   attemptedResults: ReadonlyMap<string, CliCaseResult>,
-): void {
+): void => {
   attemptedResults.forEach((candidate) => {
     const version = candidate.provenance?.testCase.version;
     const alreadyReported = results.some((result) =>
@@ -832,13 +832,13 @@ function appendMissingSuiteResults(
       results.push(candidate);
     }
   });
-}
+};
 
-function terminalCliSuiteRunInfo(
+const terminalCliSuiteRunInfo = (
   record: SuiteRunRecord,
   suite: SuiteAsset,
   message: string,
-): CliSuiteRunInfo {
+): CliSuiteRunInfo => {
   if (!record.finishedAt || record.status === 'running') {
     throw new Error('CLI Suite rejection requires a terminal parent record.');
   }
@@ -860,9 +860,9 @@ function terminalCliSuiteRunInfo(
     provenance: record.provenance,
     reason,
   };
-}
+};
 
-function toCliCaseResult(result: RunTestCaseResponse, environment: ProjectEnvironment): CliCaseResult {
+const toCliCaseResult = (result: RunTestCaseResponse, environment: ProjectEnvironment): CliCaseResult => {
   if (result.detail.status === 'running' || !result.detail.provenance) {
     throw new Error('CLI run result must be terminal and carry frozen provenance.');
   }
@@ -883,9 +883,9 @@ function toCliCaseResult(result: RunTestCaseResponse, environment: ProjectEnviro
     artifacts: result.detail.artifacts.map((artifact) => artifact.path),
     provenance: result.detail.provenance,
   };
-}
+};
 
-function normalizeTerminalRunResponse(result: RunTestCaseResponse): RunTestCaseResponse {
+const normalizeTerminalRunResponse = (result: RunTestCaseResponse): RunTestCaseResponse => {
   if (result.detail.status === 'running' || result.detail.status === 'passed' || result.detail.reason) {
     return result;
   }
@@ -896,13 +896,13 @@ function normalizeTerminalRunResponse(result: RunTestCaseResponse): RunTestCaseR
       reason: fallbackCliRunReason(result.detail.status, result.detail.summary, result.detail.failureReason),
     },
   };
-}
+};
 
-async function persistSyntheticCliCaseResult(
+const persistSyntheticCliCaseResult = async (
   result: CliCaseResult,
   environment: ProjectEnvironment,
   persistRun: (result: RunTestCaseResponse, environment: ProjectEnvironment) => Promise<void>,
-): Promise<CliCaseResult> {
+): Promise<CliCaseResult> => {
   if (!result.provenance) {
     throw new Error('CLI terminal Case result must carry frozen provenance before persistence.');
   }
@@ -941,13 +941,13 @@ async function persistSyntheticCliCaseResult(
     },
   }, environment);
   return persistedResult;
-}
+};
 
-function fallbackCliRunReason(
+const fallbackCliRunReason = (
   status: Exclude<RunStatus, 'running' | 'passed'>,
   summary: string,
   failureReason?: string,
-): RunReason {
+): RunReason => {
   const message = summary || failureReason || `CLI runtime reported ${status} without a structured reason.`;
   switch (status) {
     case 'failed':
@@ -961,21 +961,21 @@ function fallbackCliRunReason(
     case 'error':
       return { code: 'executorError', message };
   }
-}
+};
 
-export function cliExitCode(summary: CliRunSummary): number {
+export const cliExitCode = (summary: CliRunSummary): number => {
   return hasCliFailures(summary.results, summary.suite) ? 1 : 0;
-}
+};
 
-function hasCliFailures(
+const hasCliFailures = (
   results: readonly Pick<CliCaseResult, 'status'>[],
   suite?: Pick<CliSuiteRunInfo, 'status'>,
-): boolean {
+): boolean => {
   return results.some((result) => result.status === 'failed' || result.status === 'error') ||
     suite?.status === 'failed' || suite?.status === 'error';
-}
+};
 
-function withCliProvenance(result: RunTestCaseResponse, provenance: RunProvenance): RunTestCaseResponse {
+const withCliProvenance = (result: RunTestCaseResponse, provenance: RunProvenance): RunTestCaseResponse => {
   return {
     ...result,
     detail: {
@@ -983,15 +983,15 @@ function withCliProvenance(result: RunTestCaseResponse, provenance: RunProvenanc
       provenance: structuredClone(provenance),
     },
   };
-}
+};
 
-function createCliRunProvenance(
+const createCliRunProvenance = (
   snapshot: ProjectSnapshot,
   testCase: TestCaseDraft,
   environment: ProjectEnvironment,
   state: StudioState,
   suiteMembership?: NonNullable<RunProvenance['suite']>,
-): RunProvenance {
+): RunProvenance => {
   const provenance = createRunProvenance(
     snapshot,
     { ...testCase, version: testCase.version ?? 1 },
@@ -1008,15 +1008,15 @@ function createCliRunProvenance(
       parentRunId: suiteMembership.parentRunId,
     }),
   });
-}
+};
 
-function createCliSuiteRunProvenance(
+const createCliSuiteRunProvenance = (
   snapshot: ProjectSnapshot,
   suite: SuiteAsset,
   environment: ProjectEnvironment,
   state: StudioState,
   parentRunId: string,
-): SuiteRunProvenance {
+): SuiteRunProvenance => {
   return createSuiteRunProvenance(
     snapshot,
     suite,
@@ -1024,12 +1024,12 @@ function createCliSuiteRunProvenance(
     createCliRuntimeMetadata(environment, state),
     parentRunId,
   );
-}
+};
 
-function createCliRuntimeMetadata(
+const createCliRuntimeMetadata = (
   environment: ProjectEnvironment,
   state: StudioState,
-): RunProvenanceRuntimeMetadata {
+): RunProvenanceRuntimeMetadata => {
   return {
     browserProfile: { engine: environment.browser, headless: environment.headless },
     executor: { appVersion: 'test-buddy-cli', runnerVersion: 'runtime-bundle-v1' },
@@ -1041,48 +1041,48 @@ function createCliRuntimeMetadata(
     },
     createdAt: new Date().toISOString(),
   };
-}
+};
 
-function createCliSuiteRunId(): string {
+const createCliSuiteRunId = (): string => {
   return `cli-suite-run-${randomUUID()}`;
-}
+};
 
-function suiteRunEnvironment(snapshot: ProjectSnapshot, suite: SuiteAsset): ProjectEnvironment {
+const suiteRunEnvironment = (snapshot: ProjectSnapshot, suite: SuiteAsset): ProjectEnvironment => {
   const environment = snapshot.project.environments.find((candidate) => candidate.id === suite.environmentId);
   if (!environment) {
     throw new CliUsageError(`Suite ${suite.id}@${suite.version} has no exact environment.`);
   }
   return environment;
-}
+};
 
-function suiteEnvironment(
+const suiteEnvironment = (
   snapshot: ProjectSnapshot,
   suite: SuiteAsset,
   testCase: TestCaseDraft,
-): ProjectEnvironment {
+): ProjectEnvironment => {
   return snapshot.project.environments.find((environment) => environment.id === suite.environmentId)
     ?? snapshot.project.environments.find((environment) => environment.id === testCase.environmentId)
     ?? (() => { throw new Error(`Suite ${suite.id}@${suite.version} has no exact environment.`); })();
-}
+};
 
-function resolveOutputPath(candidatePath: string): string {
+const resolveOutputPath = (candidatePath: string): string => {
   return path.resolve(candidatePath);
-}
+};
 
-async function writeFile(filePath: string, content: string): Promise<void> {
+const writeFile = async (filePath: string, content: string): Promise<void> => {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   await fs.writeFile(filePath, content, 'utf8');
-}
+};
 
-function durationToSeconds(duration: string | undefined): number {
+const durationToSeconds = (duration: string | undefined): number => {
   if (!duration || !/^\d{2}:\d{2}:\d{2}$/.test(duration)) {
     return 0;
   }
   const [hours, minutes, seconds] = duration.split(':').map(Number);
   return hours * 3_600 + minutes * 60 + seconds;
-}
+};
 
-function escapeXml(value: string): string {
+const escapeXml = (value: string): string => {
   return Array.from(value)
     .filter((character) => {
       const codePoint = character.codePointAt(0)!;
@@ -1099,11 +1099,11 @@ function escapeXml(value: string): string {
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&apos;');
-}
+};
 
-function messageFor(error: unknown): string {
+const messageFor = (error: unknown): string => {
   return error instanceof Error ? error.message : String(error);
-}
+};
 
 const invokedPath = process.argv[1];
 if (invokedPath && path.resolve(invokedPath) === fileURLToPath(import.meta.url)) {

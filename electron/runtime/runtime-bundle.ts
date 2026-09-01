@@ -125,10 +125,10 @@ export interface RuntimeBundleOptions {
   loadStudioState?: () => Promise<StudioState>;
 }
 
-function createManagedInteractionPreflightPolicy(
+const createManagedInteractionPreflightPolicy = (
   artifactManager: ArtifactManager,
   policy: DeterministicInteractionPreflightPolicyProvider | undefined,
-): DeterministicInteractionPreflightPolicyProvider | undefined {
+): DeterministicInteractionPreflightPolicyProvider | undefined => {
   if (!policy) {
     return undefined;
   }
@@ -152,9 +152,9 @@ function createManagedInteractionPreflightPolicy(
       return { path: artifactPath, byteCount: entry.byteCount };
     },
   };
-}
+};
 
-export function createRuntimeBundle(options: RuntimeBundleOptions): RuntimeBundle {
+export const createRuntimeBundle = (options: RuntimeBundleOptions): RuntimeBundle => {
   const emitRunEvent = options.emitRunEvent ?? (() => undefined);
   const browserPool = options.browserPool;
   const artifactManager = new ArtifactManager(options.rootDir, {
@@ -629,24 +629,24 @@ export function createRuntimeBundle(options: RuntimeBundleOptions): RuntimeBundl
       await Promise.all([browserRuntime.close(), browserPool?.close()]);
     },
   };
-}
+};
 
-function isPoolQualifiedSuiteRun(
+const isPoolQualifiedSuiteRun = (
   request: ResolvedRunSuiteRequest,
   browserPool: BrowserPool | undefined,
-): boolean {
+): boolean => {
   return Boolean(browserPool) && isChromiumHeadlessVersionedSuite(
     request.projectSnapshot.project,
     request.projectSnapshot.reproducibility,
     request.suite,
   );
-}
+};
 
-export function isChromiumHeadlessVersionedSuite(
+export const isChromiumHeadlessVersionedSuite = (
   project: Pick<ProjectDraft, 'environments'>,
   reproducibility: ProjectSnapshot['reproducibility'],
   suite: SuiteAsset,
-): boolean {
+): boolean => {
   if (reproducibility !== 'versioned') {
     return false;
   }
@@ -660,9 +660,9 @@ export function isChromiumHeadlessVersionedSuite(
   return suite.caseReferences.every((reference) =>
     Boolean(reference.id) && Number.isSafeInteger(reference.version) && reference.version >= 1,
   );
-}
+};
 
-async function resolveModelConfigs(request: ResolvedRunTestCaseRequest): Promise<ResolvedModelConfigs | undefined> {
+const resolveModelConfigs = async (request: ResolvedRunTestCaseRequest): Promise<ResolvedModelConfigs | undefined> => {
   if (request.midsceneConfig && request.agentModelConfig) {
     return {
       midsceneConfig: request.midsceneConfig,
@@ -670,12 +670,12 @@ async function resolveModelConfigs(request: ResolvedRunTestCaseRequest): Promise
     };
   }
   return request.resolveModelConfigs?.();
-}
+};
 
-function resolveRuntimeProfile(
+const resolveRuntimeProfile = (
   requestedProfile: RuntimeProfile | undefined,
   environment: ProjectEnvironment,
-): RuntimeProfile {
+): RuntimeProfile => {
   return requestedProfile ?? {
     browser: environment.browser,
     baseUrl: environment.url,
@@ -683,11 +683,11 @@ function resolveRuntimeProfile(
     locale: environment.locale,
     headless: environment.headless,
   };
-}
+};
 
-function executorErrorMessage(error: unknown, redactor: SecretRedactor): string {
+const executorErrorMessage = (error: unknown, redactor: SecretRedactor): string => {
   const detail = redactor.redactError(error);
   return detail
     ? `Runtime executor failed: ${detail}`
     : 'Runtime executor failed before producing a result.';
-}
+};

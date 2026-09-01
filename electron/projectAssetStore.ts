@@ -102,10 +102,10 @@ export interface ProjectAssetReadResult {
  * Inspects a tracked snapshot without updating either storage location. The
  * caller decides when a local edit should become a new reviewed snapshot.
  */
-export async function inspectProjectAssetBinding(
+export const inspectProjectAssetBinding = async (
   project: ProjectDraft,
   binding: ProjectAssetBinding,
-): Promise<ProjectAssetBindingStatus> {
+): Promise<ProjectAssetBindingStatus> => {
   const localRevision = calculateProjectAssetRevision(project);
   try {
     const snapshot = await new ProjectAssetStore(binding.projectDirectory).loadWithRevision();
@@ -138,16 +138,16 @@ export async function inspectProjectAssetBinding(
         : [{ path: binding.projectDirectory, message: errorMessage(error) }],
     };
   }
-}
+};
 
 /**
  * Produces a read-only reload plan. A tracked directory is never authoritative
  * while the local project contains edits that have not been snapshotted.
  */
-export async function planProjectAssetReload(
+export const planProjectAssetReload = async (
   project: ProjectDraft,
   binding: ProjectAssetBinding,
-): Promise<ProjectAssetReloadPlan> {
+): Promise<ProjectAssetReloadPlan> => {
   const localRevision = calculateProjectAssetRevision(project);
   try {
     const snapshot = await new ProjectAssetStore(binding.projectDirectory).loadWithRevision();
@@ -178,17 +178,17 @@ export async function planProjectAssetReload(
         : [{ path: binding.projectDirectory, message: errorMessage(error) }],
     };
   }
-}
+};
 
 /**
  * Produces a read-only CAS publish plan for local edits. It never writes the
  * bound directory and deliberately rejects a changed directory, an unchanged
  * local project, or unmanaged files beside the snapshot.
  */
-export async function planProjectAssetUpdate(
+export const planProjectAssetUpdate = async (
   project: ProjectDraft,
   binding: ProjectAssetBinding,
-): Promise<ProjectAssetUpdatePlan> {
+): Promise<ProjectAssetUpdatePlan> => {
   const nextSnapshot = createProjectAssetSnapshot(project);
   const localRevision = nextSnapshot.manifest.revision!;
   const files = listAssetFiles(nextSnapshot);
@@ -249,7 +249,7 @@ export async function planProjectAssetUpdate(
         : [{ path: binding.projectDirectory, message: errorMessage(error) }],
     };
   }
-}
+};
 
 export interface ProjectAssetStoreFileSystem {
   rename(source: string, destination: string): Promise<void>;
@@ -287,10 +287,10 @@ export class ProjectAssetStoreError extends Error {
   }
 }
 
-export function createProjectAssetSnapshot(
+export const createProjectAssetSnapshot = (
   project: ProjectDraft,
   legacyCaseBackup?: LegacyCaseBackupDeclaration,
-): ProjectAssetSnapshot {
+): ProjectAssetSnapshot => {
   const sanitizedProject = sanitizeProjectAsset(project);
   const { testCases, recordings, documents, fixtures, reusableFlows, suites, ...projectMetadata } = sanitizedProject;
   return {
@@ -318,9 +318,9 @@ export function createProjectAssetSnapshot(
     reusableFlows,
     suites,
   };
-}
+};
 
-export function validateProjectAssetSnapshot(snapshot: ProjectAssetSnapshot): ProjectAssetValidationIssue[] {
+export const validateProjectAssetSnapshot = (snapshot: ProjectAssetSnapshot): ProjectAssetValidationIssue[] => {
   const issues: ProjectAssetValidationIssue[] = [];
   const manifest = snapshot.manifest;
   if (!isNonEmptyString(manifest.id)) {
@@ -381,7 +381,7 @@ export function validateProjectAssetSnapshot(snapshot: ProjectAssetSnapshot): Pr
   });
 
   return issues;
-}
+};
 
 /**
  * A review-only filesystem adapter for the Phase 2 asset migration. It does
@@ -867,15 +867,15 @@ export class ProjectAssetStore {
   }
 }
 
-function sanitizeProjectAsset(project: ProjectDraft): ProjectDraft {
+const sanitizeProjectAsset = (project: ProjectDraft): ProjectDraft => {
   const clonedProject = structuredClone(project);
   return {
     ...clonedProject,
     recordings: clonedProject.recordings.map(stripRecordingRuntimeData),
   };
-}
+};
 
-function stripRecordingRuntimeData(recording: RecordingAsset): RecordingAsset {
+const stripRecordingRuntimeData = (recording: RecordingAsset): RecordingAsset => {
   return {
     ...structuredClone(recording),
     steps: recording.steps.map(({
@@ -884,14 +884,14 @@ function stripRecordingRuntimeData(recording: RecordingAsset): RecordingAsset {
       ...step
     }) => ({ ...step })),
   };
-}
+};
 
-function validateAssetCollection(
+const validateAssetCollection = (
   kind: 'cases' | 'recordings' | 'documents',
   assets: Array<{ id: string }>,
   expectedIds: string[],
   issues: ProjectAssetValidationIssue[],
-): void {
+): void => {
   if (!Array.isArray(expectedIds) || expectedIds.some((id) => !isNonEmptyString(id))) {
     issues.push({ path: `project.json.assetIds.${kind}`, message: '资产 ID 列表必须包含非空字符串。' });
     return;
@@ -903,13 +903,13 @@ function validateAssetCollection(
   if (new Set(expectedIds).size !== expectedIds.length || !sameIds(expectedIds, actualIds)) {
     issues.push({ path: `project.json.assetIds.${kind}`, message: 'manifest 与资产文件的 ID 引用不一致。' });
   }
-}
+};
 
-function validateCaseCollection(
+const validateCaseCollection = (
   testCases: TestCaseDraft[],
   expectedReferences: unknown,
   issues: ProjectAssetValidationIssue[],
-): void {
+): void => {
   const caseKeys = testCases.map((testCase) => caseReferenceKey(testCase));
   if (
     testCases.some((testCase) => !isNonEmptyString(testCase?.id) || !isPositiveInteger(testCase?.version)) ||
@@ -931,15 +931,15 @@ function validateCaseCollection(
   if (!sameKeys(expectedKeys, caseKeys)) {
     issues.push({ path: 'project.json.assetIds.cases', message: 'manifest 与 Case 文件的版本引用不一致。' });
   }
-}
+};
 
-function validateFixtureCollection(
+const validateFixtureCollection = (
   fixtures: FixtureAsset[],
   expectedReferences: VersionedTestAssetReference[] | undefined,
   manifest: ProjectAssetManifestMetadata,
   testCases: TestCaseDraft[],
   issues: ProjectAssetValidationIssue[],
-): void {
+): void => {
   if (expectedReferences === undefined) {
     if (fixtures.length) {
       issues.push({ path: 'project.json.assetIds.fixtures', message: 'manifest 缺少 fixture 版本引用。' });
@@ -981,14 +981,14 @@ function validateFixtureCollection(
       }
     });
   });
-}
+};
 
-function validateReusableFlowCollection(
+const validateReusableFlowCollection = (
   reusableFlows: ReusableFlowAsset[],
   expectedReferences: VersionedTestAssetReference[] | undefined,
   testCases: TestCaseDraft[],
   issues: ProjectAssetValidationIssue[],
-): void {
+): void => {
   if (expectedReferences === undefined) {
     if (reusableFlows.length) {
       issues.push({ path: 'project.json.assetIds.reusableFlows', message: 'manifest 缺少可复用流程版本引用。' });
@@ -1050,15 +1050,15 @@ function validateReusableFlowCollection(
       }
     });
   });
-}
+};
 
-function validateSuiteCollection(
+const validateSuiteCollection = (
   suites: SuiteAsset[],
   expectedReferences: VersionedTestAssetReference[] | undefined,
   manifest: ProjectAssetManifestMetadata,
   testCases: TestCaseDraft[],
   issues: ProjectAssetValidationIssue[],
-): void {
+): void => {
   if (expectedReferences === undefined) {
     if (suites.length) {
       issues.push({ path: 'project.json.assetIds.suites', message: 'manifest 缺少 suite 版本引用。' });
@@ -1084,14 +1084,14 @@ function validateSuiteCollection(
     issues.push({ path: 'project.json.assetIds.suites', message: 'manifest 与 suite 文件的版本引用不一致。' });
   }
   suites.forEach((suite) => validateSuiteAsset(suite, manifest.environments, testCases, issues));
-}
+};
 
-function validateSuiteAsset(
+const validateSuiteAsset = (
   suite: SuiteAsset,
   environments: ProjectAssetManifestMetadata['environments'],
   testCases: TestCaseDraft[],
   issues: ProjectAssetValidationIssue[],
-): void {
+): void => {
   const suitePath = suite?.id ? suiteRelativePath(suite) : 'suites';
   if (!suite || suite.schemaVersion !== 1 || !isNonEmptyString(suite.id) || !isPositiveInteger(suite.version)) {
     issues.push({ path: suitePath, message: 'suite 必须包含 schema version、稳定 ID 和正整数版本。' });
@@ -1141,14 +1141,14 @@ function validateSuiteAsset(
       message: issue.message,
     });
   });
-}
+};
 
-function validateFixtureAsset(
+const validateFixtureAsset = (
   fixture: FixtureAsset,
   environmentIds: Set<string>,
   credentialIds: Set<string>,
   issues: ProjectAssetValidationIssue[],
-): void {
+): void => {
   const fixturePath = fixture?.id ? fixtureRelativePath(fixture) : 'fixtures';
   if (!fixture || fixture.schemaVersion !== 1 || !isNonEmptyString(fixture.id) || !isPositiveInteger(fixture.version)) {
     issues.push({ path: fixturePath, message: 'fixture 必须包含 schema version、稳定 ID 和正整数版本。' });
@@ -1181,14 +1181,14 @@ function validateFixtureAsset(
   if (Number.isNaN(Date.parse(fixture.createdAt)) || Number.isNaN(Date.parse(fixture.updatedAt))) {
     issues.push({ path: fixturePath, message: 'fixture 创建或更新时间无效。' });
   }
-}
+};
 
-function validateFixtureParameters(
+const validateFixtureParameters = (
   fixturePath: string,
   label: 'inputs' | 'outputs',
   parameters: FixtureAsset['inputs'],
   issues: ProjectAssetValidationIssue[],
-): void {
+): void => {
   if (!Array.isArray(parameters)) {
     issues.push({ path: `${fixturePath}.${label}`, message: 'fixture 参数必须是数组。' });
     return;
@@ -1205,14 +1205,14 @@ function validateFixtureParameters(
   ) {
     issues.push({ path: `${fixturePath}.${label}`, message: 'fixture 参数名、类型或必填标记无效。' });
   }
-}
+};
 
-function validateFixtureLifecycle(
+const validateFixtureLifecycle = (
   fixturePath: string,
   label: 'setup' | 'cleanup',
   lifecycle: FixtureAsset['setup'],
   issues: ProjectAssetValidationIssue[],
-): void {
+): void => {
   if (
     !lifecycle ||
     !isNonEmptyString(lifecycle.summary) ||
@@ -1248,9 +1248,9 @@ function validateFixtureLifecycle(
   ) {
     issues.push({ path: `${fixturePath}.${label}.script`, message: 'fixture 脚本声明无效。' });
   }
-}
+};
 
-function validateManifest(manifest: unknown): asserts manifest is ProjectAssetReadManifest {
+const validateManifest: (manifest: unknown) => asserts manifest is ProjectAssetReadManifest = (manifest) => {
   const issues: ProjectAssetValidationIssue[] = [];
   if (!manifest || typeof manifest !== 'object') {
     issues.push({ path: 'project.json', message: 'project manifest 必须是对象。' });
@@ -1327,9 +1327,9 @@ function validateManifest(manifest: unknown): asserts manifest is ProjectAssetRe
   if (issues.length) {
     throw new ProjectAssetStoreError('project manifest 无法读取。', issues);
   }
-}
+};
 
-function listAssetFiles(snapshot: ProjectAssetSnapshot): string[] {
+const listAssetFiles = (snapshot: ProjectAssetSnapshot): string[] => {
   return [
     'project.json',
     ...snapshot.testCases.map(caseRelativePath),
@@ -1340,12 +1340,12 @@ function listAssetFiles(snapshot: ProjectAssetSnapshot): string[] {
     ...snapshot.suites.map(suiteRelativePath),
     ...legacyCaseBackupFiles(snapshot),
   ];
-}
+};
 
-async function validateProjectDirectoryLayout(
+const validateProjectDirectoryLayout = async (
   directory: string,
   snapshot: ProjectAssetSnapshot,
-): Promise<ProjectAssetValidationIssue[]> {
+): Promise<ProjectAssetValidationIssue[]> => {
   const expectedEntries = new Set([
     'cases/',
     'documents/',
@@ -1369,12 +1369,12 @@ async function validateProjectDirectoryLayout(
     }
   });
   return issues;
-}
+};
 
-async function validateLegacyProjectDirectoryLayout(
+const validateLegacyProjectDirectoryLayout = async (
   directory: string,
   manifest: LegacyProjectAssetManifest,
-): Promise<ProjectAssetValidationIssue[]> {
+): Promise<ProjectAssetValidationIssue[]> => {
   const expectedEntries = new Set([
     'cases/',
     'documents/',
@@ -1403,13 +1403,13 @@ async function validateLegacyProjectDirectoryLayout(
     }
   });
   return issues;
-}
+};
 
-async function validateLegacyCaseBackupDirectoryLayout(
+const validateLegacyCaseBackupDirectoryLayout = async (
   directory: string,
   manifest: ProjectAssetV2ReadManifest,
   afterPathValidation?: (rootDirectory: string, relativePath: string) => Promise<void>,
-): Promise<ProjectAssetValidationIssue[]> {
+): Promise<ProjectAssetValidationIssue[]> => {
   const expectedEntries = new Set(legacyCaseBackupEntriesFor(
     manifest.legacyCaseBackupDirectory,
     manifest.legacyCaseBackupFiles,
@@ -1490,21 +1490,21 @@ async function validateLegacyCaseBackupDirectoryLayout(
     });
   }
   return issues;
-}
+};
 
-function legacyCaseBackupEntries(snapshot: ProjectAssetSnapshot): string[] {
+const legacyCaseBackupEntries = (snapshot: ProjectAssetSnapshot): string[] => {
   return snapshot.manifest.schemaVersion === projectAssetSchemaVersion
     ? legacyCaseBackupEntriesFor(
       snapshot.manifest.legacyCaseBackupDirectory,
       snapshot.manifest.legacyCaseBackupFiles,
     )
     : [];
-}
+};
 
-function legacyCaseBackupEntriesFor(
+const legacyCaseBackupEntriesFor = (
   legacyCaseBackupDirectory: string | undefined,
   legacyCaseBackupFiles: LegacyCaseBackupFileRecord[] | string[] | undefined,
-): string[] {
+): string[] => {
   if (!isValidLegacyCaseBackupManifestDeclaration(legacyCaseBackupDirectory, legacyCaseBackupFiles)) {
     return [];
   }
@@ -1517,16 +1517,16 @@ function legacyCaseBackupEntriesFor(
     `${legacyCaseBackupDirectory}/cases/`,
     ...(legacyCaseBackupFiles ?? []).map((file) => path.posix.join(legacyCaseBackupDirectory, legacyCaseBackupFilePath(file))),
   ];
-}
+};
 
-function legacyCaseBackupFiles(snapshot: ProjectAssetSnapshot): string[] {
+const legacyCaseBackupFiles = (snapshot: ProjectAssetSnapshot): string[] => {
   return legacyCaseBackupEntries(snapshot).filter((entry) => !entry.endsWith('/'));
-}
+};
 
-async function validateV2CaseDirectoryLayout(
+const validateV2CaseDirectoryLayout = async (
   directory: string,
   references: VersionedTestAssetReference[],
-): Promise<ProjectAssetValidationIssue[]> {
+): Promise<ProjectAssetValidationIssue[]> => {
   const expectedEntries = new Set([
     'cases/',
     ...references.map(caseRelativePath),
@@ -1546,13 +1546,13 @@ async function validateV2CaseDirectoryLayout(
     }
   });
   return issues;
-}
+};
 
-async function listDirectoryTreeEntries(
+const listDirectoryTreeEntries = async (
   rootDirectory: string,
-): Promise<string[]> {
+): Promise<string[]> => {
   return listSafeProjectAssetTreeEntries(rootDirectory, '');
-}
+};
 
 interface ProjectAssetPathIdentity {
   device: number | bigint;
@@ -1579,20 +1579,20 @@ interface OpenProjectAssetPath {
   handles: ProjectAssetFileHandle[];
 }
 
-function projectAssetPathIdentity(fileInfo: Awaited<ReturnType<typeof fs.lstat>>): ProjectAssetPathIdentity {
+const projectAssetPathIdentity = (fileInfo: Awaited<ReturnType<typeof fs.lstat>>): ProjectAssetPathIdentity => {
   return { device: fileInfo.dev, inode: fileInfo.ino };
-}
+};
 
-function hasProjectAssetPathIdentity(
+const hasProjectAssetPathIdentity = (
   fileInfo: Awaited<ReturnType<typeof fs.lstat>>,
   expected: ProjectAssetPathIdentity,
-): boolean {
+): boolean => {
   return fileInfo.dev === expected.device && fileInfo.ino === expected.inode;
-}
+};
 
-function projectAssetPathIssue(relativePath: string, message: string): ProjectAssetStoreError {
+const projectAssetPathIssue = (relativePath: string, message: string): ProjectAssetStoreError => {
   return new ProjectAssetStoreError('项目资产路径无法安全读取。', [{ path: relativePath, message }]);
-}
+};
 
 /**
  * Pure TypeScript platform policy: Node does not expose POSIX openat or
@@ -1601,10 +1601,10 @@ function projectAssetPathIssue(relativePath: string, message: string): ProjectAs
  * is matched to this full snapshot, and the snapshot is revalidated before
  * any content or directory names are accepted.
  */
-async function inspectProjectAssetPath(
+const inspectProjectAssetPath = async (
   rootDirectory: string,
   relativePath: string,
-): Promise<ProjectAssetPathInspection> {
+): Promise<ProjectAssetPathInspection> => {
   let rootInfo: Awaited<ReturnType<typeof fs.lstat>>;
   try {
     rootInfo = await fs.lstat(rootDirectory);
@@ -1643,12 +1643,12 @@ async function inspectProjectAssetPath(
     });
   }
   return { root: projectAssetPathIdentity(rootInfo), components };
-}
+};
 
-async function assertProjectAssetPathInspectionCurrent(
+const assertProjectAssetPathInspectionCurrent = async (
   rootDirectory: string,
   inspection: ProjectAssetPathInspection,
-): Promise<void> {
+): Promise<void> => {
   const relativePath = inspection.components.at(-1)?.relativePath ?? '';
   const current = await inspectProjectAssetPath(rootDirectory, relativePath);
   if (
@@ -1668,26 +1668,26 @@ async function assertProjectAssetPathInspectionCurrent(
   ) {
     throw projectAssetPathIssue(relativePath || rootDirectory, '项目资产路径在读取期间发生变化。');
   }
-}
+};
 
-function projectAssetOpenFlags(kind: 'directory' | 'file'): number {
+const projectAssetOpenFlags = (kind: 'directory' | 'file'): number => {
   return fileSystemConstants.O_RDONLY |
     fileSystemConstants.O_NOFOLLOW |
     fileSystemConstants.O_NONBLOCK |
     (kind === 'directory' ? fileSystemConstants.O_DIRECTORY : 0);
-}
+};
 
-function inspectionTargetMatchesKind(
+const inspectionTargetMatchesKind = (
   inspection: ProjectAssetPathInspection,
   kind: 'directory' | 'file',
-): boolean {
+): boolean => {
   const target = inspection.components.at(-1);
   return kind === 'directory'
     ? (target?.directory ?? true)
     : target?.file === true;
-}
+};
 
-async function assertOpenProjectAssetPathCurrent(openPath: OpenProjectAssetPath): Promise<void> {
+const assertOpenProjectAssetPathCurrent = async (openPath: OpenProjectAssetPath): Promise<void> => {
   const expected: Array<ProjectAssetPathIdentity & { directory: boolean; file: boolean; relativePath: string }> = [
     { ...openPath.inspection.root, directory: true, file: false, relativePath: openPath.rootDirectory },
     ...openPath.inspection.components,
@@ -1706,17 +1706,17 @@ async function assertOpenProjectAssetPathCurrent(openPath: OpenProjectAssetPath)
     }
   }));
   await assertProjectAssetPathInspectionCurrent(openPath.rootDirectory, openPath.inspection);
-}
+};
 
-async function closeOpenProjectAssetPath(openPath: OpenProjectAssetPath): Promise<void> {
+const closeOpenProjectAssetPath = async (openPath: OpenProjectAssetPath): Promise<void> => {
   await Promise.all([...openPath.handles].reverse().map((handle) => handle.close().catch(() => undefined)));
-}
+};
 
-async function openInspectedProjectAssetPath(
+const openInspectedProjectAssetPath = async (
   rootDirectory: string,
   inspection: ProjectAssetPathInspection,
   kind: 'directory' | 'file',
-): Promise<OpenProjectAssetPath> {
+): Promise<OpenProjectAssetPath> => {
   if (!inspectionTargetMatchesKind(inspection, kind)) {
     throw projectAssetPathIssue(
       inspection.components.at(-1)?.relativePath ?? rootDirectory,
@@ -1770,13 +1770,13 @@ async function openInspectedProjectAssetPath(
       `项目资产路径在读取期间发生变化：${errorMessage(error)}`,
     );
   }
-}
+};
 
-async function readInspectedProjectAssetFile(
+const readInspectedProjectAssetFile = async (
   rootDirectory: string,
   relativePath: string,
   afterPathValidation?: (rootDirectory: string, relativePath: string) => Promise<void>,
-): Promise<Buffer> {
+): Promise<Buffer> => {
   const inspection = await inspectProjectAssetPath(rootDirectory, relativePath);
   const finalComponent = inspection.components.at(-1);
   if (!finalComponent?.file) {
@@ -1790,15 +1790,15 @@ async function readInspectedProjectAssetFile(
   } finally {
     await closeOpenProjectAssetPath(openPath);
   }
-}
+};
 
 /** Lists one project-owned tree without ever following links below its root. */
-async function listSafeProjectAssetTreeEntries(
+const listSafeProjectAssetTreeEntries = async (
   rootDirectory: string,
   relativeDirectory: string,
-): Promise<string[]> {
+): Promise<string[]> => {
   const result: string[] = [];
-  async function visit(directory: string): Promise<void> {
+  const visit = async (directory: string): Promise<void> => {
     const directoryInspection = await inspectProjectAssetPath(rootDirectory, directory);
     const openPath = await openInspectedProjectAssetPath(rootDirectory, directoryInspection, 'directory');
     let entries: Dirent[];
@@ -1834,32 +1834,32 @@ async function listSafeProjectAssetTreeEntries(
         throw projectAssetPathIssue(entryPath, '项目资产树只能包含目录和普通文件。');
       }
     }
-  }
+  };
   await visit(relativeDirectory);
   return result.sort();
-}
+};
 
-function assetRelativePath(kind: 'cases' | 'recordings' | 'documents', id: string): string {
+const assetRelativePath = (kind: 'cases' | 'recordings' | 'documents', id: string): string => {
   return path.posix.join(kind, `${encodeURIComponent(id)}.json`);
-}
+};
 
-function caseRelativePath(testCase: Pick<TestCaseDraft, 'id' | 'version'>): string {
+const caseRelativePath = (testCase: Pick<TestCaseDraft, 'id' | 'version'>): string => {
   return path.posix.join('cases', `${encodeURIComponent(testCase.id)}@${testCase.version}.json`);
-}
+};
 
-function fixtureRelativePath(fixture: Pick<FixtureAsset, 'id' | 'version'>): string {
+const fixtureRelativePath = (fixture: Pick<FixtureAsset, 'id' | 'version'>): string => {
   return path.posix.join('fixtures', `${encodeURIComponent(fixture.id)}@${fixture.version}.json`);
-}
+};
 
-function reusableFlowRelativePath(flow: Pick<ReusableFlowAsset, 'id' | 'version'>): string {
+const reusableFlowRelativePath = (flow: Pick<ReusableFlowAsset, 'id' | 'version'>): string => {
   return path.posix.join('reusable-flows', `${encodeURIComponent(flow.id)}@${flow.version}.json`);
-}
+};
 
-function suiteRelativePath(suite: Pick<SuiteAsset, 'id' | 'version'>): string {
+const suiteRelativePath = (suite: Pick<SuiteAsset, 'id' | 'version'>): string => {
   return path.posix.join('suites', `${encodeURIComponent(suite.id)}@${suite.version}.json`);
-}
+};
 
-async function listDirectoryEntries(directory: string): Promise<string[]> {
+const listDirectoryEntries = async (directory: string): Promise<string[]> => {
   try {
     const treeEntries = await listSafeProjectAssetTreeEntries(directory, '');
     return [...new Set(treeEntries.map((entry) => entry.split('/')[0]!))].sort();
@@ -1872,24 +1872,24 @@ async function listDirectoryEntries(directory: string): Promise<string[]> {
     }
     throw error;
   }
-}
+};
 
-async function writeAssetCollection(
+const writeAssetCollection = async (
   rootDirectory: string,
   kind: 'recordings' | 'documents',
   assets: Array<{ id: string }>,
-): Promise<void> {
+): Promise<void> => {
   const directory = path.join(rootDirectory, kind);
   await fs.mkdir(directory, { recursive: true });
   await Promise.all(assets.map((asset) => writeJson(path.join(rootDirectory, assetRelativePath(kind, asset.id)), asset)));
-}
+};
 
-async function readAssetCollection<T extends { id: string }>(
+const readAssetCollection = async <T extends { id: string }>(
   rootDirectory: string,
   kind: 'cases' | 'recordings' | 'documents',
   ids: string[],
   afterPathValidation?: (rootDirectory: string, relativePath: string) => Promise<void>,
-): Promise<T[]> {
+): Promise<T[]> => {
   return Promise.all(ids.map(async (id) => {
     const relativePath = assetRelativePath(kind, id);
     const asset = await readJson(rootDirectory, relativePath, afterPathValidation) as T;
@@ -1900,19 +1900,19 @@ async function readAssetCollection<T extends { id: string }>(
     }
     return asset;
   }));
-}
+};
 
-async function writeCaseCollection(rootDirectory: string, testCases: TestCaseDraft[]): Promise<void> {
+const writeCaseCollection = async (rootDirectory: string, testCases: TestCaseDraft[]): Promise<void> => {
   const directory = path.join(rootDirectory, 'cases');
   await fs.mkdir(directory, { recursive: true });
   await Promise.all(testCases.map((testCase) => writeJson(path.join(rootDirectory, caseRelativePath(testCase)), testCase)));
-}
+};
 
-async function readCaseCollection(
+const readCaseCollection = async (
   rootDirectory: string,
   references: VersionedTestAssetReference[],
   afterPathValidation?: (rootDirectory: string, relativePath: string) => Promise<void>,
-): Promise<TestCaseDraft[]> {
+): Promise<TestCaseDraft[]> => {
   return Promise.all(references.map(async (reference) => {
     const casePath = caseRelativePath(reference);
     const testCase = await readJson(rootDirectory, casePath, afterPathValidation) as TestCaseDraft;
@@ -1923,13 +1923,13 @@ async function readCaseCollection(
     }
     return testCase;
   }));
-}
+};
 
-async function readLegacyCaseCollectionWithContent(
+const readLegacyCaseCollectionWithContent = async (
   rootDirectory: string,
   ids: string[],
   afterPathValidation?: (rootDirectory: string, relativePath: string) => Promise<void>,
-): Promise<Array<{ testCase: TestCaseDraft; relativePath: string; content: string }>> {
+): Promise<Array<{ testCase: TestCaseDraft; relativePath: string; content: string }>> => {
   return Promise.all(ids.map(async (id) => {
     const relativePath = assetRelativePath('cases', id);
     let content: string;
@@ -1968,19 +1968,19 @@ async function readLegacyCaseCollectionWithContent(
     }
     return { testCase, relativePath, content };
   }));
-}
+};
 
-async function writeFixtureCollection(rootDirectory: string, fixtures: FixtureAsset[]): Promise<void> {
+const writeFixtureCollection = async (rootDirectory: string, fixtures: FixtureAsset[]): Promise<void> => {
   const directory = path.join(rootDirectory, 'fixtures');
   await fs.mkdir(directory, { recursive: true });
   await Promise.all(fixtures.map((fixture) => writeJson(path.join(rootDirectory, fixtureRelativePath(fixture)), fixture)));
-}
+};
 
-async function readFixtureCollection(
+const readFixtureCollection = async (
   rootDirectory: string,
   references: VersionedTestAssetReference[],
   afterPathValidation?: (rootDirectory: string, relativePath: string) => Promise<void>,
-): Promise<FixtureAsset[]> {
+): Promise<FixtureAsset[]> => {
   return Promise.all(references.map(async (reference) => {
     const fixturePath = fixtureRelativePath(reference);
     const fixture = await readJson(rootDirectory, fixturePath, afterPathValidation) as FixtureAsset;
@@ -1991,19 +1991,19 @@ async function readFixtureCollection(
     }
     return fixture;
   }));
-}
+};
 
-async function writeReusableFlowCollection(rootDirectory: string, reusableFlows: ReusableFlowAsset[]): Promise<void> {
+const writeReusableFlowCollection = async (rootDirectory: string, reusableFlows: ReusableFlowAsset[]): Promise<void> => {
   const directory = path.join(rootDirectory, 'reusable-flows');
   await fs.mkdir(directory, { recursive: true });
   await Promise.all(reusableFlows.map((flow) => writeJson(path.join(rootDirectory, reusableFlowRelativePath(flow)), flow)));
-}
+};
 
-async function readReusableFlowCollection(
+const readReusableFlowCollection = async (
   rootDirectory: string,
   references: VersionedTestAssetReference[],
   afterPathValidation?: (rootDirectory: string, relativePath: string) => Promise<void>,
-): Promise<ReusableFlowAsset[]> {
+): Promise<ReusableFlowAsset[]> => {
   return Promise.all(references.map(async (reference) => {
     const flowPath = reusableFlowRelativePath(reference);
     const flow = await readJson(rootDirectory, flowPath, afterPathValidation) as ReusableFlowAsset;
@@ -2014,19 +2014,19 @@ async function readReusableFlowCollection(
     }
     return flow;
   }));
-}
+};
 
-async function writeSuiteCollection(rootDirectory: string, suites: SuiteAsset[]): Promise<void> {
+const writeSuiteCollection = async (rootDirectory: string, suites: SuiteAsset[]): Promise<void> => {
   const directory = path.join(rootDirectory, 'suites');
   await fs.mkdir(directory, { recursive: true });
   await Promise.all(suites.map((suite) => writeJson(path.join(rootDirectory, suiteRelativePath(suite)), suite)));
-}
+};
 
-async function readSuiteCollection(
+const readSuiteCollection = async (
   rootDirectory: string,
   references: VersionedTestAssetReference[],
   afterPathValidation?: (rootDirectory: string, relativePath: string) => Promise<void>,
-): Promise<SuiteAsset[]> {
+): Promise<SuiteAsset[]> => {
   return Promise.all(references.map(async (reference) => {
     const suitePath = suiteRelativePath(reference);
     const suite = await readJson(rootDirectory, suitePath, afterPathValidation) as SuiteAsset;
@@ -2037,18 +2037,18 @@ async function readSuiteCollection(
     }
     return suite;
   }));
-}
+};
 
-async function writeJson(filePath: string, value: unknown): Promise<void> {
+const writeJson = async (filePath: string, value: unknown): Promise<void> => {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
-}
+};
 
-async function readLegacyCaseBackupDeclaration(
+const readLegacyCaseBackupDeclaration = async (
   directory: string,
   manifest: ProjectAssetReadManifest,
   afterPathValidation?: (rootDirectory: string, relativePath: string) => Promise<void>,
-): Promise<LegacyCaseBackupDeclaration | undefined> {
+): Promise<LegacyCaseBackupDeclaration | undefined> => {
   if (manifest.schemaVersion !== projectAssetSchemaVersion || !manifest.legacyCaseBackupDirectory) {
     return undefined;
   }
@@ -2076,15 +2076,15 @@ async function readLegacyCaseBackupDeclaration(
     return { path: filePath, contentHash: calculateContentHash(content) };
   }));
   return { directory: manifest.legacyCaseBackupDirectory, files };
-}
+};
 
-async function readVerifiedLegacyCaseBackupFile(
+const readVerifiedLegacyCaseBackupFile = async (
   rootDirectory: string,
   backupDirectory: string,
   relativePath: string,
   expectedHash?: string,
   afterPathValidation?: (rootDirectory: string, relativePath: string) => Promise<void>,
-): Promise<Buffer> {
+): Promise<Buffer> => {
   const backupFilePath = path.posix.join(backupDirectory, relativePath);
   const content = await readInspectedProjectAssetFile(rootDirectory, backupFilePath, afterPathValidation);
   const actualHash = calculateContentHash(content);
@@ -2094,15 +2094,15 @@ async function readVerifiedLegacyCaseBackupFile(
     ]);
   }
   return content;
-}
+};
 
-async function writeOrCopyLegacyCaseBackup(
+const writeOrCopyLegacyCaseBackup = async (
   stagingDirectory: string,
   sourceDirectory: string,
   manifest: ProjectAssetReadManifest,
   legacyCaseBackupFiles: LegacyCaseBackupFile[] | undefined,
   afterPathValidation?: (rootDirectory: string, relativePath: string) => Promise<void>,
-): Promise<void> {
+): Promise<void> => {
   if (manifest.schemaVersion !== projectAssetSchemaVersion || !manifest.legacyCaseBackupDirectory) {
     return;
   }
@@ -2138,21 +2138,21 @@ async function writeOrCopyLegacyCaseBackup(
     await fs.mkdir(path.dirname(targetPath), { recursive: true });
     await fs.writeFile(targetPath, content);
   }));
-}
+};
 
-async function readJson(
+const readJson = async (
   rootDirectory: string,
   relativePath: string,
   afterPathValidation?: (rootDirectory: string, relativePath: string) => Promise<void>,
-): Promise<unknown> {
+): Promise<unknown> => {
   return (await readJsonWithText(rootDirectory, relativePath, afterPathValidation)).value;
-}
+};
 
-async function readJsonWithText(
+const readJsonWithText = async (
   rootDirectory: string,
   relativePath: string,
   afterPathValidation?: (rootDirectory: string, relativePath: string) => Promise<void>,
-): Promise<{ value: unknown; text: string }> {
+): Promise<{ value: unknown; text: string }> => {
   try {
     const text = (await readInspectedProjectAssetFile(rootDirectory, relativePath, afterPathValidation)).toString('utf8');
     return { value: JSON.parse(text) as unknown, text };
@@ -2163,9 +2163,9 @@ async function readJsonWithText(
         : [{ path: relativePath, message: (error as Error).message || 'JSON 文件损坏或不存在。' }]),
     ]);
   }
-}
+};
 
-async function readLegacyManifestForBlockedPlan(rootDirectory: string): Promise<{ id: string } | undefined> {
+const readLegacyManifestForBlockedPlan = async (rootDirectory: string): Promise<{ id: string } | undefined> => {
   try {
     const candidate = (await readJson(rootDirectory, 'project.json')) as {
       schemaVersion?: unknown;
@@ -2177,9 +2177,9 @@ async function readLegacyManifestForBlockedPlan(rootDirectory: string): Promise<
   } catch {
     return undefined;
   }
-}
+};
 
-function projectFromSnapshot(snapshot: ProjectAssetSnapshot): ProjectDraft {
+const projectFromSnapshot = (snapshot: ProjectAssetSnapshot): ProjectDraft => {
   const {
     schemaVersion: _schemaVersion,
     revision: _revision,
@@ -2197,21 +2197,21 @@ function projectFromSnapshot(snapshot: ProjectAssetSnapshot): ProjectDraft {
     reusableFlows: structuredClone(snapshot.reusableFlows),
     suites: structuredClone(snapshot.suites),
   };
-}
+};
 
-export function calculateProjectAssetRevision(project: ProjectDraft): string {
+export const calculateProjectAssetRevision = (project: ProjectDraft): string => {
   const canonicalProject = JSON.stringify(canonicalize(sanitizeProjectAsset(project)));
   return createHash('sha256').update(canonicalProject, 'utf8').digest('hex');
-}
+};
 
-function calculateContentHash(content: string | Buffer): string {
+const calculateContentHash = (content: string | Buffer): string => {
   return createHash('sha256').update(content).digest('hex');
-}
+};
 
-async function calculateDirectoryContentRevision(
+const calculateDirectoryContentRevision = async (
   directory: string,
   afterPathValidation?: (rootDirectory: string, relativePath: string) => Promise<void>,
-): Promise<string> {
+): Promise<string> => {
   const hash = createHash('sha256');
   const entries = await listDirectoryTreeEntries(directory);
   for (const entry of entries) {
@@ -2224,9 +2224,9 @@ async function calculateDirectoryContentRevision(
     hash.update('\0', 'utf8');
   }
   return hash.digest('hex');
-}
+};
 
-function canonicalize(value: unknown): unknown {
+const canonicalize = (value: unknown): unknown => {
   if (Array.isArray(value)) {
     return value.map(canonicalize);
   }
@@ -2241,9 +2241,9 @@ function canonicalize(value: unknown): unknown {
     return result;
   }
   return value;
-}
+};
 
-async function pathExists(targetPath: string): Promise<boolean> {
+const pathExists = async (targetPath: string): Promise<boolean> => {
   try {
     await fs.stat(targetPath);
     return true;
@@ -2253,53 +2253,53 @@ async function pathExists(targetPath: string): Promise<boolean> {
     }
     throw error;
   }
-}
+};
 
-function errorMessage(error: unknown): string {
+const errorMessage = (error: unknown): string => {
   return error instanceof Error && error.message ? error.message : String(error);
-}
+};
 
-function sameIds(expected: string[], actual: string[]): boolean {
+const sameIds = (expected: string[], actual: string[]): boolean => {
   return expected.length === actual.length && expected.every((id) => actual.includes(id));
-}
+};
 
-function fixtureReferenceKey(reference: Pick<VersionedTestAssetReference, 'id' | 'version'>): string {
+const fixtureReferenceKey = (reference: Pick<VersionedTestAssetReference, 'id' | 'version'>): string => {
   return `${reference.id}@${reference.version}`;
-}
+};
 
-function reusableFlowReferenceKey(reference: Pick<VersionedTestAssetReference, 'id' | 'version'>): string {
+const reusableFlowReferenceKey = (reference: Pick<VersionedTestAssetReference, 'id' | 'version'>): string => {
   return `${reference.id}@${reference.version}`;
-}
+};
 
-function caseReferenceKey(reference: unknown): string {
+const caseReferenceKey = (reference: unknown): string => {
   if (!reference || typeof reference !== 'object') {
     return `${String(reference)}@`;
   }
   const candidate = reference as { id?: unknown; version?: unknown };
   return `${String(candidate.id)}@${String(candidate.version)}`;
-}
+};
 
-function suiteReferenceKey(reference: Pick<VersionedTestAssetReference, 'id' | 'version'>): string {
+const suiteReferenceKey = (reference: Pick<VersionedTestAssetReference, 'id' | 'version'>): string => {
   return `${reference.id}@${reference.version}`;
-}
+};
 
-function sameKeys(expected: string[], actual: string[]): boolean {
+const sameKeys = (expected: string[], actual: string[]): boolean => {
   return expected.length === actual.length && expected.every((key) => actual.includes(key));
-}
+};
 
-function isVersionedAssetReference(value: unknown): value is VersionedTestAssetReference {
+const isVersionedAssetReference = (value: unknown): value is VersionedTestAssetReference => {
   if (!value || typeof value !== 'object') {
     return false;
   }
   const reference = value as Partial<VersionedTestAssetReference>;
   return isNonEmptyString(reference.id) && isPositiveInteger(reference.version);
-}
+};
 
-function isPositiveInteger(value: unknown): value is number {
+const isPositiveInteger = (value: unknown): value is number => {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 1;
-}
+};
 
-function isSafeLegacyCaseBackupDirectory(value: unknown): value is string {
+const isSafeLegacyCaseBackupDirectory = (value: unknown): value is string => {
   if (typeof value !== 'string' || path.posix.isAbsolute(value) || path.win32.isAbsolute(value)) {
     return false;
   }
@@ -2311,9 +2311,9 @@ function isSafeLegacyCaseBackupDirectory(value: unknown): value is string {
     !value.includes('\\') &&
     path.posix.normalize(value) === value
   );
-}
+};
 
-function isSafeLegacyCaseBackupFile(value: unknown): value is string {
+const isSafeLegacyCaseBackupFile = (value: unknown): value is string => {
   if (typeof value !== 'string' || path.posix.isAbsolute(value) || path.win32.isAbsolute(value) || value.includes('\\')) {
     return false;
   }
@@ -2327,28 +2327,28 @@ function isSafeLegacyCaseBackupFile(value: unknown): value is string {
     segments[1]!.endsWith('.json') &&
     path.posix.normalize(value) === value
   );
-}
+};
 
-function isLegacyCaseBackupFileRecord(value: unknown): value is LegacyCaseBackupFileRecord {
+const isLegacyCaseBackupFileRecord = (value: unknown): value is LegacyCaseBackupFileRecord => {
   if (!value || typeof value !== 'object') {
     return false;
   }
   const record = value as Partial<LegacyCaseBackupFileRecord>;
   return isSafeLegacyCaseBackupFile(record.path) && isRevision(record.contentHash);
-}
+};
 
-function legacyCaseBackupFilePath(file: LegacyCaseBackupFileRecord | string): string {
+const legacyCaseBackupFilePath = (file: LegacyCaseBackupFileRecord | string): string => {
   return typeof file === 'string' ? file : file.path;
-}
+};
 
-function legacyCaseBackupFileContentHash(file: LegacyCaseBackupFileRecord | string): string | undefined {
+const legacyCaseBackupFileContentHash = (file: LegacyCaseBackupFileRecord | string): string | undefined => {
   return typeof file === 'string' ? undefined : file.contentHash;
-}
+};
 
-function isValidLegacyCaseBackupManifestDeclaration(
+const isValidLegacyCaseBackupManifestDeclaration = (
   directory: unknown,
   files: unknown,
-): boolean {
+): boolean => {
   if (directory === undefined && files === undefined) {
     return true;
   }
@@ -2360,19 +2360,19 @@ function isValidLegacyCaseBackupManifestDeclaration(
       new Set(files.map(legacyCaseBackupFilePath)).size === files.length
     ))
   );
-}
+};
 
-function sameLegacyCaseBackupDeclaration(
+const sameLegacyCaseBackupDeclaration = (
   left: LegacyCaseBackupDeclaration | undefined,
   right: LegacyCaseBackupDeclaration | undefined,
-): boolean {
+): boolean => {
   return JSON.stringify(left) === JSON.stringify(right);
-}
+};
 
-function isNonEmptyString(value: unknown): value is string {
+const isNonEmptyString = (value: unknown): value is string => {
   return typeof value === 'string' && Boolean(value.trim());
-}
+};
 
-function isRevision(value: unknown): value is string {
+const isRevision = (value: unknown): value is string => {
   return typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
-}
+};

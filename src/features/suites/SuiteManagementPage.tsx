@@ -19,11 +19,11 @@ import { Textarea } from '../../components/ui/textarea.js';
 import { EvidenceCard, PageBody, PageHeader, PageShell, ProjectRequiredState, Surface } from '../../components/workbench.js';
 import { useI18n } from '../../i18n/index.js';
 
-function referenceKey(reference: VersionedTestAssetReference): string {
+const referenceKey = (reference: VersionedTestAssetReference): string => {
   return `${reference.id}@${reference.version}`;
-}
+};
 
-export function SuiteManagementPage({
+export const SuiteManagementPage = ({
   project,
   selectedSuiteReference,
   isRunning,
@@ -49,7 +49,7 @@ export function SuiteManagementPage({
   onCancelSuite?: (runId: string) => void;
   onOpenRun: (runId: string) => void;
   onOpenProjects?: () => void;
-}) {
+}) => {
   const { t } = useI18n();
   const selectedSuite = project && selectedSuiteReference
     ? findSuiteAsset(project, selectedSuiteReference)
@@ -87,11 +87,11 @@ export function SuiteManagementPage({
     );
   }
 
-  function createDraft() {
+  const createDraft = () => {
     setDraft(createEmptySuiteAsset(project!, project!.suites.length + 1));
-  }
+  };
 
-  function editAsNewVersion() {
+  const editAsNewVersion = () => {
     if (!selectedSuite) {
       return;
     }
@@ -108,17 +108,17 @@ export function SuiteManagementPage({
       createdAt: now,
       updatedAt: now,
     });
-  }
+  };
 
-  function updateDraft(updater: (suite: SuiteAsset) => SuiteAsset) {
+  const updateDraft = (updater: (suite: SuiteAsset) => SuiteAsset) => {
     const current = draft ?? selectedSuite;
     if (!current) {
       return;
     }
     setDraft(updater(current));
-  }
+  };
 
-  function addCase(reference: VersionedTestAssetReference) {
+  const addCase = (reference: VersionedTestAssetReference) => {
     const testCase = listLatestTestCaseVersions(project!).find((candidate) => (
       candidate.id === reference.id && (candidate.version ?? 1) === reference.version
     ));
@@ -129,9 +129,9 @@ export function SuiteManagementPage({
       ...suite,
       caseReferences: [...suite.caseReferences, { id: testCase.id, version: testCase.version ?? 1, dependsOn: [] }],
     }));
-  }
+  };
 
-  function removeCase(reference: VersionedTestAssetReference) {
+  const removeCase = (reference: VersionedTestAssetReference) => {
     updateDraft((suite) => ({
       ...suite,
       caseReferences: suite.caseReferences
@@ -141,9 +141,9 @@ export function SuiteManagementPage({
           dependsOn: candidate.dependsOn.filter((dependency) => referenceKey(dependency) !== referenceKey(reference)),
         })),
     }));
-  }
+  };
 
-  function toggleDependency(reference: SuiteAsset['caseReferences'][number], dependency: VersionedTestAssetReference) {
+  const toggleDependency = (reference: SuiteAsset['caseReferences'][number], dependency: VersionedTestAssetReference) => {
     updateDraft((suite) => ({
       ...suite,
       caseReferences: suite.caseReferences.map((candidate) => {
@@ -159,9 +159,9 @@ export function SuiteManagementPage({
         };
       }),
     }));
-  }
+  };
 
-  function publishVersion() {
+  const publishVersion = () => {
     if (!editorSuite) {
       return;
     }
@@ -177,7 +177,7 @@ export function SuiteManagementPage({
     };
     onPublishSuite(published);
     setDraft(undefined);
-  }
+  };
 
   const selectedReferences = new Set(editorSuite?.caseReferences.map((reference) => reference.id) ?? []);
   const requestedConcurrency = editorSuite?.execution.concurrency ?? 1;
@@ -397,13 +397,13 @@ export function SuiteManagementPage({
       </PageBody>
     </PageShell>
   );
-}
+};
 
-function SuiteExecutionControls({ disabled, suite, onChange }: {
+const SuiteExecutionControls = ({ disabled, suite, onChange }: {
   disabled: boolean;
   suite: SuiteAsset;
   onChange: (updater: (suite: SuiteAsset) => SuiteAsset) => void;
-}) {
+}) => {
   const { t } = useI18n();
   return (
     <section className="grid gap-3 border-y border-border py-4 sm:grid-cols-3">
@@ -427,9 +427,9 @@ function SuiteExecutionControls({ disabled, suite, onChange }: {
       </div>
     </section>
   );
-}
+};
 
-function SuiteRunSummary({ lastRun, onOpenRun, project }: { lastRun: SuiteRunDetail; onOpenRun: (runId: string) => void; project: ProjectDraft }) {
+const SuiteRunSummary = ({ lastRun, onOpenRun, project }: { lastRun: SuiteRunDetail; onOpenRun: (runId: string) => void; project: ProjectDraft }) => {
   const { t } = useI18n();
   return (
     <Surface className="p-4" variant="panel">
@@ -458,13 +458,13 @@ function SuiteRunSummary({ lastRun, onOpenRun, project }: { lastRun: SuiteRunDet
       </div>
     </Surface>
   );
-}
+};
 
-function SuiteRunRecordSummary({ onOpenRun, project, record }: {
+const SuiteRunRecordSummary = ({ onOpenRun, project, record }: {
   onOpenRun: (runId: string) => void;
   project: ProjectDraft;
   record: SuiteRunRecord;
-}) {
+}) => {
   const { t } = useI18n();
   const counts = Object.entries(record.summary)
     .filter(([, count]) => count > 0)
@@ -509,17 +509,17 @@ function SuiteRunRecordSummary({ onOpenRun, project, record }: {
       </div>
     </Surface>
   );
-}
+};
 
-function suiteVersions(suites: SuiteAsset[]): SuiteAsset[] {
+const suiteVersions = (suites: SuiteAsset[]): SuiteAsset[] => {
   return [...suites].sort((left, right) =>
     left.name.localeCompare(right.name, 'zh-CN') ||
     left.id.localeCompare(right.id) ||
     right.version - left.version,
   );
-}
+};
 
-function clampInteger(value: string, minimum: number, maximum: number, fallback: number): number {
+const clampInteger = (value: string, minimum: number, maximum: number, fallback: number): number => {
   const parsed = Number(value);
   return Number.isSafeInteger(parsed) ? Math.max(minimum, Math.min(maximum, parsed)) : fallback;
-}
+};

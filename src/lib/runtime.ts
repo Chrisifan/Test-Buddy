@@ -73,204 +73,204 @@ import { createRecordingAgentRun } from '../../shared/recordingAgent.js';
 
 const listeners = new Set<(event: RunEventPayload) => void>();
 
-function nowLabel(): string {
+const nowLabel = (): string => {
   const now = new Date();
   return `${now.getHours().toString().padStart(2, '0')}:${now
     .getMinutes()
     .toString()
     .padStart(2, '0')}`;
-}
+};
 
-function emit(event: RunEventPayload) {
+const emit = (event: RunEventPayload) => {
   listeners.forEach((listener) => listener(event));
-}
+};
 
-function unsupportedBrowserFallbackReason(message: string): RunReason {
+const unsupportedBrowserFallbackReason = (message: string): RunReason => {
   return { code: 'unsupportedAction', message };
-}
+};
 
-function missingAssetVersionReason(message: string): RunReason {
+const missingAssetVersionReason = (message: string): RunReason => {
   return { code: 'missingAssetVersion', message };
-}
+};
 
-function terminalBrowserFallbackStatus(status: RunStatus): Exclude<RunStatus, 'running'> {
+const terminalBrowserFallbackStatus = (status: RunStatus): Exclude<RunStatus, 'running'> => {
   return status === 'running' ? 'blocked' : status;
-}
+};
 
-function getDesktopApi() {
+const getDesktopApi = () => {
   if (typeof window === 'undefined') {
     return null;
   }
 
   return window.desktopApi ?? null;
-}
+};
 
-export function canPublishProjectAssetSnapshot(): boolean {
+export const canPublishProjectAssetSnapshot = (): boolean => {
   return Boolean(getDesktopApi());
-}
+};
 
-export async function selectProjectAssetDirectory(): Promise<string | undefined> {
+export const selectProjectAssetDirectory = async (): Promise<string | undefined> => {
   const desktopApi = getDesktopApi();
   if (!desktopApi) {
     return undefined;
   }
 
   return (await desktopApi.selectProjectAssetDirectory()) ?? undefined;
-}
+};
 
-export async function planProjectAssetMigration(
+export const planProjectAssetMigration = async (
   request: ProjectAssetMigrationRequest,
-): Promise<ProjectAssetMigrationPlan | undefined> {
+): Promise<ProjectAssetMigrationPlan | undefined> => {
   const desktopApi = getDesktopApi();
   if (!desktopApi) {
     return undefined;
   }
 
   return desktopApi.planProjectAssetMigration(request);
-}
+};
 
-export async function writeProjectAssetSnapshot(request: ProjectAssetMigrationRequest): Promise<ProjectAssetBinding | undefined> {
+export const writeProjectAssetSnapshot = async (request: ProjectAssetMigrationRequest): Promise<ProjectAssetBinding | undefined> => {
   const desktopApi = getDesktopApi();
   if (!desktopApi) {
     return undefined;
   }
 
   return desktopApi.writeProjectAssetSnapshot(request);
-}
+};
 
-export async function inspectProjectAssetBinding(projectId: string): Promise<ProjectAssetBindingStatus | undefined> {
+export const inspectProjectAssetBinding = async (projectId: string): Promise<ProjectAssetBindingStatus | undefined> => {
   const desktopApi = getDesktopApi();
   if (!desktopApi || typeof desktopApi.inspectProjectAssetBinding !== 'function') {
     return undefined;
   }
 
   return (await desktopApi.inspectProjectAssetBinding(projectId)) ?? undefined;
-}
+};
 
-export async function planProjectAssetReload(
+export const planProjectAssetReload = async (
   request: ProjectAssetReloadRequest,
-): Promise<ProjectAssetReloadPlan | undefined> {
+): Promise<ProjectAssetReloadPlan | undefined> => {
   const desktopApi = getDesktopApi();
   if (!desktopApi || typeof desktopApi.planProjectAssetReload !== 'function') {
     return undefined;
   }
 
   return desktopApi.planProjectAssetReload(request);
-}
+};
 
-export async function reloadProjectAssetSnapshot(
+export const reloadProjectAssetSnapshot = async (
   request: ProjectAssetReloadRequest,
-): Promise<ProjectAssetReloadResult | undefined> {
+): Promise<ProjectAssetReloadResult | undefined> => {
   const desktopApi = getDesktopApi();
   if (!desktopApi || typeof desktopApi.reloadProjectAssetSnapshot !== 'function') {
     return undefined;
   }
 
   return desktopApi.reloadProjectAssetSnapshot(request);
-}
+};
 
-export async function planProjectAssetUpdate(
+export const planProjectAssetUpdate = async (
   request: ProjectAssetUpdateRequest,
-): Promise<ProjectAssetUpdatePlan | undefined> {
+): Promise<ProjectAssetUpdatePlan | undefined> => {
   const desktopApi = getDesktopApi();
   if (!desktopApi || typeof desktopApi.planProjectAssetUpdate !== 'function') {
     return undefined;
   }
 
   return desktopApi.planProjectAssetUpdate(request);
-}
+};
 
-export async function updateProjectAssetSnapshot(
+export const updateProjectAssetSnapshot = async (
   request: ProjectAssetUpdateRequest,
-): Promise<ProjectAssetBinding | undefined> {
+): Promise<ProjectAssetBinding | undefined> => {
   const desktopApi = getDesktopApi();
   if (!desktopApi || typeof desktopApi.updateProjectAssetSnapshot !== 'function') {
     return undefined;
   }
 
   return desktopApi.updateProjectAssetSnapshot(request);
-}
+};
 
-export async function listFixtureScriptTrusts(projectId: string): Promise<FixtureScriptTrustStatus[]> {
+export const listFixtureScriptTrusts = async (projectId: string): Promise<FixtureScriptTrustStatus[]> => {
   const desktopApi = getDesktopApi();
   if (!desktopApi || typeof desktopApi.listFixtureScriptTrusts !== 'function') {
     return [];
   }
   return desktopApi.listFixtureScriptTrusts(projectId);
-}
+};
 
-export async function approveFixtureScriptTrust(
+export const approveFixtureScriptTrust = async (
   request: FixtureScriptTrustRequest,
-): Promise<FixtureScriptTrustStatus | undefined> {
+): Promise<FixtureScriptTrustStatus | undefined> => {
   const desktopApi = getDesktopApi();
   if (!desktopApi || typeof desktopApi.approveFixtureScriptTrust !== 'function') {
     return undefined;
   }
   return desktopApi.approveFixtureScriptTrust(request);
-}
+};
 
-export async function openArtifact(artifactPath: string): Promise<void> {
+export const openArtifact = async (artifactPath: string): Promise<void> => {
   const desktopApi = getDesktopApi();
   if (!desktopApi) {
     return;
   }
 
   await desktopApi.openArtifact(artifactPath);
-}
+};
 
-export async function exportArtifact(artifactPath: string): Promise<boolean> {
+export const exportArtifact = async (artifactPath: string): Promise<boolean> => {
   const desktopApi = getDesktopApi();
   if (!desktopApi) {
     return false;
   }
 
   return desktopApi.exportArtifact(artifactPath);
-}
+};
 
-export async function exportProjectReport(request: ProjectReportExportRequest): Promise<boolean> {
+export const exportProjectReport = async (request: ProjectReportExportRequest): Promise<boolean> => {
   const desktopApi = getDesktopApi();
   if (!desktopApi) {
     return false;
   }
 
   return desktopApi.exportProjectReport(request);
-}
+};
 
-export async function cancelRun(runId: string): Promise<boolean> {
+export const cancelRun = async (runId: string): Promise<boolean> => {
   const desktopApi = getDesktopApi();
   if (!desktopApi) {
     return false;
   }
 
   return desktopApi.cancelRun(runId);
-}
+};
 
-export async function attachManualEvidence(): Promise<RunArtifact | undefined> {
+export const attachManualEvidence = async (): Promise<RunArtifact | undefined> => {
   const desktopApi = getDesktopApi();
   if (!desktopApi) {
     return undefined;
   }
 
   return (await desktopApi.attachManualEvidence()) ?? undefined;
-}
+};
 
-export async function planArtifactRetention(): Promise<ArtifactRetentionPlan | undefined> {
+export const planArtifactRetention = async (): Promise<ArtifactRetentionPlan | undefined> => {
   const desktopApi = getDesktopApi();
   if (!desktopApi || typeof desktopApi.planArtifactRetention !== 'function') {
     return undefined;
   }
   return desktopApi.planArtifactRetention();
-}
+};
 
-export async function confirmArtifactRetention(planId: string): Promise<ArtifactRetentionAudit | undefined> {
+export const confirmArtifactRetention = async (planId: string): Promise<ArtifactRetentionAudit | undefined> => {
   const desktopApi = getDesktopApi();
   if (!desktopApi || typeof desktopApi.confirmArtifactRetention !== 'function') {
     return undefined;
   }
   return desktopApi.confirmArtifactRetention(planId);
-}
+};
 
-export function canReviewMaintenanceDrafts(): boolean {
+export const canReviewMaintenanceDrafts = (): boolean => {
   const desktopApi = getDesktopApi();
   return Boolean(
     desktopApi &&
@@ -278,7 +278,7 @@ export function canReviewMaintenanceDrafts(): boolean {
     typeof desktopApi.rejectMaintenanceDraft === 'function' &&
     typeof desktopApi.openMaintenanceEvidence === 'function',
   );
-}
+};
 
 type MaintenanceDesktopOperation =
   | 'listMaintenanceDrafts'
@@ -287,37 +287,37 @@ type MaintenanceDesktopOperation =
   | 'rejectMaintenanceDraft'
   | 'openMaintenanceEvidence';
 
-function requireMaintenanceDesktopApi(operation: MaintenanceDesktopOperation) {
+const requireMaintenanceDesktopApi = (operation: MaintenanceDesktopOperation) => {
   const desktopApi = getDesktopApi();
   if (!desktopApi || typeof desktopApi[operation] !== 'function') {
     throw new Error('Maintenance review requires the desktop main-process runtime.');
   }
   return desktopApi;
-}
+};
 
-export async function listMaintenanceDrafts(): Promise<MaintenanceDraft[]> {
+export const listMaintenanceDrafts = async (): Promise<MaintenanceDraft[]> => {
   return requireMaintenanceDesktopApi('listMaintenanceDrafts').listMaintenanceDrafts();
-}
+};
 
-export async function createMaintenanceDraft(request: MaintenanceDraftCreationRequest): Promise<MaintenanceDraft> {
+export const createMaintenanceDraft = async (request: MaintenanceDraftCreationRequest): Promise<MaintenanceDraft> => {
   return requireMaintenanceDesktopApi('createMaintenanceDraft').createMaintenanceDraft(request);
-}
+};
 
-export async function acceptMaintenanceDraft(
+export const acceptMaintenanceDraft = async (
   request: MaintenanceDraftAcceptanceRequest,
-): Promise<MaintenanceDraftAcceptanceResult> {
+): Promise<MaintenanceDraftAcceptanceResult> => {
   return requireMaintenanceDesktopApi('acceptMaintenanceDraft').acceptMaintenanceDraft(request);
-}
+};
 
-export async function rejectMaintenanceDraft(request: MaintenanceDraftRejectionRequest): Promise<MaintenanceDraft> {
+export const rejectMaintenanceDraft = async (request: MaintenanceDraftRejectionRequest): Promise<MaintenanceDraft> => {
   return requireMaintenanceDesktopApi('rejectMaintenanceDraft').rejectMaintenanceDraft(request);
-}
+};
 
-export async function openMaintenanceEvidence(request: MaintenanceEvidenceOpenRequest): Promise<void> {
+export const openMaintenanceEvidence = async (request: MaintenanceEvidenceOpenRequest): Promise<void> => {
   return requireMaintenanceDesktopApi('openMaintenanceEvidence').openMaintenanceEvidence(request);
-}
+};
 
-export async function testMidsceneConnection(config: MidsceneConfig): Promise<MidsceneConnectionTestResult> {
+export const testMidsceneConnection = async (config: MidsceneConfig): Promise<MidsceneConnectionTestResult> => {
   const desktopApi = getDesktopApi();
   if (desktopApi) {
     return desktopApi.testMidsceneConnection(config);
@@ -329,27 +329,27 @@ export async function testMidsceneConnection(config: MidsceneConfig): Promise<Mi
     durationMs: 0,
     failure: 'network',
   };
-}
+};
 
-export async function saveModelSecret(request: SaveModelSecretRequest): Promise<ModelSecretRef> {
+export const saveModelSecret = async (request: SaveModelSecretRequest): Promise<ModelSecretRef> => {
   const desktopApi = getDesktopApi();
   if (!desktopApi || typeof desktopApi.saveModelSecret !== 'function') {
     throw new Error('模型密钥只能在桌面端安全保存。');
   }
   return desktopApi.saveModelSecret(request);
-}
+};
 
-export async function clearModelSecret(request: ClearModelSecretRequest): Promise<ModelSecretRef> {
+export const clearModelSecret = async (request: ClearModelSecretRequest): Promise<ModelSecretRef> => {
   const desktopApi = getDesktopApi();
   if (!desktopApi || typeof desktopApi.clearModelSecret !== 'function') {
     throw new Error('模型密钥只能在桌面端安全清除。');
   }
   return desktopApi.clearModelSecret(request);
-}
+};
 
-export async function analyzePrdDocument(
+export const analyzePrdDocument = async (
   request: PrdSemanticAnalysisRequest,
-): Promise<PrdSemanticAnalysisResponse> {
+): Promise<PrdSemanticAnalysisResponse> => {
   const desktopApi = getDesktopApi();
   if (desktopApi) {
     return desktopApi.analyzePrdDocument(request);
@@ -368,17 +368,17 @@ export async function analyzePrdDocument(
     source: 'rule',
     fallbackReason: 'desktopUnavailable',
   };
-}
+};
 
-function describeRuntimeProfile(profile: RuntimeProfile): string {
+const describeRuntimeProfile = (profile: RuntimeProfile): string => {
   return `${profile.browser} / ${profile.viewport} / ${profile.headless ? 'headless' : 'headed'} / ${profile.baseUrl}`;
-}
+};
 
-function makeAssistantReply(
+const makeAssistantReply = (
   mode: ChatCommandRequest['mode'],
   prompt: string,
   runtimeProfile: RuntimeProfile,
-): string {
+): string => {
   if (mode === 'aiAssert') {
     return `已记录一条断言：${prompt}。当前运行配置为 ${describeRuntimeProfile(runtimeProfile)}，后续接入执行引擎后，这里会展示真实断言结果和失败原因。`;
   }
@@ -388,14 +388,14 @@ function makeAssistantReply(
   }
 
   return `已记录一条动作指令：${prompt}。当前运行配置为 ${describeRuntimeProfile(runtimeProfile)}，UI 和命令协议已经与桌面端保持一致。`;
-}
+};
 
-function extractExplicitUrl(text: string): string | undefined {
+const extractExplicitUrl = (text: string): string | undefined => {
   const match = text.match(/https?:\/\/[^\s"'<>，。；、)）\]]+/i);
   return match?.[0];
-}
+};
 
-function extractClickIntent(text: string): { selector?: string; target?: string } | undefined {
+const extractClickIntent = (text: string): { selector?: string; target?: string } | undefined => {
   const selectorMatch = text.match(/(?:点击|click)\s*(`[^`]+`|#[\w-]+|\.[\w-]+|\[[^\]]+\])/i);
   if (selectorMatch?.[1]) {
     return { selector: selectorMatch[1].replace(/^`|`$/g, '') };
@@ -404,9 +404,9 @@ function extractClickIntent(text: string): { selector?: string; target?: string 
   const targetMatch = text.match(/(?:点击|click)\s*([^，。；,.、\n]+)/i);
   const target = targetMatch?.[1]?.trim();
   return target ? { target } : undefined;
-}
+};
 
-function extractInputIntent(text: string): { selector?: string; target?: string; value: string } | undefined {
+const extractInputIntent = (text: string): { selector?: string; target?: string; value: string } | undefined => {
   const selectorInput = text.match(
     /(?:在|向|给|输入到|填入)\s*(`[^`]+`|#[\w-]+|\.[\w-]+|\[[^\]]+\])\s*(?:中|里)?\s*(?:输入|填入|填写)\s*([^，。；,\n]+)/i,
   );
@@ -434,9 +434,9 @@ function extractInputIntent(text: string): { selector?: string; target?: string;
   }
 
   return undefined;
-}
+};
 
-export async function startSession(request: SessionStartRequest): Promise<ChatEntry> {
+export const startSession = async (request: SessionStartRequest): Promise<ChatEntry> => {
   const desktopApi = getDesktopApi();
   if (desktopApi) {
     return desktopApi.startSession(request);
@@ -447,9 +447,9 @@ export async function startSession(request: SessionStartRequest): Promise<ChatEn
     role: 'system',
     text: `浏览器 fallback runtime 已启动会话，当前环境为 ${request.targetEnvironment}，运行配置为 ${describeRuntimeProfile(request.runtimeProfile)}。`,
   };
-}
+};
 
-export async function saveCredential(request: SaveCredentialRequest): Promise<CredentialRef> {
+export const saveCredential = async (request: SaveCredentialRequest): Promise<CredentialRef> => {
   const desktopApi = getDesktopApi();
   if (desktopApi) {
     return desktopApi.saveCredential(request);
@@ -463,37 +463,37 @@ export async function saveCredential(request: SaveCredentialRequest): Promise<Cr
     updatedAt: new Date().toISOString(),
     hasSecret: Boolean(request.secret),
   };
-}
+};
 
 /** The desktop main process selects and reads the storageState file directly. */
-export async function importStorageState(request: ImportStorageStateRequest): Promise<StorageStateRef | undefined> {
+export const importStorageState = async (request: ImportStorageStateRequest): Promise<StorageStateRef | undefined> => {
   const desktopApi = getDesktopApi();
   if (!desktopApi || typeof desktopApi.importStorageState !== 'function') {
     return undefined;
   }
   return (await desktopApi.importStorageState(request)) ?? undefined;
-}
+};
 
-export async function captureStorageState(request: CaptureStorageStateRequest): Promise<StorageStateRef | undefined> {
+export const captureStorageState = async (request: CaptureStorageStateRequest): Promise<StorageStateRef | undefined> => {
   const desktopApi = getDesktopApi();
   if (!desktopApi || typeof desktopApi.captureStorageState !== 'function') {
     return undefined;
   }
   return desktopApi.captureStorageState(request);
-}
+};
 
-export async function revokeStorageState(request: RevokeStorageStateRequest): Promise<boolean> {
+export const revokeStorageState = async (request: RevokeStorageStateRequest): Promise<boolean> => {
   const desktopApi = getDesktopApi();
   if (!desktopApi || typeof desktopApi.revokeStorageState !== 'function') {
     return false;
   }
   await desktopApi.revokeStorageState(request);
   return true;
-}
+};
 
-export async function startBrowserSession(
+export const startBrowserSession = async (
   request: BrowserSessionRequest,
-): Promise<BrowserSessionState> {
+): Promise<BrowserSessionState> => {
   const desktopApi = getDesktopApi();
   if (desktopApi) {
     return desktopApi.startBrowserSession(request);
@@ -514,11 +514,11 @@ export async function startBrowserSession(
     message: '浏览器预览模式使用模拟受控会话。',
     updatedAt: new Date().toISOString(),
   };
-}
+};
 
-export async function navigateBrowserSession(
+export const navigateBrowserSession = async (
   request: BrowserNavigateRequest,
-): Promise<BrowserSessionState> {
+): Promise<BrowserSessionState> => {
   const desktopApi = getDesktopApi();
   if (desktopApi) {
     return desktopApi.navigateBrowserSession(request);
@@ -532,9 +532,9 @@ export async function navigateBrowserSession(
     message: '浏览器预览模式已记录导航 URL。',
     updatedAt: new Date().toISOString(),
   };
-}
+};
 
-export async function captureBrowserSnapshot(): Promise<BrowserSessionState> {
+export const captureBrowserSnapshot = async (): Promise<BrowserSessionState> => {
   const desktopApi = getDesktopApi();
   if (desktopApi) {
     return desktopApi.captureBrowserSnapshot();
@@ -548,9 +548,9 @@ export async function captureBrowserSnapshot(): Promise<BrowserSessionState> {
     message: '浏览器预览模式已生成模拟快照。',
     updatedAt: new Date().toISOString(),
   };
-}
+};
 
-export async function endSession(): Promise<ChatEntry> {
+export const endSession = async (): Promise<ChatEntry> => {
   const desktopApi = getDesktopApi();
   if (desktopApi) {
     return desktopApi.endSession();
@@ -561,11 +561,11 @@ export async function endSession(): Promise<ChatEntry> {
     role: 'system',
     text: '浏览器 fallback runtime 已结束会话。',
   };
-}
+};
 
-export async function sendChatCommand(
+export const sendChatCommand = async (
   request: ChatCommandRequest,
-): Promise<ChatCommandResponse> {
+): Promise<ChatCommandResponse> => {
   const desktopApi = getDesktopApi();
   if (desktopApi) {
     return desktopApi.sendChatCommand(request);
@@ -664,11 +664,11 @@ export async function sendChatCommand(
     },
     agentRun,
   };
-}
+};
 
-export async function runWorkflow(
+export const runWorkflow = async (
   request: RunWorkflowRequest,
-): Promise<RunWorkflowResponse> {
+): Promise<RunWorkflowResponse> => {
   const desktopApi = getDesktopApi();
   if (desktopApi) {
     return desktopApi.runWorkflow(request);
@@ -721,9 +721,9 @@ export async function runWorkflow(
   });
 
   return { runId, title, detail, agentRun };
-}
+};
 
-export async function runTestCase(request: RunTestCaseRequest): Promise<RunTestCaseResponse> {
+export const runTestCase = async (request: RunTestCaseRequest): Promise<RunTestCaseResponse> => {
   const desktopApi = getDesktopApi();
   if (desktopApi) {
     return desktopApi.runTestCase({
@@ -832,12 +832,12 @@ export async function runTestCase(request: RunTestCaseRequest): Promise<RunTestC
   }, 600);
 
   return { runId, title, detail };
-}
+};
 
-function createMissingLegacyCaseResponse(
+const createMissingLegacyCaseResponse = (
   request: RunTestCaseRequest,
   reference: { id: string; version: number },
-): RunTestCaseResponse {
+): RunTestCaseResponse => {
   const runId = request.runId ?? `run-${Date.now().toString().slice(-5)}`;
   const now = new Date().toISOString();
   const title = `Case ${reference.id}@${reference.version}`;
@@ -862,9 +862,9 @@ function createMissingLegacyCaseResponse(
       artifacts: [],
     },
   };
-}
+};
 
-export async function runSuite(request: RunSuiteRequest): Promise<RunSuiteResponse> {
+export const runSuite = async (request: RunSuiteRequest): Promise<RunSuiteResponse> => {
   const desktopApi = getDesktopApi();
   if (desktopApi) {
     return desktopApi.runSuite({
@@ -970,9 +970,9 @@ export async function runSuite(request: RunSuiteRequest): Promise<RunSuiteRespon
       caseDetails,
     },
   };
-}
+};
 
-export async function runRecording(request: RunRecordingRequest): Promise<RunRecordingResponse> {
+export const runRecording = async (request: RunRecordingRequest): Promise<RunRecordingResponse> => {
   const desktopApi = getDesktopApi();
   if (desktopApi) {
     return desktopApi.runRecording(request);
@@ -1027,45 +1027,45 @@ export async function runRecording(request: RunRecordingRequest): Promise<RunRec
   });
 
   return { runId, title, detail, agentRun };
-}
+};
 
-export async function loadRunDetail(runId: string): Promise<RunDetail | null> {
+export const loadRunDetail = async (runId: string): Promise<RunDetail | null> => {
   const desktopApi = getDesktopApi();
   if (desktopApi) {
     return desktopApi.loadRunDetail(runId);
   }
 
   return null;
-}
+};
 
-export async function loadSuiteRunRecord(runId: string): Promise<SuiteRunRecord | null> {
+export const loadSuiteRunRecord = async (runId: string): Promise<SuiteRunRecord | null> => {
   const desktopApi = getDesktopApi();
   if (desktopApi && typeof desktopApi.loadSuiteRunRecord === 'function') {
     return desktopApi.loadSuiteRunRecord(runId);
   }
 
   return null;
-}
+};
 
-export async function planHistoricalRerun(runId: string): Promise<HistoricalRerunPlan> {
+export const planHistoricalRerun = async (runId: string): Promise<HistoricalRerunPlan> => {
   const desktopApi = getDesktopApi();
   if (desktopApi) {
     return desktopApi.planHistoricalRerun(runId);
   }
 
   return unavailableHistoricalRerunPlan(runId);
-}
+};
 
-export async function runHistoricalRerun(runId: string): Promise<HistoricalRerunExecutionResult> {
+export const runHistoricalRerun = async (runId: string): Promise<HistoricalRerunExecutionResult> => {
   const desktopApi = getDesktopApi();
   if (desktopApi) {
     return desktopApi.runHistoricalRerun(runId);
   }
 
   return unavailableHistoricalRerunPlan(runId);
-}
+};
 
-function unavailableHistoricalRerunPlan(runId: string): Extract<HistoricalRerunPlan, { status: 'blocked' }> {
+const unavailableHistoricalRerunPlan = (runId: string): Extract<HistoricalRerunPlan, { status: 'blocked' }> => {
   return {
     status: 'blocked',
     runId,
@@ -1075,9 +1075,9 @@ function unavailableHistoricalRerunPlan(runId: string): Extract<HistoricalRerunP
     },
     missingReferences: [],
   };
-}
+};
 
-export function onRunEvent(listener: (event: RunEventPayload) => void): () => void {
+export const onRunEvent = (listener: (event: RunEventPayload) => void): () => void => {
   const desktopApi = getDesktopApi();
   if (desktopApi) {
     return desktopApi.onRunEvent(listener);
@@ -1087,13 +1087,13 @@ export function onRunEvent(listener: (event: RunEventPayload) => void): () => vo
   return () => {
     listeners.delete(listener);
   };
-}
+};
 
-export function onRecordingEvent(listener: (event: RecordingCapturedEvent) => void): () => void {
+export const onRecordingEvent = (listener: (event: RecordingCapturedEvent) => void): () => void => {
   const desktopApi = getDesktopApi();
   if (desktopApi) {
     return desktopApi.onRecordingEvent(listener);
   }
 
   return () => {};
-}
+};

@@ -10,7 +10,7 @@ export interface SecretRedactor {
  * Main-process-only protection for values that may contain a resolved model key.
  * The caller supplies resolved configs; no secret-bearing API crosses this module's boundary.
  */
-export function createSecretRedactor(...configSources: unknown[]): SecretRedactor {
+export const createSecretRedactor = (...configSources: unknown[]): SecretRedactor => {
   const secrets = collectModelApiKeys(configSources);
 
   const redactText = (value: string): string =>
@@ -21,9 +21,9 @@ export function createSecretRedactor(...configSources: unknown[]): SecretRedacto
     redactError: (error) => redactText(error instanceof Error ? error.message : String(error)),
     redactValue: <T>(value: T): T => redactUnknown(value, redactText) as T,
   };
-}
+};
 
-function collectModelApiKeys(sources: unknown[]): string[] {
+const collectModelApiKeys = (sources: unknown[]): string[] => {
   const keys = new Set<string>();
   const visited = new WeakSet<object>();
 
@@ -40,9 +40,9 @@ function collectModelApiKeys(sources: unknown[]): string[] {
 
   sources.forEach(visit);
   return [...keys].sort((left, right) => right.length - left.length);
-}
+};
 
-function redactUnknown(value: unknown, redactText: (value: string) => string, visited = new WeakMap<object, unknown>()): unknown {
+const redactUnknown = (value: unknown, redactText: (value: string) => string, visited = new WeakMap<object, unknown>()): unknown => {
   if (typeof value === 'string') {
     return redactText(value);
   }
@@ -67,4 +67,4 @@ function redactUnknown(value: unknown, redactText: (value: string) => string, vi
     copy[key] = redactUnknown(entry, redactText, visited);
   });
   return copy;
-}
+};

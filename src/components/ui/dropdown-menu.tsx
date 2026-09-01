@@ -3,27 +3,27 @@ import * as DropdownMenuPrimitive from '@radix-ui/react-dropdown-menu';
 
 import { cn } from '@/lib/utils';
 
-function DropdownMenu(props: React.ComponentProps<typeof DropdownMenuPrimitive.Root>) {
+const DropdownMenu = (props: React.ComponentProps<typeof DropdownMenuPrimitive.Root>) => {
   return <DropdownMenuPrimitive.Root data-slot="dropdown-menu" {...props} />;
-}
+};
 
-function DropdownMenuTrigger(props: React.ComponentProps<typeof DropdownMenuPrimitive.Trigger>) {
+const DropdownMenuTrigger = (props: React.ComponentProps<typeof DropdownMenuPrimitive.Trigger>) => {
   return <DropdownMenuPrimitive.Trigger data-slot="dropdown-menu-trigger" {...props} />;
-}
+};
 
-function DropdownMenuGroup(props: React.ComponentProps<typeof DropdownMenuPrimitive.Group>) {
+const DropdownMenuGroup = (props: React.ComponentProps<typeof DropdownMenuPrimitive.Group>) => {
   return <DropdownMenuPrimitive.Group data-slot="dropdown-menu-group" {...props} />;
-}
+};
 
-function DropdownMenuPortal(props: React.ComponentProps<typeof DropdownMenuPrimitive.Portal>) {
+const DropdownMenuPortal = (props: React.ComponentProps<typeof DropdownMenuPrimitive.Portal>) => {
   return <DropdownMenuPrimitive.Portal data-slot="dropdown-menu-portal" {...props} />;
-}
+};
 
-function DropdownMenuContent({
+const DropdownMenuContent = ({
   className,
   sideOffset = 4,
   ...props
-}: React.ComponentProps<typeof DropdownMenuPrimitive.Content>) {
+}: React.ComponentProps<typeof DropdownMenuPrimitive.Content>) => {
   return (
     <DropdownMenuPortal>
       <DropdownMenuPrimitive.Content
@@ -37,13 +37,13 @@ function DropdownMenuContent({
       />
     </DropdownMenuPortal>
   );
-}
+};
 
-function DropdownMenuItem({
+const DropdownMenuItem = ({
   className,
   inset,
   ...props
-}: React.ComponentProps<typeof DropdownMenuPrimitive.Item> & { inset?: boolean }) {
+}: React.ComponentProps<typeof DropdownMenuPrimitive.Item> & { inset?: boolean }) => {
   return (
     <DropdownMenuPrimitive.Item
       className={cn(
@@ -55,12 +55,12 @@ function DropdownMenuItem({
       {...props}
     />
   );
-}
+};
 
-function DropdownMenuLabel({
+const DropdownMenuLabel = ({
   className,
   ...props
-}: React.ComponentProps<typeof DropdownMenuPrimitive.Label>) {
+}: React.ComponentProps<typeof DropdownMenuPrimitive.Label>) => {
   return (
     <DropdownMenuPrimitive.Label
       className={cn('px-2 py-1.5 text-xs font-semibold text-muted-foreground', className)}
@@ -68,12 +68,12 @@ function DropdownMenuLabel({
       {...props}
     />
   );
-}
+};
 
-function DropdownMenuSeparator({
+const DropdownMenuSeparator = ({
   className,
   ...props
-}: React.ComponentProps<typeof DropdownMenuPrimitive.Separator>) {
+}: React.ComponentProps<typeof DropdownMenuPrimitive.Separator>) => {
   return (
     <DropdownMenuPrimitive.Separator
       className={cn('-mx-1 my-1 h-px bg-border', className)}
@@ -81,7 +81,7 @@ function DropdownMenuSeparator({
       {...props}
     />
   );
-}
+};
 
 export {
   DropdownMenu,

@@ -23,11 +23,11 @@ import { Textarea } from '../../components/ui/textarea.js';
 import { EvidenceCard, PageBody, PageHeader, PageShell, ProjectRequiredState, Surface } from '../../components/workbench.js';
 import { useI18n } from '../../i18n/index.js';
 
-function referenceKey(reference: VersionedTestAssetReference): string {
+const referenceKey = (reference: VersionedTestAssetReference): string => {
   return `${reference.id}@${reference.version}`;
-}
+};
 
-export function ReusableFlowsPage({
+export const ReusableFlowsPage = ({
   project,
   selectedReference,
   onSelectFlow,
@@ -41,7 +41,7 @@ export function ReusableFlowsPage({
   onPublishFlow: (flow: ReusableFlowAsset) => void;
   onOpenProjects?: () => void;
   onUpgradeCases?: (source: VersionedTestAssetReference, target: VersionedTestAssetReference, selected: VersionedTestAssetReference[]) => void;
-}) {
+}) => {
   const { t } = useI18n();
   const selected = project && selectedReference ? findReusableFlowAsset(project, selectedReference) : undefined;
   const [draft, setDraft] = useState<ReusableFlowAsset>();
@@ -87,21 +87,21 @@ export function ReusableFlowsPage({
       .reduce((highestVersion, flow) => Math.max(highestVersion, flow.version), selected.version) + 1
     : editor?.version;
 
-  function createDraft() {
+  const createDraft = () => {
     setDraft(createEmptyReusableFlowAsset(currentProject.reusableFlows.length + 1));
-  }
+  };
 
-  function editAsNewVersion() {
+  const editAsNewVersion = () => {
     if (!selected) return;
     setDraft(structuredClone(selected));
-  }
+  };
 
-  function updateDraft(updater: (flow: ReusableFlowAsset) => ReusableFlowAsset) {
+  const updateDraft = (updater: (flow: ReusableFlowAsset) => ReusableFlowAsset) => {
     const current = draft ?? selected;
     if (current) setDraft(updater(current));
-  }
+  };
 
-  function addNavigationStep() {
+  const addNavigationStep = () => {
     updateDraft((flow) => ({
       ...flow,
       steps: [...flow.steps, {
@@ -118,9 +118,9 @@ export function ReusableFlowsPage({
         },
       }],
     }));
-  }
+  };
 
-  function publish() {
+  const publish = () => {
     if (!draft || issues.length) return;
     const published = selected && selected.id === draft.id
       ? createNextReusableFlowVersion(currentProject, selected, {
@@ -133,9 +133,9 @@ export function ReusableFlowsPage({
     onPublishFlow(published);
     onSelectFlow({ id: published.id, version: published.version });
     setDraft(undefined);
-  }
+  };
 
-  function openUpgradeConfirmation() {
+  const openUpgradeConfirmation = () => {
     if (!impact) return;
     const latestCases = new Map<string, VersionedTestAssetReference>();
     impact.directCases.forEach((item) => {
@@ -145,9 +145,9 @@ export function ReusableFlowsPage({
       }
     });
     setUpgradeSelection([...latestCases.values()]);
-  }
+  };
 
-  function toggleUpgradeCase(reference: VersionedTestAssetReference, checked: boolean) {
+  const toggleUpgradeCase = (reference: VersionedTestAssetReference, checked: boolean) => {
     setUpgradeSelection((current) => {
       const selectedCases = current ?? [];
       if (checked) {
@@ -157,13 +157,13 @@ export function ReusableFlowsPage({
       }
       return selectedCases.filter((candidate) => referenceKey(candidate) !== referenceKey(reference));
     });
-  }
+  };
 
-  function confirmUpgrade() {
+  const confirmUpgrade = () => {
     if (!selected || !targetReference || !upgradeSelection?.length || !onUpgradeCases || upgradePlan?.issues.length) return;
     onUpgradeCases({ id: selected.id, version: selected.version }, targetReference, upgradeSelection);
     setUpgradeSelection(undefined);
-  }
+  };
 
   return (
     <PageShell>
@@ -212,4 +212,4 @@ export function ReusableFlowsPage({
       </Dialog>
     </PageShell>
   );
-}
+};

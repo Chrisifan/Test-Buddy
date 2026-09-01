@@ -6,15 +6,15 @@ import {
 
 const STORAGE_KEY = 'midscene-studio-state-v2';
 
-function getDesktopApi() {
+const getDesktopApi = () => {
   if (typeof window === 'undefined') {
     return null;
   }
 
   return window.desktopApi ?? null;
-}
+};
 
-export async function loadStudioState(): Promise<StudioState> {
+export const loadStudioState = async (): Promise<StudioState> => {
   const desktopApi = getDesktopApi();
   if (desktopApi) {
     return hydrateStudioState(await desktopApi.loadStudioState());
@@ -31,9 +31,9 @@ export async function loadStudioState(): Promise<StudioState> {
     localStorage.removeItem(STORAGE_KEY);
     return hydrateStudioState(null);
   }
-}
+};
 
-export async function saveStudioState(state: StudioState): Promise<void> {
+export const saveStudioState = async (state: StudioState): Promise<void> => {
   const desktopApi = getDesktopApi();
   if (desktopApi) {
     await desktopApi.saveStudioState(state);
@@ -41,9 +41,9 @@ export async function saveStudioState(state: StudioState): Promise<void> {
   }
 
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-}
+};
 
-export async function getRuntimeInfo(): Promise<RuntimeInfo> {
+export const getRuntimeInfo = async (): Promise<RuntimeInfo> => {
   const desktopApi = getDesktopApi();
   if (desktopApi) {
     return desktopApi.getRuntimeInfo();
@@ -53,4 +53,4 @@ export async function getRuntimeInfo(): Promise<RuntimeInfo> {
     platform: 'browser',
     persistence: 'localStorage',
   };
-}
+};

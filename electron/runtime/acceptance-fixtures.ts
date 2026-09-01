@@ -21,7 +21,7 @@ export interface LocalAcceptanceFixtureServer {
 }
 
 /** Starts the only HTTP server used by local acceptance; it is bound to loopback. */
-export async function startLocalAcceptanceFixtureServer(): Promise<LocalAcceptanceFixtureServer> {
+export const startLocalAcceptanceFixtureServer = async (): Promise<LocalAcceptanceFixtureServer> => {
   const server = http.createServer((_request, response) => {
     response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
     response.end('<!doctype html><title>TestBuddy local acceptance fixture</title><main>ready</main>');
@@ -39,10 +39,10 @@ export async function startLocalAcceptanceFixtureServer(): Promise<LocalAcceptan
     url: `http://127.0.0.1:${address.port}`,
     close: () => new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())),
   };
-}
+};
 
 /** Builds the repository-owned, model-free fixture used for local acceptance only. */
-export function createLocalAcceptanceFixture(baseUrl: string): LocalAcceptanceFixture {
+export const createLocalAcceptanceFixture = (baseUrl: string): LocalAcceptanceFixture => {
   const project = createEmptyProject(20);
   const environment: ProjectEnvironment = {
     ...project.environments[0]!,
@@ -83,5 +83,5 @@ export function createLocalAcceptanceFixture(baseUrl: string): LocalAcceptanceFi
   };
 
   return { project: immutableProject, environment, suite, revision: calculateProjectAssetRevision(immutableProject) };
-}
+};
 import http from 'node:http';

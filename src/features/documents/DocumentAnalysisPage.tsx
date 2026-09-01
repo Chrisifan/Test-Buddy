@@ -36,7 +36,7 @@ type TriageRequest = {
   note: string;
 };
 
-export function DocumentAnalysisPage({
+export const DocumentAnalysisPage = ({
   project,
   selectedDocumentId,
   onSelectDocument,
@@ -79,7 +79,7 @@ export function DocumentAnalysisPage({
   semanticAnalyzingDocumentId: string | null;
   semanticAnalysisError: string | null;
   onOpenProjects?: () => void;
-}) {
+}) => {
   const { t } = useI18n();
   const [isCoverageMatrixOpen, setIsCoverageMatrixOpen] = useState(false);
   const [matrixFilter, setMatrixFilter] = useState<MatrixFilter>('all');
@@ -160,11 +160,11 @@ export function DocumentAnalysisPage({
     [coverageMatrix, matrixFilter, triageFilter],
   );
 
-  function openTriageRequest(
+  const openTriageRequest = (
     row: (typeof coverageMatrix)[number],
     target: PrdCoverageTarget,
     status: PrdCoverageTriageDecisionStatus,
-  ) {
+  ) => {
     const decision = target === 'case' ? row.caseDecision : row.recordingDecision;
     setTriageRequest({
       documentId: row.document.id,
@@ -173,14 +173,14 @@ export function DocumentAnalysisPage({
       status,
       note: decision?.note ?? '',
     });
-  }
+  };
   const selectedFallbackReason = selectedDocument?.analysisMetadata?.fallbackReason;
   const selectedFallbackMessage = selectedFallbackReason
     ? analysisFallbackMessage(selectedFallbackReason, t)
     : null;
   const isSemanticAnalyzing = semanticAnalyzingDocumentId === selectedDocument?.id;
 
-  async function handleFileChange(file?: File) {
+  const handleFileChange = async (file?: File) => {
     if (!file) {
       return;
     }
@@ -205,7 +205,7 @@ export function DocumentAnalysisPage({
       size: file.size,
       sourceText,
     });
-  }
+  };
 
   if (!project) {
     return (
@@ -567,12 +567,12 @@ export function DocumentAnalysisPage({
       </Dialog>
     </PageShell>
   );
-}
+};
 
-function analysisFallbackMessage(
+const analysisFallbackMessage = (
   reason: PrdAnalysisFallbackReason,
   t: ReturnType<typeof useI18n>['t'],
-): string {
+): string => {
   if (reason === 'modelDisabled') {
     return t('documents.analysis.fallback.disabled');
   }
@@ -589,9 +589,9 @@ function analysisFallbackMessage(
     return t('documents.analysis.fallback.invalidResponse');
   }
   return t('documents.analysis.fallback.desktopUnavailable');
-}
+};
 
-function GeneratedPathCard({
+const GeneratedPathCard = ({
   path,
   covered,
   recordingCreated,
@@ -603,7 +603,7 @@ function GeneratedPathCard({
   recordingCreated: boolean;
   onCreateCase: () => void;
   onCreateRecording: () => void;
-}) {
+}) => {
   const { t } = useI18n();
 
   return (
@@ -660,9 +660,9 @@ function GeneratedPathCard({
       </div>
     </article>
   );
-}
+};
 
-function TriageCell({
+const TriageCell = ({
   covered,
   note,
   onCreate,
@@ -680,7 +680,7 @@ function TriageCell({
   onRestore: () => void;
   status: PrdCoverageTriageStatus;
   target: PrdCoverageTarget;
-}) {
+}) => {
   const { t } = useI18n();
   const createLabel = target === 'case' ? t('documents.path.createCase') : t('documents.path.createRecording');
 
@@ -714,4 +714,4 @@ function TriageCell({
       ) : null}
     </div>
   );
-}
+};

@@ -23,7 +23,7 @@ import {
 import { Textarea } from '@/components/ui/textarea';
 import { useI18n } from '../../i18n/index.js';
 
-function getWorkflowKindLabel(workflow: WorkflowDraft, t: (key: string) => string): string {
+const getWorkflowKindLabel = (workflow: WorkflowDraft, t: (key: string) => string): string => {
   if (workflow.kind === 'assertion') {
     return t('cases.step.assert');
   }
@@ -33,9 +33,9 @@ function getWorkflowKindLabel(workflow: WorkflowDraft, t: (key: string) => strin
   }
 
   return t('app.nav.workflow');
-}
+};
 
-function getStepTypeLabel(type: WorkflowStepDraft['type'], t: (key: string) => string): string {
+const getStepTypeLabel = (type: WorkflowStepDraft['type'], t: (key: string) => string): string => {
   if (type === 'aiAssert') {
     return t('cases.step.assert');
   }
@@ -45,9 +45,9 @@ function getStepTypeLabel(type: WorkflowStepDraft['type'], t: (key: string) => s
   }
 
   return t('cases.step.action');
-}
+};
 
-export function WorkflowPage({
+export const WorkflowPage = ({
   workflows,
   selectedWorkflow,
   selectedWorkflowId,
@@ -95,7 +95,7 @@ export function WorkflowPage({
   onDiscardDraft?: () => void;
   hasProject: boolean;
   onOpenProjects?: () => void;
-}) {
+}) => {
   const { t } = useI18n();
   const latestWorkflows = [...workflows.reduce((latest, workflow) => {
     const current = latest.get(workflow.id);
@@ -379,4 +379,4 @@ export function WorkflowPage({
       </PageBody>
     </PageShell>
   );
-}
+};

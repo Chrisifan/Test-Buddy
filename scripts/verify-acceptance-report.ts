@@ -26,12 +26,12 @@ const unsafeText = /(?:\bsk-[a-z0-9_-]+|\bapi[_-]?key\b|\bauthorization\b|\bstor
 const hashPattern = /^[a-f0-9]{64}$/;
 
 /** Hashes only canonically ordered, portable acceptance content. */
-export function createAcceptanceReportHash(payload: AcceptanceReportPayload): string {
+export const createAcceptanceReportHash = (payload: AcceptanceReportPayload): string => {
   return createHash('sha256').update(canonicalJson(payload), 'utf8').digest('hex');
-}
+};
 
 /** Revalidates the contract, canonical content hash, and release decision before publication. */
-export async function verifyAcceptanceReport(reportPath: string): Promise<ReleaseGateDecision> {
+export const verifyAcceptanceReport = async (reportPath: string): Promise<ReleaseGateDecision> => {
   const parsed = JSON.parse(await fs.readFile(reportPath, 'utf8')) as unknown;
   if (containsUnsafeText(parsed)) {
     throw new Error('Acceptance report contains unsafe or unredacted text.');
@@ -70,9 +70,9 @@ export async function verifyAcceptanceReport(reportPath: string): Promise<Releas
     throw new Error('Acceptance report release decision does not match its validated attempts.');
   }
   return payload.decision;
-}
+};
 
-function validateDecisionShape(value: unknown): asserts value is ReleaseGateDecision {
+const validateDecisionShape: (value: unknown) => asserts value is ReleaseGateDecision = (value) => {
   if (!hasExactKeys(value, ['status', 'reasons', 'passedPairs', 'stableAttempts', 'laneStates'])) {
     throw new Error('Acceptance report decision shape is invalid.');
   }
@@ -91,27 +91,27 @@ function validateDecisionShape(value: unknown): asserts value is ReleaseGateDeci
     })) {
     throw new Error('Acceptance report decision shape is invalid.');
   }
-}
+};
 
-function validCount(value: unknown): value is number {
+const validCount = (value: unknown): value is number => {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
-}
+};
 
-function isHash(value: unknown): value is string {
+const isHash = (value: unknown): value is string => {
   return typeof value === 'string' && hashPattern.test(value);
-}
+};
 
-function hasExactKeys(value: unknown, keys: readonly string[]): value is Record<string, unknown> {
+const hasExactKeys = (value: unknown, keys: readonly string[]): value is Record<string, unknown> => {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value) &&
     Object.getOwnPropertyNames(value).length === keys.length &&
     keys.every((key) => Object.prototype.hasOwnProperty.call(value, key));
-}
+};
 
-function canonicalJson(value: unknown): string {
+const canonicalJson = (value: unknown): string => {
   return JSON.stringify(canonicalize(value));
-}
+};
 
-function canonicalize(value: unknown): unknown {
+const canonicalize = (value: unknown): unknown => {
   if (Array.isArray(value)) {
     return value.map(canonicalize);
   }
@@ -123,9 +123,9 @@ function canonicalize(value: unknown): unknown {
       .sort(([left], [right]) => left.localeCompare(right))
       .map(([key, child]) => [key, canonicalize(child)]),
   );
-}
+};
 
-function containsUnsafeText(value: unknown, seen = new WeakSet<object>()): boolean {
+const containsUnsafeText = (value: unknown, seen = new WeakSet<object>()): boolean => {
   if (typeof value === 'string') {
     return unsafeText.test(value);
   }
@@ -137,9 +137,9 @@ function containsUnsafeText(value: unknown, seen = new WeakSet<object>()): boole
   }
   seen.add(value);
   return Object.values(value as Record<string, unknown>).some((child) => containsUnsafeText(child, seen));
-}
+};
 
-async function main(): Promise<void> {
+const main = async (): Promise<void> => {
   const reportPath = process.argv[2];
   if (!reportPath) {
     throw new Error('Usage: verify-acceptance-report <report.json>');
@@ -148,7 +148,7 @@ async function main(): Promise<void> {
   if (decision.status === 'blocked') {
     process.exitCode = 1;
   }
-}
+};
 
 if (process.argv[1]?.endsWith('verify-acceptance-report.js')) {
   void main().catch((error) => {

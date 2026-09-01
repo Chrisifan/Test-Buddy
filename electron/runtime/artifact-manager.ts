@@ -862,7 +862,7 @@ export class ArtifactManager {
   }
 }
 
-function validateRetentionNow(now: Date): Date {
+const validateRetentionNow = (now: Date): Date => {
   if (
     !(now instanceof Date) ||
     !Number.isFinite(now.getTime())
@@ -870,9 +870,9 @@ function validateRetentionNow(now: Date): Date {
     throw new Error('证据保留计划请求无效。');
   }
   return now;
-}
+};
 
-function validateRetentionPolicy(policy: ArtifactRetentionPolicy): ArtifactRetentionPolicy {
+const validateRetentionPolicy = (policy: ArtifactRetentionPolicy): ArtifactRetentionPolicy => {
   if (
     !Number.isFinite(policy.maxBytes) || policy.maxBytes < 0 ||
     !Number.isFinite(policy.keepDays) || policy.keepDays < 0
@@ -880,9 +880,9 @@ function validateRetentionPolicy(policy: ArtifactRetentionPolicy): ArtifactReten
     throw new Error('证据保留策略无效。');
   }
   return { maxBytes: policy.maxBytes, keepDays: policy.keepDays };
-}
+};
 
-function toPlannedArtifactSnapshot(entry: ArtifactManifestEntry): PlannedArtifactSnapshot {
+const toPlannedArtifactSnapshot = (entry: ArtifactManifestEntry): PlannedArtifactSnapshot => {
   return {
     id: entry.id,
     path: entry.path,
@@ -892,36 +892,36 @@ function toPlannedArtifactSnapshot(entry: ArtifactManifestEntry): PlannedArtifac
     retentionClass: entry.retentionClass,
     protectedBy: [...entry.protectedBy].sort(),
   };
-}
+};
 
-function sameStringSet(left: string[], right: string[]): boolean {
+const sameStringSet = (left: string[], right: string[]): boolean => {
   return left.length === right.length && [...left].sort().every((value, index) => value === [...right].sort()[index]);
-}
+};
 
-function isEligibleForRetention(createdAt: string, plannedAt: string, keepDays: number): boolean {
+const isEligibleForRetention = (createdAt: string, plannedAt: string, keepDays: number): boolean => {
   const createdAtTimestamp = Date.parse(createdAt);
   const plannedAtTimestamp = Date.parse(plannedAt);
   return Number.isFinite(createdAtTimestamp) &&
     Number.isFinite(plannedAtTimestamp) &&
     createdAtTimestamp <= plannedAtTimestamp - keepDays * 24 * 60 * 60 * 1_000;
-}
+};
 
-function countManifestPaths(entries: ArtifactManifestEntry[]): Map<string, number> {
+const countManifestPaths = (entries: ArtifactManifestEntry[]): Map<string, number> => {
   const counts = new Map<string, number>();
   entries.forEach((entry) => counts.set(entry.path, (counts.get(entry.path) ?? 0) + 1));
   return counts;
-}
+};
 
-function withSharedManifestPathProtection(reasons: string[], pathCount: number): string[] {
+const withSharedManifestPathProtection = (reasons: string[], pathCount: number): string[] => {
   return pathCount > 1 ? [...new Set([...reasons, 'sharedManifestPath'])].sort() : reasons;
-}
+};
 
-function toRetentionPreviewEntry(
+const toRetentionPreviewEntry = (
   entry: ArtifactManifestEntry,
   deletionCandidate: boolean,
   reason: ArtifactRetentionPreviewEntry['reason'],
   protectedReasons: string[],
-): ArtifactRetentionPreviewEntry {
+): ArtifactRetentionPreviewEntry => {
   return {
     id: entry.id,
     contentHash: entry.contentHash,
@@ -934,27 +934,27 @@ function toRetentionPreviewEntry(
     reason,
     protectedReasons,
   };
-}
+};
 
-function compareRetentionEntries(
+const compareRetentionEntries = (
   left: { entry: ArtifactManifestEntry },
   right: { entry: ArtifactManifestEntry },
-): number {
+): number => {
   return compareArtifactTimestamp(left.entry.createdAt, right.entry.createdAt) || left.entry.id.localeCompare(right.entry.id);
-}
+};
 
-function compareRetentionPreviewEntries(left: ArtifactRetentionPreviewEntry, right: ArtifactRetentionPreviewEntry): number {
+const compareRetentionPreviewEntries = (left: ArtifactRetentionPreviewEntry, right: ArtifactRetentionPreviewEntry): number => {
   return compareArtifactTimestamp(left.createdAt, right.createdAt) || left.id.localeCompare(right.id);
-}
+};
 
-function compareArtifactTimestamp(left: string, right: string): number {
+const compareArtifactTimestamp = (left: string, right: string): number => {
   const leftTime = Date.parse(left);
   const rightTime = Date.parse(right);
   return (Number.isFinite(leftTime) ? leftTime : Number.POSITIVE_INFINITY) -
     (Number.isFinite(rightTime) ? rightTime : Number.POSITIVE_INFINITY);
-}
+};
 
-function isReferencedByPersistedRunDetail(entry: ArtifactManifestEntry, state: StudioState): boolean {
+const isReferencedByPersistedRunDetail = (entry: ArtifactManifestEntry, state: StudioState): boolean => {
   return state.runDetails.some((detail) => {
     const artifacts = [
       ...detail.artifacts,
@@ -966,43 +966,43 @@ function isReferencedByPersistedRunDetail(entry: ArtifactManifestEntry, state: S
       (detail.agentRun ? agentRunReferencesEntry(entry, detail.agentRun) : false) ||
       (detail.agentRuns ?? []).some((agentRun) => agentRunReferencesEntry(entry, agentRun));
   });
-}
+};
 
-function deepFreeze<Value>(value: Value): Value {
+const deepFreeze = <Value>(value: Value): Value => {
   if (!value || typeof value !== 'object' || Object.isFrozen(value)) {
     return value;
   }
   Object.values(value).forEach((child) => deepFreeze(child));
   return Object.freeze(value);
-}
+};
 
-function agentRunReferencesEntry(entry: ArtifactManifestEntry, agentRun: StudioState['runDetails'][number]['agentRun']): boolean {
+const agentRunReferencesEntry = (entry: ArtifactManifestEntry, agentRun: StudioState['runDetails'][number]['agentRun']): boolean => {
   if (!agentRun) {
     return false;
   }
   return agentRun.artifacts.some((artifact) => entryMatchesPersistedReference(entry, artifact)) ||
     agentRun.events.some((event) => entryMatchesPersistedReference(entry, event.artifact));
-}
+};
 
-function isReferencedByBaseline(entry: ArtifactManifestEntry, state: StudioState): boolean {
+const isReferencedByBaseline = (entry: ArtifactManifestEntry, state: StudioState): boolean => {
   return state.projects.some((project) => project.testCases.some((testCase) =>
     entryMatchesPersistedReference(entry, testCase.assetReferences?.baseline),
   ));
-}
+};
 
-function isReferencedByRecordingVisualBaseline(entry: ArtifactManifestEntry, state: StudioState): boolean {
+const isReferencedByRecordingVisualBaseline = (entry: ArtifactManifestEntry, state: StudioState): boolean => {
   return state.projects.some((project) => project.recordings.some((recording) => recording.steps.some((step) =>
     typeof step.screenshotPath === 'string' && entryMatchesPersistedReference(entry, { path: step.screenshotPath }),
   )));
-}
+};
 
-function isReferencedByMaintenanceDraft(entry: ArtifactManifestEntry, state: StudioState): boolean {
+const isReferencedByMaintenanceDraft = (entry: ArtifactManifestEntry, state: StudioState): boolean => {
   return state.maintenanceDrafts.some((draft) => draft.evidence.some((citation) => (
     citation.artifactId === entry.id && citation.contentHash === entry.contentHash
   )));
-}
+};
 
-function entryMatchesPersistedReference(entry: ArtifactManifestEntry, reference: unknown): boolean {
+const entryMatchesPersistedReference = (entry: ArtifactManifestEntry, reference: unknown): boolean => {
   if (!reference || typeof reference !== 'object') {
     return false;
   }
@@ -1021,18 +1021,18 @@ function entryMatchesPersistedReference(entry: ArtifactManifestEntry, reference:
   return candidate.manifest?.id === entry.id ||
     candidate.manifest?.path === entry.path ||
     candidate.manifest?.contentHash === entry.contentHash;
-}
+};
 
-function normalizeArtifactPath(candidatePath: string): string {
+const normalizeArtifactPath = (candidatePath: string): string => {
   return candidatePath.replaceAll('\\', '/').replace(/\/+$/, '');
-}
+};
 
-function isPathInside(rootPath: string, candidatePath: string): boolean {
+const isPathInside = (rootPath: string, candidatePath: string): boolean => {
   const relativePath = path.relative(rootPath, candidatePath);
   return Boolean(relativePath) && !relativePath.startsWith(`..${path.sep}`) && relativePath !== '..' && !path.isAbsolute(relativePath);
-}
+};
 
-export function renderProjectRunReportHtml(report: ProjectRunReport, locale: ProjectReportLocale): string {
+export const renderProjectRunReportHtml = (report: ProjectRunReport, locale: ProjectReportLocale): string => {
   const labels = projectReportLabels(locale);
   const stats = (Object.entries(report.runStats) as Array<[keyof ProjectRunReport['runStats'], number]>)
     .map(([status, count]) => `<li><span>${escapeXml(labels.status[status])}</span><strong>${count}</strong></li>`)
@@ -1087,9 +1087,9 @@ export function renderProjectRunReportHtml(report: ProjectRunReport, locale: Pro
   <h2>${escapeXml(labels.problemRuns)}</h2>${problemRuns}
   <h2>${escapeXml(labels.nonExecutedRuns)}</h2>${nonExecutedRuns}
 </main></body></html>`;
-}
+};
 
-function projectReportLabels(locale: ProjectReportLocale): ProjectReportLabels {
+const projectReportLabels = (locale: ProjectReportLocale): ProjectReportLabels => {
   if (locale === 'en-US') {
     return {
       title: 'TestBuddy Project Report', generatedAt: 'Generated at', runSummary: 'Run summary', coverageRisk: 'Coverage risk', verified: 'Verified', testCase: 'Test case', group: 'Group', environment: 'Environment', riskStatus: 'Risk', noRisks: 'No coverage risks.', prdCoverage: 'PRD coverage governance', prdPaths: 'Requirement paths', targetLabel: 'Target', problemRuns: 'Recent failed runs', noProblemRuns: 'No failed runs.', nonExecutedRuns: 'Recent non-executed runs', noNonExecutedRuns: 'No non-executed runs.', unknownTime: 'Unknown time',
@@ -1106,7 +1106,7 @@ function projectReportLabels(locale: ProjectReportLocale): ProjectReportLabels {
     target: { case: '用例', recording: '录制' },
     triage: { pending: '待处理', deferred: '延后', ignored: '忽略', resolved: '已解决' },
   };
-}
+};
 
 interface ProjectReportLabels {
   title: string;
@@ -1133,12 +1133,12 @@ interface ProjectReportLabels {
   triage: Record<'pending' | 'deferred' | 'ignored' | 'resolved', string>;
 }
 
-function getSafeExtension(sourceName: string): string {
+const getSafeExtension = (sourceName: string): string => {
   const extension = path.extname(sourceName).toLowerCase();
   return /^\.[a-z0-9]{1,16}$/.test(extension) ? extension : '';
-}
+};
 
-function renderReporterHtml(markdown: string): string {
+const renderReporterHtml = (markdown: string): string => {
   const body = markdown
     .split(/\r?\n/)
     .map((line) => {
@@ -1178,13 +1178,13 @@ ${body}
   </main>
 </body>
 </html>`;
-}
+};
 
-function escapeXml(value: string): string {
+const escapeXml = (value: string): string => {
   return value
     .replaceAll('&', '&amp;')
     .replaceAll('<', '&lt;')
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&apos;');
-}
+};

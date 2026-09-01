@@ -142,7 +142,7 @@ const agentRoleOptions: Array<{
   },
 ];
 
-function FieldLabel({ label, hint }: { label: string; hint?: string }) {
+const FieldLabel = ({ label, hint }: { label: string; hint?: string }) => {
   return (
     <div className="flex min-w-0 items-center gap-1.5">
       <Label>{label}</Label>
@@ -165,9 +165,9 @@ function FieldLabel({ label, hint }: { label: string; hint?: string }) {
       ) : null}
     </div>
   );
-}
+};
 
-function ModelSecretInput({
+const ModelSecretInput = ({
   id,
   label,
   scope,
@@ -187,13 +187,13 @@ function ModelSecretInput({
   onSave: (scope: ModelSecretScope, value: string) => Promise<boolean>;
   onClear: (scope: ModelSecretScope) => void;
   t: ReturnType<typeof createTranslator>;
-}) {
+}) => {
   const inputRef = useRef<HTMLInputElement>(null);
   const [hasPendingValue, setHasPendingValue] = useState(false);
   const [isReplacing, setIsReplacing] = useState(false);
   const isEditing = !hasStoredKey || isReplacing;
 
-  async function save() {
+  const save = async () => {
     const value = inputRef.current?.value ?? '';
     if (!value.trim()) {
       return;
@@ -207,7 +207,7 @@ function ModelSecretInput({
       setHasPendingValue(false);
       setIsReplacing(false);
     }
-  }
+  };
 
   return (
     <>
@@ -269,9 +269,9 @@ function ModelSecretInput({
       {error ? <p className="form-hint text-destructive" role="alert">{error}</p> : null}
     </>
   );
-}
+};
 
-export function SettingsModal({
+export const SettingsModal = ({
   open,
   initialSection = 'appearance',
   midsceneConfig,
@@ -311,7 +311,7 @@ export function SettingsModal({
   onUpdateAgentModelConfig: (role: AgentModelRole, patch: Partial<AgentRoleModelConfig>) => void;
   onUpdateMidsceneConfig: (patch: Partial<MidsceneConfig>) => void;
   onUpdateRuntimeProfile: (patch: Partial<RuntimeProfile>) => void;
-}) {
+}) => {
   const [activeSection, setActiveSection] = useState<SettingsSectionId>(initialSection);
   const [expandedAgentRole, setExpandedAgentRole] = useState<AgentModelRole>();
   const [isTestingMidsceneConnection, setIsTestingMidsceneConnection] = useState(false);
@@ -333,7 +333,7 @@ export function SettingsModal({
     setExpandedAgentRole(undefined);
   }, [initialSection, open]);
 
-  async function saveModelSecret(scope: ModelSecretScope, value: string): Promise<boolean> {
+  const saveModelSecret = async (scope: ModelSecretScope, value: string): Promise<boolean> => {
     if (!value.trim()) {
       return false;
     }
@@ -352,9 +352,9 @@ export function SettingsModal({
     } finally {
       setActiveModelSecretScope(undefined);
     }
-  }
+  };
 
-  async function clearModelSecret(scope: ModelSecretScope) {
+  const clearModelSecret = async (scope: ModelSecretScope) => {
     setActiveModelSecretScope(scope);
     setModelSecretErrors((current) => ({ ...current, [scope]: undefined }));
     try {
@@ -367,7 +367,7 @@ export function SettingsModal({
     } finally {
       setActiveModelSecretScope(undefined);
     }
-  }
+  };
 
   if (!open) {
     return null;
@@ -410,7 +410,7 @@ export function SettingsModal({
             : t('settings.midscene.connectionNetwork')
     : undefined;
 
-  async function handleTestMidsceneConnection() {
+  const handleTestMidsceneConnection = async () => {
     if (isTestingMidsceneConnection || !midsceneReady) {
       return;
     }
@@ -428,7 +428,7 @@ export function SettingsModal({
     } finally {
       setIsTestingMidsceneConnection(false);
     }
-  }
+  };
   const settingsShell = (
     <div className="settings-dialog-shell flex min-h-0 w-full flex-col overflow-hidden rounded-[8px]">
       <DialogHeader className="settings-dialog-topbar flex h-[52px] shrink-0 flex-row items-center justify-between border-b border-border px-3.5 py-0 text-left">
@@ -956,4 +956,4 @@ export function SettingsModal({
       </DialogContent>
     </Dialog>
   );
-}
+};
