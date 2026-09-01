@@ -5,3 +5,4 @@ dist
 .acceptance/
 .idea
 .superpowers
+.worktrees/
