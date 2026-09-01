@@ -5,6 +5,7 @@ import type {
   RunReason,
   RunStatus,
   RunStepLog,
+  VersionedTestAssetReference,
   FixtureAsset,
   FixtureHttpJsonValue,
   FixtureLifecycleEvidence,
@@ -12,10 +13,10 @@ import type {
   RunTestCaseResponse,
   RunRecordingRequest,
   RunRecordingResponse,
-  RunWorkflowRequest,
   RunWorkflowResponse,
   RecordingAsset,
   StepType,
+  DeterministicFileReference,
   TestStepDraft,
 } from '../../shared/studio.js';
 import {
@@ -25,6 +26,7 @@ import {
   getTestCaseFixtureRunBlocker,
   getTestCasePrdPath,
   normalizeFixtureHttpDeclaration,
+  resolveTestCaseReusableFlows,
   resolveTestCaseFixtures,
 } from '../../shared/studio.js';
 import type { AgentPlanStepDraft, AgentRunResult } from '../../shared/agent.js';
@@ -33,6 +35,12 @@ import type {
   RunDeterministicStepRequest,
   RunDeterministicStepResponse,
 } from '../studioRuntime.js';
+import type {
+  LazyModelConfigResolver,
+  ResolvedAgentModelConfig,
+  ResolvedMidsceneConfig,
+  ResolvedRunWorkflowRequest,
+} from './model-config-resolver.js';
 import {
   awaitWithRunCancellation,
   createUserRunCancellation,
@@ -43,13 +51,25 @@ import { createTestCaseAgentRun } from '../../shared/agentStub.js';
 import { ArtifactManager } from './artifact-manager.js';
 import { BrowserRuntime } from './browser-runtime.js';
 import type { FixtureLifecycleExecutor, FixtureLifecycleExecutionResult } from './fixture-http-executor.js';
+import {
+  isControlledDeterministicInteraction,
+  validateDeterministicPersistenceSurfaces,
+  validateDeterministicSteps,
+  type DeterministicInteractionPreflightPolicyProvider,
+} from './deterministic-step-contract.js';
 
 interface RecordingReplayRunner {
   run(request: RunRecordingRequest): Promise<RunRecordingResponse>;
 }
 
 interface WorkflowSegmentRunner {
-  runWorkflow(request: RunWorkflowRequest): Promise<RunWorkflowResponse>;
+  runWorkflow(request: ResolvedRunWorkflowRequest): Promise<RunWorkflowResponse>;
+}
+
+interface MainRunTestCaseRequest extends Omit<RunTestCaseRequest, 'midsceneConfig' | 'agentModelConfig'> {
+  midsceneConfig?: ResolvedMidsceneConfig;
+  agentModelConfig?: ResolvedAgentModelConfig;
+  modelConfigResolver?: LazyModelConfigResolver;
 }
 
 interface DeterministicStepRunner {
@@ -65,27 +85,183 @@ export class TestRunner {
     private readonly workflowRunner?: WorkflowSegmentRunner,
     private readonly deterministicRunner?: DeterministicStepRunner,
     private readonly fixtureExecutor?: FixtureLifecycleExecutor,
+    private readonly interactionPreflightPolicy?: DeterministicInteractionPreflightPolicyProvider,
   ) {}
 
-  async run(request: RunTestCaseRequest): Promise<RunTestCaseResponse> {
+  async run(request: MainRunTestCaseRequest): Promise<RunTestCaseResponse> {
     const runId = request.runId ?? `run-${Date.now()}`;
+    try {
+      return await this.runWithCleanup({ ...request, runId });
+    } finally {
+      await this.browserRuntime.releaseControlledRouteMocks?.(runId);
+    }
+  }
+
+  private async runWithCleanup(request: MainRunTestCaseRequest & { runId: string }): Promise<RunTestCaseResponse> {
+    const runId = request.runId;
     const startedAt = new Date();
-    const title = request.testCase.name;
+    let suppliedPolicy: Awaited<ReturnType<DeterministicInteractionPreflightPolicyProvider['resolve']>> = {};
+    let knownSecrets: readonly string[] = [];
+    let policyResolved = false;
+    const resolvedUploadPaths = new Map<string, string>();
+    const resolveInteractionPolicy = async (): Promise<boolean> => {
+      if (policyResolved) {
+        return true;
+      }
+      if (!this.interactionPreflightPolicy) {
+        return false;
+      }
+      try {
+        suppliedPolicy = await this.interactionPreflightPolicy.resolve({
+          projectId: request.project.id,
+          environmentId: request.environment.id,
+          testCaseId: request.testCase.id,
+        });
+        knownSecrets = suppliedPolicy.knownSecrets ?? [];
+        policyResolved = true;
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    const resolvedSecretIssue = (steps: readonly TestStepDraft[]) =>
+      validateDeterministicPersistenceSurfaces({
+        steps,
+        logs: [request.project.name, request.testCase.name, request.environment.name, request.environment.url],
+      }, { knownSecrets })[0];
+    const hasControlledInteraction = (steps: readonly TestStepDraft[]) =>
+      steps.some((step) => isControlledDeterministicInteraction(step.execution?.action));
+    const hasUnconfirmedControlledInteraction = (steps: readonly TestStepDraft[]) =>
+      steps.some((step) =>
+        step.execution?.reviewStatus === 'needsReview' &&
+        isControlledDeterministicInteraction(step.execution.action),
+      );
+    const hasMalformedActionBlock = (steps: readonly TestStepDraft[]) =>
+      steps.some((step) => step.preflightBlockReason === 'malformedAction');
+    const resolveApprovedUploadReferences = async (steps: readonly TestStepDraft[]) => {
+      if (!this.interactionPreflightPolicy?.resolveUpload) {
+        return;
+      }
+      const references = steps.flatMap((step) => {
+        const action = step.execution?.action;
+        return action?.kind === 'upload' ? [action.fileRef] : [];
+      });
+      const selected = new Map<string, DeterministicFileReference & { byteCount: number }>();
+      for (const reference of references) {
+        const key = deterministicFileReferenceKey(reference);
+        if (selected.has(key)) {
+          continue;
+        }
+        try {
+          const resolved = await this.interactionPreflightPolicy.resolveUpload({
+            projectId: request.project.id,
+            environmentId: request.environment.id,
+            testCaseId: request.testCase.id,
+            reference,
+          });
+          if (!Number.isSafeInteger(resolved.byteCount) || resolved.byteCount < 0 || !resolved.path) {
+            continue;
+          }
+          resolvedUploadPaths.set(key, resolved.path);
+          selected.set(key, { ...reference, byteCount: resolved.byteCount });
+        } catch {
+          // The validator fails closed with unapprovedUploadReference.
+        }
+      }
+      if (selected.size) {
+        const approved = new Map((suppliedPolicy.uploadReferences ?? []).map((reference) => [deterministicFileReferenceKey(reference), reference]));
+        selected.forEach((reference, key) => approved.set(key, reference));
+        suppliedPolicy = { ...suppliedPolicy, uploadReferences: [...approved.values()] };
+      }
+    };
+    const initialControlledInteraction = hasControlledInteraction(request.testCase.steps);
+
+    if (hasMalformedActionBlock(request.testCase.steps)) {
+      return this.createMalformedActionBlockedResponse(request, runId, startedAt);
+    }
+    if (hasUnconfirmedControlledInteraction(request.testCase.steps)) {
+      return this.createUnconfirmedActionBlockedResponse(request, runId, startedAt);
+    }
+    if (initialControlledInteraction) {
+      if (!await resolveInteractionPolicy()) {
+        return this.createInteractionPolicyUnavailableResponse(request, runId, startedAt);
+      }
+      if (resolvedSecretIssue(request.testCase.steps)) {
+        return this.createResolvedSecretBlockedResponse(request, runId, startedAt);
+      }
+    }
+
+    const flowResolution = resolveTestCaseReusableFlows(request.project, request.testCase);
+    if (flowResolution.issues.length) {
+      const issue = flowResolution.issues[0]!;
+      const reasonCode: RunReason['code'] = issue.kind === 'missingFlow'
+        ? 'missingAssetVersion'
+        : 'unsupportedAction';
+      const { title, logs } = this.emitRunStart(request, runId, startedAt);
+      return this.createPreflightBlockedResponse(
+        request,
+        runId,
+        title,
+        startedAt,
+        logs,
+        `可复用流程前置条件未满足：${issue.message}`,
+        [],
+        reasonCode,
+      );
+    }
+    const flowOriginByStepId = new Map<string, VersionedTestAssetReference>();
+    const flowSteps = flowResolution.flows.flatMap((flow) => flow.steps.map((step) => {
+      const id = `${flow.id}@${flow.version}/${step.id}`;
+      flowOriginByStepId.set(id, { id: flow.id, version: flow.version });
+      return { ...structuredClone(step), id };
+    }));
+    request = {
+      ...request,
+      testCase: {
+        ...request.testCase,
+        steps: [...flowSteps, ...request.testCase.steps],
+      },
+    };
+
+    if (hasMalformedActionBlock(request.testCase.steps)) {
+      return this.createMalformedActionBlockedResponse(request, runId, startedAt);
+    }
+    if (hasUnconfirmedControlledInteraction(request.testCase.steps)) {
+      return this.createUnconfirmedActionBlockedResponse(request, runId, startedAt);
+    }
+    if (hasControlledInteraction(request.testCase.steps)) {
+      // Every structured interaction is rejected before fixture setup or browser startup.
+      if (!await resolveInteractionPolicy()) {
+        return this.createInteractionPolicyUnavailableResponse(request, runId, startedAt);
+      }
+      if (resolvedSecretIssue(request.testCase.steps)) {
+        return this.createResolvedSecretBlockedResponse(request, runId, startedAt);
+      }
+      await resolveApprovedUploadReferences(request.testCase.steps);
+      const interactionIssue = validateDeterministicSteps(request.testCase.steps, {
+        baseUrl: request.environment.url,
+        allowedTabOrigins: [originFor(request.environment.url)].filter((origin): origin is string => Boolean(origin)),
+        allowedNetworkHosts: [hostFor(request.environment.url)].filter((host): host is string => Boolean(host)),
+        allowedNetworkMethods: ['GET'],
+        ...suppliedPolicy,
+      })[0];
+      if (interactionIssue) {
+        const { title, logs } = this.emitRunStart(request, runId, startedAt);
+        return this.createPreflightBlockedResponse(
+          request,
+          runId,
+          title,
+          startedAt,
+          logs,
+          `deterministic interaction blocked: ${interactionIssue.reason}`,
+          [],
+          'unsupportedAction',
+        );
+      }
+    }
+
+    const { title, logs } = this.emitRunStart(request, runId, startedAt);
     const documentId = getTestCasePrdPath(request.testCase)?.documentId;
-    const logs = [
-      `[${timeLabel(startedAt)}] Run queued: ${request.project.name} / ${request.testCase.name}`,
-      `[${timeLabel(startedAt)}] Environment: ${request.environment.name} -> ${request.environment.url}`,
-    ];
-
-    this.emitRunEvent({
-      runId,
-      title,
-      type: 'status',
-      status: 'running',
-      summary: `正在执行 ${request.testCase.steps.length} 个步骤。`,
-    });
-
-    logs.forEach((line) => this.emitRunEvent({ runId, title, type: 'log', line }));
 
     const fixtureEvidence: FixtureLifecycleEvidence[] = [];
     const preparedFixtures: FixtureAsset[] = [];
@@ -225,7 +401,7 @@ export class TestRunner {
         );
       }
       const browserArtifact = await awaitWithRunCancellation(
-        Promise.resolve(this.browserRuntime.captureRunScreenshot?.(runId)),
+        Promise.resolve(this.browserRuntime.captureRunScreenshot?.(runId, 'preStep')),
         request.cancellationSignal,
       );
       artifact = browserArtifact ?? await awaitWithRunCancellation(
@@ -247,7 +423,7 @@ export class TestRunner {
     }
 
     const artifacts = [artifact];
-    const steps: RunStepLog[] = [];
+    let steps: RunStepLog[] = [];
     const agentRuns: AgentRunResult[] = [];
     const agentStepRuns: Array<AgentRunResult | undefined> = Array.from({ length: request.testCase.steps.length });
 
@@ -266,6 +442,13 @@ export class TestRunner {
         appendUnexecutedSteps(steps, request, index, runId, artifact.path, cancellation.message, 'cancelled');
         break;
       }
+      if (index > 0) {
+        const preStepArtifact = await this.captureRealCheckpoint(runId, 'preStep');
+        if (preStepArtifact) {
+          artifact = preStepArtifact;
+          artifacts.push(preStepArtifact);
+        }
+      }
       const replayStep = step.type === 'recordingReplay';
 
       if (replayStep) {
@@ -273,6 +456,11 @@ export class TestRunner {
         if (!recording) {
           failureReason = `未找到录制资产：${step.recordingId ?? step.title}`;
           stop('blocked', runReason('unsupportedAction', failureReason));
+          const failureArtifact = await this.captureRealCheckpoint(runId, 'failure');
+          if (failureArtifact) {
+            artifact = failureArtifact;
+            artifacts.push(failureArtifact);
+          }
           steps.push({
             id: `run-step-${runId}-${index}`,
             stepId: step.id,
@@ -328,6 +516,11 @@ export class TestRunner {
             }
             failureReason = replay.detail.failureReason ?? replay.detail.summary;
             stop(replayOutcome.status, replayOutcome.reason);
+            const failureArtifact = await this.captureRealCheckpoint(runId, 'failure');
+            if (failureArtifact) {
+              artifact = failureArtifact;
+              artifacts.push(failureArtifact);
+            }
             appendUnexecutedSteps(
               steps,
               request,
@@ -338,6 +531,11 @@ export class TestRunner {
               replayOutcome.status === 'cancelled' ? 'cancelled' : 'skipped',
             );
             break;
+          }
+          const postStepArtifact = await this.captureRealCheckpoint(runId, 'postStep');
+          if (postStepArtifact) {
+            artifact = postStepArtifact;
+            artifacts.push(postStepArtifact);
           }
           continue;
         }
@@ -371,7 +569,9 @@ export class TestRunner {
           break;
         }
         replayResults.forEach((result, replayIndex) => {
-          if (result.screenshotPath) {
+          if (result.artifact) {
+            artifacts.push(result.artifact);
+          } else if (result.screenshotPath) {
             artifacts.push({
               id: `artifact-${runId}-${index}-${replayIndex}`,
               type: 'snapshot',
@@ -388,6 +588,11 @@ export class TestRunner {
         if (failed) {
           failureReason = failed.message;
           stop('failed', runReason('actionFailed', failureReason));
+          const failureArtifact = await this.captureRealCheckpoint(runId, 'failure');
+          if (failureArtifact) {
+            artifact = failureArtifact;
+            artifacts.push(failureArtifact);
+          }
         }
 
         const screenshotPath = replayResults.at(-1)?.screenshotPath ?? artifact.path;
@@ -407,17 +612,115 @@ export class TestRunner {
           appendUnexecutedSteps(steps, request, index + 1, runId, screenshotPath, failureReason);
           break;
         }
+        const postStepArtifact = await this.captureRealCheckpoint(runId, 'postStep');
+        if (postStepArtifact) {
+          artifact = postStepArtifact;
+          artifacts.push(postStepArtifact);
+        }
         continue;
       }
 
       const deterministicAction = getConfirmedDeterministicTestStep(step);
       const deterministicInputBinding = getConfirmedDeterministicTestInputBinding(step);
       const deterministicAssertion = getConfirmedExplicitTestAssertion(step);
+      const controlledInteraction = getConfirmedControlledInteraction(step);
+      if (controlledInteraction) {
+        try {
+          const controlled = await awaitWithRunCancellation(
+            this.browserRuntime.executeControlledDeterministicAction({
+              runId,
+              action: controlledInteraction,
+              ...(this.interactionPreflightPolicy?.resolveUpload
+                ? {
+                    resolveUploadPath: async (reference) => {
+                      const path = resolvedUploadPaths.get(deterministicFileReferenceKey(reference));
+                      if (!path) {
+                        throw new Error('The approved upload reference was not resolved for this run.');
+                      }
+                      return path;
+                    },
+                  }
+                : {}),
+              ...(request.cancellationSignal ? { cancellationSignal: request.cancellationSignal } : {}),
+            }),
+            request.cancellationSignal,
+          );
+          if (validateDeterministicPersistenceSurfaces({
+            logs: [controlled.message],
+            artifactLabels: controlled.artifacts.map((artifact) => artifact.label),
+            maintenance: [controlled.artifacts],
+          }, { knownSecrets }).length) {
+            await cleanupPreparedFixtures();
+            if (request.cancellationSignal?.aborted) {
+              return this.createCancelledResponse(request, runId, title, startedAt, logs, artifacts, fixtureEvidence);
+            }
+            return this.createResolvedSecretBlockedResponse(request, runId, startedAt, fixtureEvidence);
+          }
+          artifacts.push(...controlled.artifacts);
+          const line = `[${timeLabel(new Date())}] ${controlled.message}`;
+          logs.push(line);
+          this.emitRunEvent({ runId, title, type: 'log', line });
+          steps.push({
+            id: `run-step-${runId}-${index}`,
+            stepId: step.id,
+            title: step.title,
+            status: 'passed',
+            message: controlled.message,
+            screenshotPath: artifact.path,
+          });
+          const postStepArtifact = await this.captureRealCheckpoint(runId, 'postStep');
+          if (postStepArtifact) {
+            artifact = postStepArtifact;
+            artifacts.push(postStepArtifact);
+          }
+          continue;
+        } catch (error) {
+          if (isRunCancelled(error)) {
+            cancellation = createUserCancellation();
+            stop('cancelled', runReason('userCancelled', cancellation.message));
+            steps.push({
+              id: `run-step-${runId}-${index}`,
+              stepId: step.id,
+              title: step.title,
+              status: 'cancelled',
+              message: cancellation.message,
+              screenshotPath: artifact.path,
+            });
+            appendUnexecutedSteps(steps, request, index + 1, runId, artifact.path, cancellation.message, 'cancelled');
+            break;
+          }
+          failureReason = 'Approved controlled interaction failed.';
+          stop('failed', runReason('actionFailed', failureReason));
+          const failureArtifact = await this.captureRealCheckpoint(runId, 'failure');
+          if (failureArtifact) {
+            artifact = failureArtifact;
+            artifacts.push(failureArtifact);
+          }
+          const line = `[${timeLabel(new Date())}] ${failureReason}`;
+          logs.push(line);
+          this.emitRunEvent({ runId, title, type: 'log', line });
+          steps.push({
+            id: `run-step-${runId}-${index}`,
+            stepId: step.id,
+            title: step.title,
+            status: 'failed',
+            message: failureReason,
+            screenshotPath: artifact.path,
+          });
+          appendUnexecutedSteps(steps, request, index + 1, runId, artifact.path, failureReason);
+          break;
+        }
+      }
       const deterministicStep = deterministicAction ?? (deterministicAssertion ? toDeterministicAssertionPlanStep(step) : undefined);
       if (deterministicStep) {
         if (!this.deterministicRunner) {
           const message = `步骤 ${index + 1} 已确认的结构化${deterministicAssertion ? '断言' : '动作'}等待确定性运行器接入。`;
           stop('blocked', runReason('unsupportedAction', message));
+          const failureArtifact = await this.captureRealCheckpoint(runId, 'failure');
+          if (failureArtifact) {
+            artifact = failureArtifact;
+            artifacts.push(failureArtifact);
+          }
           const line = `[${timeLabel(new Date())}] ${message}`;
           logs.push(line);
           this.emitRunEvent({ runId, title, type: 'log', line });
@@ -455,6 +758,17 @@ export class TestRunner {
           ...(request.browserSession ? { browserSession: request.browserSession } : {}),
           ...(request.cancellationSignal ? { cancellationSignal: request.cancellationSignal } : {}),
         });
+        if (validateDeterministicPersistenceSurfaces({
+          logs: deterministic.detail.logs,
+          artifactLabels: deterministic.detail.artifacts.map((artifact) => artifact.label),
+          maintenance: [deterministic.detail, deterministic.agentRun],
+        }, { knownSecrets }).length) {
+          await cleanupPreparedFixtures();
+          if (request.cancellationSignal?.aborted) {
+            return this.createCancelledResponse(request, runId, title, startedAt, logs, [], fixtureEvidence);
+          }
+          return this.createResolvedSecretBlockedResponse(request, runId, startedAt, fixtureEvidence);
+        }
         if (isAgentRunResult(deterministic.agentRun)) {
           agentRuns.push(deterministic.agentRun);
           agentStepRuns[index] = deterministic.agentRun;
@@ -489,6 +803,11 @@ export class TestRunner {
           }
           failureReason = deterministic.detail.failureReason ?? deterministic.detail.summary;
           stop(deterministicOutcome.status, deterministicOutcome.reason);
+          const failureArtifact = await this.captureRealCheckpoint(runId, 'failure');
+          if (failureArtifact) {
+            artifact = failureArtifact;
+            artifacts.push(failureArtifact);
+          }
           appendUnexecutedSteps(
             steps,
             request,
@@ -500,12 +819,22 @@ export class TestRunner {
           );
           break;
         }
+        const postStepArtifact = await this.captureRealCheckpoint(runId, 'postStep');
+        if (postStepArtifact) {
+          artifact = postStepArtifact;
+          artifacts.push(postStepArtifact);
+        }
         continue;
       }
 
       if ((step.type === 'ai' || step.type === 'aiAssert') && step.execution?.reviewStatus === 'confirmed') {
         const message = `步骤 ${index + 1} 已确认的结构化${step.type === 'aiAssert' ? '断言' : '动作'}不在当前确定性执行范围内，未调用模型。`;
         stop('blocked', runReason('unsupportedAction', message));
+        const failureArtifact = await this.captureRealCheckpoint(runId, 'failure');
+        if (failureArtifact) {
+          artifact = failureArtifact;
+          artifacts.push(failureArtifact);
+        }
         const line = `[${timeLabel(new Date())}] ${message}`;
         logs.push(line);
         this.emitRunEvent({ runId, title, type: 'log', line });
@@ -543,6 +872,7 @@ export class TestRunner {
           },
           ...(request.midsceneConfig ? { midsceneConfig: request.midsceneConfig } : {}),
           ...(request.agentModelConfig ? { agentModelConfig: request.agentModelConfig } : {}),
+          ...(request.modelConfigResolver ? { modelConfigResolver: request.modelConfigResolver } : {}),
           ...(request.browserSession ? { browserSession: request.browserSession } : {}),
           project: request.project,
           environment: request.environment,
@@ -581,6 +911,11 @@ export class TestRunner {
           }
           failureReason = workflow.detail.failureReason ?? workflow.detail.summary;
           stop(workflowOutcome.status, workflowOutcome.reason);
+          const failureArtifact = await this.captureRealCheckpoint(runId, 'failure');
+          if (failureArtifact) {
+            artifact = failureArtifact;
+            artifacts.push(failureArtifact);
+          }
           appendUnexecutedSteps(
             steps,
             request,
@@ -592,15 +927,25 @@ export class TestRunner {
           );
           break;
         }
+        const postStepArtifact = await this.captureRealCheckpoint(runId, 'postStep');
+        if (postStepArtifact) {
+          artifact = postStepArtifact;
+          artifacts.push(postStepArtifact);
+        }
         continue;
       }
 
-      const screenshotPath = artifact.path;
       const message =
         step.type === 'manual'
           ? `步骤 ${index + 1} 需要人工检查：${step.body}`
           : `步骤 ${index + 1} 等待 Agent Runtime 执行：${step.body}`;
       stop('blocked', runReason('unsupportedAction', message));
+      const failureArtifact = await this.captureRealCheckpoint(runId, 'failure');
+      if (failureArtifact) {
+        artifact = failureArtifact;
+        artifacts.push(failureArtifact);
+      }
+      const screenshotPath = artifact.path;
 
       const line = `[${timeLabel(new Date())}] ${message}`;
       logs.push(line);
@@ -651,7 +996,10 @@ export class TestRunner {
                 ? terminal.reason?.message ?? '前序步骤未通过。'
                 : `已完成 ${request.testCase.steps.length} 个步骤，生成 ${artifacts.length} 份截图/快照与步骤日志。`,
       logs,
-      steps,
+      steps: steps.map((step) => {
+        const reusableFlow = flowOriginByStepId.get(step.stepId);
+        return reusableFlow ? { ...step, reusableFlow } : step;
+      }),
       artifacts,
       ...(fixtureEvidence.length ? { fixtureLifecycles: fixtureEvidence } : {}),
       ...(agentRun ? { agentRun } : {}),
@@ -672,6 +1020,16 @@ export class TestRunner {
     });
 
     return { runId, title, detail };
+  }
+
+  private async captureRealCheckpoint(
+    runId: string,
+    checkpoint: 'preStep' | 'postStep' | 'failure',
+  ): Promise<RunArtifact | undefined> {
+    if (!this.browserRuntime.hasRealPage?.()) {
+      return undefined;
+    }
+    return (await this.browserRuntime.captureRunScreenshot?.(runId, checkpoint)) ?? undefined;
   }
 
   private createCancelledResponse(
@@ -708,6 +1066,118 @@ export class TestRunner {
       reason: runReason(reasonCode, message),
       fixtureLifecycles,
     });
+  }
+
+  private createInteractionPolicyUnavailableResponse(
+    request: RunTestCaseRequest,
+    runId: string,
+    startedAt: Date,
+  ): RunTestCaseResponse {
+    return this.createSafeInteractionBlockedResponse(
+      request,
+      runId,
+      startedAt,
+      'deterministic interaction blocked: preflightPolicyUnavailable',
+    );
+  }
+
+  private createResolvedSecretBlockedResponse(
+    request: RunTestCaseRequest,
+    runId: string,
+    startedAt: Date,
+    fixtureLifecycles: FixtureLifecycleEvidence[] = [],
+  ): RunTestCaseResponse {
+    return this.createSafeInteractionBlockedResponse(
+      request,
+      runId,
+      startedAt,
+      'deterministic interaction blocked: resolvedSecret',
+      fixtureLifecycles,
+    );
+  }
+
+  private createMalformedActionBlockedResponse(
+    request: RunTestCaseRequest,
+    runId: string,
+    startedAt: Date,
+  ): RunTestCaseResponse {
+    return this.createSafeInteractionBlockedResponse(
+      request,
+      runId,
+      startedAt,
+      'deterministic interaction blocked: malformedAction',
+    );
+  }
+
+  private createUnconfirmedActionBlockedResponse(
+    request: RunTestCaseRequest,
+    runId: string,
+    startedAt: Date,
+  ): RunTestCaseResponse {
+    return this.createSafeInteractionBlockedResponse(
+      request,
+      runId,
+      startedAt,
+      'deterministic interaction blocked: unconfirmedAction',
+    );
+  }
+
+  private createSafeInteractionBlockedResponse(
+    request: RunTestCaseRequest,
+    runId: string,
+    startedAt: Date,
+    message: string,
+    fixtureLifecycles: FixtureLifecycleEvidence[] = [],
+  ): RunTestCaseResponse {
+    const title = 'Controlled interaction blocked';
+    const detail: RunDetail = {
+      id: runId,
+      projectId: request.project.id,
+      testCaseId: request.testCase.id,
+      environmentId: request.environment.id,
+      title,
+      status: 'blocked',
+      startedAt: startedAt.toISOString(),
+      endedAt: new Date().toISOString(),
+      duration: '00:00:00',
+      summary: message,
+      logs: [`[${timeLabel(new Date())}] ${message}`],
+      steps: [],
+      artifacts: [],
+      reason: runReason('unsupportedAction', message),
+      ...(fixtureLifecycles.length ? { fixtureLifecycles } : {}),
+    };
+    this.emitRunEvent({
+      runId,
+      title,
+      type: 'complete',
+      status: detail.status,
+      duration: detail.duration,
+      summary: detail.summary,
+      detail,
+    });
+    return { runId, title, detail };
+  }
+
+  private emitRunStart(
+    request: RunTestCaseRequest,
+    runId: string,
+    startedAt: Date,
+  ): { title: string; logs: string[] } {
+    const title = request.testCase.name;
+    const logs = [
+      `[${timeLabel(startedAt)}] Run queued: ${request.project.name} / ${request.testCase.name}`,
+      `[${timeLabel(startedAt)}] Environment: ${request.environment.name} -> ${request.environment.url}`,
+    ];
+    this.emitRunEvent({
+      runId,
+      title,
+      type: 'status',
+      status: 'running',
+      summary: `正在执行 ${request.testCase.steps.length} 个步骤。`,
+    });
+    logs.forEach((line) => this.emitRunEvent({ runId, title, type: 'log', line }));
+    return { title, logs };
   }
 
   private createTerminalResponse(
@@ -891,6 +1361,13 @@ function isAgentStep(step: TestStepDraft): step is TestStepDraft & { type: StepT
   return step.type === 'ai' || step.type === 'aiAssert' || step.type === 'aiQuery';
 }
 
+function getConfirmedControlledInteraction(step: TestStepDraft) {
+  const action = step.execution?.action;
+  return step.type === 'ai' && step.execution?.reviewStatus === 'confirmed' && isControlledDeterministicInteraction(action)
+    ? action
+    : undefined;
+}
+
 function isAgentRunResult(value: unknown): value is AgentRunResult {
   return Boolean(
     value &&
@@ -942,6 +1419,30 @@ function runReason(code: RunReason['code'], message: string): RunReason {
 
 function isCredentialUnavailable(message: string): boolean {
   return /认证|凭据|credential|storage state/i.test(message);
+}
+
+function originFor(value: string): string | undefined {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'http:' || url.protocol === 'https:' ? url.origin : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function hostFor(value: string): string | undefined {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'http:' || url.protocol === 'https:' ? url.hostname : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function deterministicFileReferenceKey(reference: DeterministicFileReference): string {
+  return reference.kind === 'fixture'
+    ? `fixture:${reference.id}@${reference.version}`
+    : `attachment:${reference.id}`;
 }
 
 function toDeterministicAssertionPlanStep(step: TestStepDraft): AgentPlanStepDraft {

@@ -4,9 +4,10 @@ import path from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { createEmptyProject, createInitialStudioState } from '../shared/studio.js';
+import { createEmptyProject, createEmptySuiteAsset, createEmptyTestCase, createInitialStudioState } from '../shared/studio.js';
 import { cliExitCode, executeCliCommand, main, parseCliArguments, renderJUnitReport, type CliRunSummary } from './cli.js';
 import { ProjectAssetStore } from './projectAssetStore.js';
+import { ModelConfigResolver } from './runtime/model-config-resolver.js';
 import * as runtimeBundle from './runtime/runtime-bundle.js';
 import { StudioStore } from './studioStore.js';
 
@@ -165,6 +166,207 @@ describe('TestBuddy CLI', () => {
     expect(report).toContain('<skipped message="上游失败"/>');
     expect(report).toContain('<skipped message="已取消"/>');
     expect(report).toContain('name="支付 &lt;确认&gt;" time="2.000"');
+  });
+
+  it('renders a Suite parent JUnit report with its own explicit terminal counts', () => {
+    const summary: CliRunSummary = {
+      command: 'run',
+      status: 'failed',
+      dataDir: '/workspace/testbuddy',
+      startedAt: '2026-08-03T00:00:00.000Z',
+      endedAt: '2026-08-03T00:00:03.000Z',
+      reports: { junit: '/workspace/testbuddy/report.xml' },
+      results: [
+        {
+          projectId: 'project-web',
+          testCaseId: 'case-failed',
+          environmentId: 'env-ci',
+          title: 'Checkout',
+          status: 'failed',
+          duration: '00:00:02',
+          summary: 'Checkout did not complete.',
+          reason: { code: 'actionFailed', message: 'Payment confirmation failed.' },
+          artifacts: [],
+        },
+        {
+          projectId: 'project-web',
+          testCaseId: 'case-cancelled',
+          environmentId: 'env-ci',
+          title: 'Cleanup',
+          status: 'cancelled',
+          summary: 'Suite cancelled before this Case started.',
+          reason: { code: 'userCancelled', message: 'Suite cancelled before this Case started.' },
+          artifacts: [],
+        },
+      ],
+      suite: {
+        id: 'release-checks',
+        version: 2,
+        runId: 'suite-run-1',
+        status: 'failed',
+        effectiveConcurrency: 1,
+        issues: [],
+        startedAt: '2026-08-03T00:00:00.000Z',
+        finishedAt: '2026-08-03T00:00:03.000Z',
+        summary: { passed: 0, failed: 1, blocked: 0, skipped: 0, cancelled: 1, error: 0 },
+        members: [
+          {
+            testCaseId: 'case-failed',
+            testCaseVersion: 3,
+            status: 'failed',
+            summary: 'Checkout did not complete.',
+            reason: { code: 'actionFailed', message: 'Payment confirmation failed.' },
+            attempts: 2,
+            flaky: false,
+            runId: 'run-checkout',
+            provenance: {
+              schemaVersion: 1, projectId: 'project-web', projectRevision: 'a'.repeat(64), source: 'projectDirectory', reproducibility: 'versioned',
+              testCase: { id: 'case-failed', version: 3 }, suite: { reference: { id: 'release-checks', version: 2 }, parentRunId: 'suite-run-1' },
+              fixtures: [], reusableFlows: [], baselines: [], environment: { id: 'env-ci', name: 'CI', baseUrl: 'https://example.test' },
+              browserProfile: { engine: 'chromium', headless: true }, executor: { appVersion: 'test-buddy-cli', runnerVersion: 'runtime-bundle-v1' }, model: { hasKey: false }, createdAt: '2026-08-03T00:00:00.000Z',
+            },
+          },
+          {
+            testCaseId: 'case-cancelled',
+            testCaseVersion: 1,
+            status: 'cancelled',
+            summary: 'Suite cancelled before this Case started.',
+            reason: { code: 'userCancelled', message: 'Suite cancelled before this Case started.' },
+            attempts: 0,
+            flaky: false,
+            provenance: {
+              schemaVersion: 1, projectId: 'project-web', projectRevision: 'a'.repeat(64), source: 'projectDirectory', reproducibility: 'versioned',
+              testCase: { id: 'case-cancelled', version: 1 }, suite: { reference: { id: 'release-checks', version: 2 }, parentRunId: 'suite-run-1' },
+              fixtures: [], reusableFlows: [], baselines: [], environment: { id: 'env-ci', name: 'CI', baseUrl: 'https://example.test' },
+              browserProfile: { engine: 'chromium', headless: true }, executor: { appVersion: 'test-buddy-cli', runnerVersion: 'runtime-bundle-v1' }, model: { hasKey: false }, createdAt: '2026-08-03T00:00:00.000Z',
+            },
+          },
+        ],
+        provenance: {
+          schemaVersion: 1,
+          projectId: 'project-web',
+          projectRevision: 'a'.repeat(64),
+          source: 'projectDirectory',
+          reproducibility: 'versioned',
+          suite: { reference: { id: 'release-checks', version: 2 }, parentRunId: 'suite-run-1' },
+          fixtures: [],
+          reusableFlows: [],
+          baselines: [],
+          environment: { id: 'env-ci', name: 'CI', baseUrl: 'https://example.test' },
+          browserProfile: { engine: 'chromium', headless: true },
+          executor: { appVersion: 'test-buddy-cli', runnerVersion: 'runtime-bundle-v1' },
+          model: { hasKey: false },
+          createdAt: '2026-08-03T00:00:00.000Z',
+        },
+        reason: { code: 'actionFailed', message: 'Payment confirmation failed.' },
+      },
+    };
+
+    const report = renderJUnitReport(summary);
+
+    expect(report).toContain('<testsuites name="TestBuddy CLI" tests="2" failures="1" errors="0" skipped="1"');
+    expect(report).toContain('<testsuite name="Suite release-checks@2" parentRunId="suite-run-1" status="failed" tests="2" failures="1" errors="0" skipped="1"');
+    expect(report).toContain('status="failed"');
+    expect(report).toContain('attempts="2"');
+    expect(report).toContain('flaky="false"');
+    expect(report).toContain('Suite cancelled before this Case started.');
+  });
+
+  it('renders a parent-only Suite executor error as a standard JUnit error testcase', () => {
+    const summary: CliRunSummary = {
+      command: 'run',
+      status: 'failed',
+      dataDir: '/workspace/testbuddy',
+      startedAt: '2026-08-03T00:00:00.000Z',
+      endedAt: '2026-08-03T00:00:01.000Z',
+      reports: { junit: '/workspace/testbuddy/report.xml' },
+      results: [],
+      suite: {
+        id: 'release-checks',
+        version: 2,
+        runId: 'suite-run-parent-error',
+        status: 'error',
+        effectiveConcurrency: 0,
+        issues: ['Suite executor crashed before any Case could complete.'],
+        startedAt: '2026-08-03T00:00:00.000Z',
+        finishedAt: '2026-08-03T00:00:01.000Z',
+        summary: { passed: 0, failed: 0, blocked: 0, skipped: 0, cancelled: 0, error: 0 },
+        members: [],
+        provenance: {
+          schemaVersion: 1,
+          projectId: 'project-web',
+          projectRevision: 'a'.repeat(64),
+          source: 'projectDirectory',
+          reproducibility: 'versioned',
+          suite: { reference: { id: 'release-checks', version: 2 }, parentRunId: 'suite-run-parent-error' },
+          fixtures: [],
+          reusableFlows: [],
+          baselines: [],
+          environment: { id: 'env-ci', name: 'CI', baseUrl: 'https://example.test' },
+          browserProfile: { engine: 'chromium', headless: true },
+          executor: { appVersion: 'test-buddy-cli', runnerVersion: 'runtime-bundle-v1' },
+          model: { hasKey: false },
+          createdAt: '2026-08-03T00:00:00.000Z',
+        },
+        reason: { code: 'executorError', message: 'Suite executor crashed before any Case could complete.' },
+      },
+    };
+
+    const report = renderJUnitReport(summary);
+
+    expect(cliExitCode(summary)).toBe(1);
+    expect(report).toContain('tests="1" failures="0" errors="1" skipped="0"');
+    expect(report).toContain('<testcase classname="project-web" name="Suite release-checks@2"');
+    expect(report).toContain('<error message="Suite executor crashed before any Case could complete.">');
+  });
+
+  it.each([
+    ['blocked' as const, 'missingAssetVersion' as const, 'Suite preflight could not resolve its immutable assets.'],
+    ['cancelled' as const, 'userCancelled' as const, 'Suite was cancelled before any Case started.'],
+  ])('renders a parent-only %s Suite outcome as a standard skipped JUnit testcase', (status, reasonCode, reasonMessage) => {
+    const report = renderJUnitReport({
+      command: 'run',
+      status: 'passed',
+      dataDir: '/workspace/testbuddy',
+      startedAt: '2026-08-03T00:00:00.000Z',
+      endedAt: '2026-08-03T00:00:01.000Z',
+      reports: { junit: '/workspace/testbuddy/report.xml' },
+      results: [],
+      suite: {
+        id: 'release-checks',
+        version: 2,
+        runId: `suite-run-parent-${status}`,
+        status,
+        effectiveConcurrency: 0,
+        issues: [reasonMessage],
+        startedAt: '2026-08-03T00:00:00.000Z',
+        finishedAt: '2026-08-03T00:00:01.000Z',
+        summary: { passed: 0, failed: 0, blocked: 0, skipped: 0, cancelled: 0, error: 0 },
+        members: [],
+        provenance: {
+          schemaVersion: 1,
+          projectId: 'project-web',
+          projectRevision: 'a'.repeat(64),
+          source: 'projectDirectory',
+          reproducibility: 'versioned',
+          suite: { reference: { id: 'release-checks', version: 2 }, parentRunId: `suite-run-parent-${status}` },
+          fixtures: [],
+          reusableFlows: [],
+          baselines: [],
+          environment: { id: 'env-ci', name: 'CI', baseUrl: 'https://example.test' },
+          browserProfile: { engine: 'chromium', headless: true },
+          executor: { appVersion: 'test-buddy-cli', runnerVersion: 'runtime-bundle-v1' },
+          model: { hasKey: false },
+          createdAt: '2026-08-03T00:00:00.000Z',
+        },
+        reason: { code: reasonCode, message: reasonMessage },
+      },
+    });
+
+    expect(report).toContain('tests="1" failures="0" errors="0" skipped="1"');
+    expect(report).toContain('<testcase classname="project-web" name="Suite release-checks@2"');
+    expect(report).toContain(`<skipped message="${reasonMessage}"/>`);
+    expect(report).toContain(`reasonCode="${reasonCode}" reason="${reasonMessage}"`);
   });
 
   it('prefers a structured reason message over legacy JUnit failure fields', () => {
@@ -533,7 +735,11 @@ describe('TestBuddy CLI', () => {
     }];
     const state = createInitialStudioState();
     state.projects = [project];
-    state.midsceneConfig.modelApiKey = 'suite-cli-api-key-must-not-leak';
+    state.midsceneConfig.modelSecret = {
+      id: 'midscene',
+      hasKey: true,
+      updatedAt: '2026-08-17T00:00:00.000Z',
+    };
     state.midsceneConfig.modelBaseUrl = 'https://suite-cli-user:suite-cli-password@models.example.test/v1?tenant=secret';
     await new StudioStore(directory).save(state);
 
@@ -561,7 +767,6 @@ describe('TestBuddy CLI', () => {
         model: { hasKey: true },
       },
     });
-    expect(JSON.stringify(summary)).not.toContain('suite-cli-api-key-must-not-leak');
     expect(JSON.stringify(summary)).not.toContain('https://suite-cli-user:suite-cli-password@models.example.test/v1?tenant=secret');
     expect(summary.results).toEqual([
       expect.objectContaining({ testCaseId: 'case-agent', status: 'blocked', attempts: 1, flaky: false }),
@@ -569,6 +774,77 @@ describe('TestBuddy CLI', () => {
     expect(() => parseCliArguments([
       'run', '--data-dir', directory, '--project-id', project.id, '--suite-id', 'suite-release@1', '--environment-id', environment.id,
     ])).toThrow('固定目标环境');
+  });
+
+  it('preserves already persisted Suite children when terminal parent persistence fails', async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'testbuddy-cli-suite-parent-retry-'));
+    temporaryDirectories.push(directory);
+    const project = createEmptyProject(1);
+    const environment = project.environments[0]!;
+    const testCase = {
+      ...createEmptyTestCase(1, project.groups[0]!.id, environment.id),
+      id: 'case-preserved-child',
+      name: 'Persisted child',
+      steps: [{ id: 'step-preserved-child', type: 'manual' as const, title: 'Manual child', body: 'Complete the child.' }],
+    };
+    const suite = {
+      ...createEmptySuiteAsset(project, 1),
+      id: 'suite-preserve-child-links',
+      environmentId: environment.id,
+      caseReferences: [{ id: testCase.id, version: testCase.version ?? 1, dependsOn: [] }],
+      execution: { concurrency: 1, failurePolicy: 'continue' as const, retryLimit: 0 },
+    };
+    project.testCases = [testCase];
+    project.suites = [suite];
+    const state = createInitialStudioState();
+    state.projects = [project];
+    await new StudioStore(directory).save(state);
+
+    const originalSave = StudioStore.prototype.save;
+    let saveCount = 0;
+    vi.spyOn(StudioStore.prototype, 'save').mockImplementation(async function (nextState) {
+      saveCount += 1;
+      if (saveCount === 4) {
+        throw new Error('terminal parent persistence failed');
+      }
+      return originalSave.call(this, nextState);
+    });
+    vi.spyOn(runtimeBundle, 'createRuntimeBundle').mockReturnValue({
+      ensureReady: vi.fn(),
+      runTestCase: vi.fn().mockResolvedValue({
+        runId: 'run-preserved-child',
+        title: testCase.name,
+        detail: {
+          id: 'run-preserved-child', projectId: project.id, testCaseId: testCase.id, environmentId: environment.id,
+          title: testCase.name, status: 'passed', startedAt: '2026-08-22T00:00:00.000Z', endedAt: '2026-08-22T00:00:01.000Z',
+          duration: '00:00:01', summary: 'passed', logs: [], steps: [], artifacts: [],
+        },
+      }),
+      browserRuntime: { getState: vi.fn(() => state.browserSession) },
+      close: vi.fn(),
+    } as never);
+
+    const summary = await executeCliCommand({
+      kind: 'run', dataDir: directory, projectId: project.id, caseReferences: [], suiteReference: { id: suite.id, version: suite.version },
+    });
+
+    expect(summary).toMatchObject({
+      status: 'failed',
+      results: [expect.objectContaining({ runId: 'run-preserved-child', status: 'passed' })],
+      suite: {
+        status: 'error',
+        members: [expect.objectContaining({ runId: 'run-preserved-child', status: 'passed' })],
+      },
+    });
+    const persisted = await new StudioStore(directory).loadExisting();
+    expect(persisted.suiteRunRecords).toEqual([
+      expect.objectContaining({
+        status: 'error',
+        memberRunIds: ['run-preserved-child'],
+        summary: { passed: 1, failed: 0, blocked: 0, skipped: 0, cancelled: 0, error: 0 },
+        members: [expect.objectContaining({ runId: 'run-preserved-child', status: 'passed' })],
+      }),
+    ]);
   });
 
   it('persists an empty Suite preflight parent without requiring a JSON report', async () => {
@@ -583,7 +859,11 @@ describe('TestBuddy CLI', () => {
     }];
     const state = createInitialStudioState();
     state.projects = [project];
-    state.midsceneConfig.modelApiKey = 'empty-suite-api-key-must-not-leak';
+    state.midsceneConfig.modelSecret = {
+      id: 'midscene',
+      hasKey: true,
+      updatedAt: '2026-08-17T00:00:00.000Z',
+    };
     state.midsceneConfig.modelBaseUrl = 'https://empty-suite-user:empty-suite-password@models.example.test/v1?tenant=secret';
     await new StudioStore(directory).save(state);
     vi.spyOn(runtimeBundle, 'createRuntimeBundle').mockReturnValue({
@@ -613,7 +893,6 @@ describe('TestBuddy CLI', () => {
       }),
     ]);
     const serializedHistory = JSON.stringify(persisted.suiteRunRecords);
-    expect(serializedHistory).not.toContain('empty-suite-api-key-must-not-leak');
     expect(serializedHistory).not.toContain('https://empty-suite-user:empty-suite-password@models.example.test/v1?tenant=secret');
   });
 
@@ -656,7 +935,11 @@ describe('TestBuddy CLI', () => {
     }];
     const state = createInitialStudioState();
     state.projects = [project];
-    state.midsceneConfig.modelApiKey = 'suite-member-api-key-must-not-leak';
+    state.midsceneConfig.modelSecret = {
+      id: 'midscene',
+      hasKey: true,
+      updatedAt: '2026-08-17T00:00:00.000Z',
+    };
     state.midsceneConfig.modelBaseUrl = 'https://suite-member-user:suite-member-password@models.example.test/v1?tenant=secret';
     await new StudioStore(directory).save(state);
     const runTestCase = vi.fn(async (request: { testCase: typeof erroredCase }) => ({
@@ -719,6 +1002,24 @@ describe('TestBuddy CLI', () => {
     });
 
     const persisted = await new StudioStore(directory).loadExisting();
+    expect(summary.suite).toMatchObject({
+      runId: suiteMembership.parentRunId,
+      summary: { passed: 0, failed: 0, blocked: 1, skipped: 1, cancelled: 1, error: 1 },
+      members: expect.arrayContaining([
+        expect.objectContaining({ testCaseId: erroredCase.id, status: 'error', attempts: 1, flaky: false, reason: { code: 'executorError', message: 'Executor crashed.' } }),
+        expect.objectContaining({ testCaseId: cancelledCase.id, status: 'cancelled', attempts: 1, flaky: false, reason: { code: 'userCancelled', message: 'Cancelled by user.' } }),
+        expect.objectContaining({ testCaseId: dependentCase.id, status: 'skipped', attempts: 0, flaky: false, reason: { code: 'dependencyFailed', message: 'A required Suite dependency did not pass.' } }),
+      ]),
+    });
+    expect(persisted.suiteRunRecords).toEqual([
+      expect.objectContaining({
+        id: suiteMembership.parentRunId,
+        memberRunIds: expect.arrayContaining(persisted.runDetails.map((detail) => detail.id)),
+        members: expect.arrayContaining([
+          expect.objectContaining({ testCaseId: erroredCase.id, provenance: expect.objectContaining({ testCase: { id: erroredCase.id, version: 1 }, suite: suiteMembership }) }),
+        ]),
+      }),
+    ]);
     expect(persisted.runDetails).toEqual(expect.arrayContaining([
       expect.objectContaining({
         testCaseId: agentCase.id,
@@ -750,10 +1051,8 @@ describe('TestBuddy CLI', () => {
     persisted.runDetails.forEach((detail) => {
       expect(detail.provenance?.suite).toEqual(suiteMembership);
     });
-    expect(JSON.stringify(persisted.runDetails)).not.toContain('suite-member-api-key-must-not-leak');
     expect(JSON.stringify(persisted.runDetails)).not.toContain('https://suite-member-user:suite-member-password@models.example.test/v1?tenant=secret');
     const serializedSummary = JSON.stringify(summary);
-    expect(serializedSummary).not.toContain('suite-member-api-key-must-not-leak');
     expect(serializedSummary).not.toContain('https://suite-member-user:suite-member-password@models.example.test/v1?tenant=secret');
   });
 
@@ -890,5 +1189,94 @@ describe('TestBuddy CLI', () => {
       testCase: expect.objectContaining({ id: 'case-login', version: 1, name: 'Snapshot Case v1' }),
       environment: expect.objectContaining({ id: environment.id }),
     }));
+  });
+
+  it('injects the lazy controlled worker pool into the CLI runtime bundle', async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'testbuddy-cli-worker-pool-'));
+    temporaryDirectories.push(directory);
+    const project = createEmptyProject(1);
+    const environment = project.environments[0]!;
+    const testCase = {
+      ...createEmptyTestCase(1, project.groups[0]!.id, environment.id),
+      id: 'case-cli-worker-pool',
+      version: 1,
+    };
+    project.testCases = [testCase];
+    const state = createInitialStudioState();
+    state.projects = [project];
+    await new StudioStore(directory).save(state);
+    const createBundle = vi.spyOn(runtimeBundle, 'createRuntimeBundle').mockReturnValue({
+      ensureReady: vi.fn(),
+      runTestCase: vi.fn().mockResolvedValue({
+        runId: 'run-cli-worker-pool',
+        title: testCase.name,
+        detail: {
+          id: 'run-cli-worker-pool', projectId: project.id, testCaseId: testCase.id, environmentId: environment.id,
+          title: testCase.name, status: 'passed', startedAt: new Date(0).toISOString(), endedAt: new Date(0).toISOString(),
+          duration: '00:00:00', summary: 'Passed', logs: [], steps: [], artifacts: [],
+        },
+      }),
+      browserRuntime: { getState: vi.fn(() => state.browserSession) },
+      close: vi.fn(),
+    } as never);
+
+    await executeCliCommand({
+      kind: 'run', dataDir: directory, projectId: project.id, caseReferences: [{ id: testCase.id, version: testCase.version! }],
+    });
+
+    const [options] = createBundle.mock.calls[0]!;
+    expect(options.browserPool).toMatchObject({ maxConcurrency: 2, activeLeaseCount: 0 });
+  });
+
+  it('injects a lazy main-only interaction policy that resolves configured model secrets', async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'testbuddy-cli-interaction-policy-'));
+    temporaryDirectories.push(directory);
+    const project = createEmptyProject(1);
+    const environment = project.environments[0]!;
+    const testCase = {
+      ...createEmptyTestCase(1, project.groups[0]!.id, environment.id),
+      id: 'case-cli-interaction-policy',
+      version: 1,
+    };
+    project.testCases = [testCase];
+    const state = createInitialStudioState();
+    state.projects = [project];
+    state.midsceneConfig.modelSecret = { id: 'midscene', hasKey: true, updatedAt: new Date(0).toISOString() };
+    await new StudioStore(directory).save(state);
+    const resolvedSecret = 'cli-resolved-secret-must-not-leak';
+    const resolveModelConfigs = vi.spyOn(ModelConfigResolver.prototype, 'resolve').mockResolvedValue({
+      midsceneConfig: { ...state.midsceneConfig, modelApiKey: resolvedSecret },
+      agentModelConfig: Object.fromEntries(
+        ['planner', 'executor', 'verifier', 'reporter'].map((role) => [role, { modelApiKey: '' }]),
+      ),
+    } as never);
+    const createBundle = vi.spyOn(runtimeBundle, 'createRuntimeBundle').mockReturnValue({
+      ensureReady: vi.fn(),
+      runTestCase: vi.fn().mockResolvedValue({
+        runId: 'run-cli-interaction-policy',
+        title: testCase.name,
+        detail: {
+          id: 'run-cli-interaction-policy', projectId: project.id, testCaseId: testCase.id, environmentId: environment.id,
+          title: testCase.name, status: 'passed', startedAt: new Date(0).toISOString(), endedAt: new Date(0).toISOString(),
+          duration: '00:00:00', summary: 'Passed', logs: [], steps: [], artifacts: [],
+        },
+      }),
+      browserRuntime: { getState: vi.fn(() => state.browserSession) },
+      close: vi.fn(),
+    } as never);
+
+    const summary = await executeCliCommand({
+      kind: 'run', dataDir: directory, projectId: project.id, caseReferences: [{ id: testCase.id, version: testCase.version! }],
+    });
+
+    const [options] = createBundle.mock.calls[0]!;
+    expect(options.deterministicInteractionPreflightPolicy).toBeDefined();
+    expect(resolveModelConfigs).not.toHaveBeenCalled();
+    await expect(options.deterministicInteractionPreflightPolicy!.resolve({
+      projectId: project.id,
+      environmentId: environment.id,
+      testCaseId: testCase.id,
+    })).resolves.toEqual({ knownSecrets: [resolvedSecret] });
+    expect(JSON.stringify(summary)).not.toContain(resolvedSecret);
   });
 });

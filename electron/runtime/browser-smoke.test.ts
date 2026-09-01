@@ -107,6 +107,92 @@ describe('local browser runtime smoke', () => {
     }
   });
 
+  it('executes approved structured interactions against the local fixture with managed evidence', async () => {
+    const fixture = await startFixture();
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'testbuddy-browser-controlled-smoke-'));
+    const bundle = createRuntimeBundle({
+      rootDir,
+      visualDiffImageAdapter: { read: async () => Buffer.alloc(0), write: async () => undefined },
+    });
+    const project = createEmptyProject(1);
+    const environment = {
+      ...project.environments[0]!,
+      url: fixture.url,
+      entryPath: '/',
+      browser: 'chromium' as const,
+      headless: true,
+    };
+    const uploadPath = path.join(rootDir, 'approved-upload.txt');
+    await fs.writeFile(uploadPath, 'approved upload', 'utf8');
+    const runtimeProject = { ...project, environments: [environment] };
+    const runtime = bundle.browserRuntime;
+
+    try {
+      const session = await runtime.start({ project: runtimeProject, environment, record: false });
+      expect(session.status).toBe('ready');
+      const page = runtime.getPage();
+      expect(page).not.toBeNull();
+      const locator = (selector: string) => ({ selector, quality: 'acceptable' as const });
+
+      await runtime.executeControlledDeterministicAction({
+        runId: 'controlled-smoke-run',
+        action: { kind: 'iframe', frame: { locator: locator('#same-origin-frame'), url: `${fixture.url}/frame` }, locator: locator('#frame-confirm') },
+      });
+      await runtime.executeControlledDeterministicAction({
+        runId: 'controlled-smoke-run',
+        action: { kind: 'tab', url: `${fixture.url}/help` },
+      });
+      await runtime.executeControlledDeterministicAction({
+        runId: 'controlled-smoke-run',
+        action: { kind: 'upload', locator: locator('#avatar'), fileRef: { kind: 'attachment', id: 'approved-avatar' } },
+        resolveUploadPath: async () => uploadPath,
+      });
+      const download = await runtime.executeControlledDeterministicAction({
+        runId: 'controlled-smoke-run',
+        action: { kind: 'download', locator: locator('#download-report'), url: `${fixture.url}/report.csv` },
+      });
+      await runtime.executeControlledDeterministicAction({
+        runId: 'controlled-smoke-run',
+        action: { kind: 'hover', locator: locator('#account-menu') },
+      });
+      await runtime.executeControlledDeterministicAction({
+        runId: 'controlled-smoke-run',
+        action: { kind: 'drag', source: locator('#card-a'), target: locator('#column-done') },
+      });
+      await runtime.executeControlledDeterministicAction({
+        runId: 'controlled-smoke-run',
+        action: { kind: 'clipboard', locator: locator('#clipboard-target'), value: 'TEST_BUDDY_CLIPBOARD_SENTINEL' },
+      });
+      await page!.evaluate(() => setTimeout(() => fetch('/observed?token=must-not-persist'), 100));
+      const observed = await runtime.executeControlledDeterministicAction({
+        runId: 'controlled-smoke-run',
+        action: { kind: 'networkObserve', url: `${fixture.url}/observed?token=must-not-persist`, method: 'GET' },
+      });
+      const mocked = await runtime.executeControlledDeterministicAction({
+        runId: 'controlled-smoke-run',
+        action: { kind: 'networkMock', url: `${fixture.url}/mocked`, method: 'GET', response: { status: 201, body: { mocked: true } } },
+      });
+
+      expect(await page!.evaluate(() => ({
+        frameConfirmed: document.body.dataset.frameConfirmed,
+        uploaded: document.body.dataset.uploaded,
+        hovered: document.body.dataset.hovered,
+        dropped: document.body.dataset.dropped,
+      }))).toEqual({ frameConfirmed: 'yes', uploaded: 'approved-upload.txt', hovered: 'yes', dropped: 'yes' });
+      await expect(page!.evaluate(() => fetch('/mocked').then((response) => response.text()))).resolves.toBe('{"mocked":true}');
+      expect([...download.artifacts, ...observed.artifacts, ...mocked.artifacts]).toEqual([
+        expect.objectContaining({ manifest: expect.objectContaining({ ownerRunId: 'controlled-smoke-run', evidenceKind: 'attachment' }) }),
+        expect.objectContaining({ manifest: expect.objectContaining({ ownerRunId: 'controlled-smoke-run', evidenceKind: 'syntheticDiagnostic' }) }),
+        expect.objectContaining({ manifest: expect.objectContaining({ ownerRunId: 'controlled-smoke-run', evidenceKind: 'syntheticDiagnostic' }) }),
+      ]);
+      await expect(fs.readFile(observed.artifacts[0]!.path, 'utf8')).resolves.not.toContain('token=must-not-persist');
+    } finally {
+      await bundle.close();
+      await fixture.close();
+      await fs.rm(rootDir, { recursive: true, force: true });
+    }
+  });
+
   it('does not start a second Case browser session after parent Suite cancellation', async () => {
     const fixture = await startFixture();
     const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'testbuddy-browser-suite-cancel-'));
@@ -216,11 +302,42 @@ function browserStartCase(
 }
 
 async function startFixture(): Promise<{ url: string; close: () => Promise<void> }> {
-  const server = http.createServer((_request, response) => {
+  const server = http.createServer((request, response) => {
+    const requestUrl = new URL(request.url ?? '/', 'http://fixture.local');
+    if (requestUrl.pathname === '/frame') {
+      response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      response.end('<button id="frame-confirm" onclick="parent.document.body.dataset.frameConfirmed = \'yes\'">Confirm</button>');
+      return;
+    }
+    if (requestUrl.pathname === '/report.csv') {
+      response.writeHead(200, { 'content-type': 'text/csv', 'content-disposition': 'attachment; filename="report.csv"' });
+      response.end('report,status\\nsmoke,passed\\n');
+      return;
+    }
+    if (requestUrl.pathname === '/observed') {
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end('{"observed":true}');
+      return;
+    }
+    if (requestUrl.pathname === '/help') {
+      response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      response.end('<p>help</p>');
+      return;
+    }
     response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
     response.end(`<!doctype html>
 <html><head><title>Fixture</title></head>
-<body><button id="continue" onclick="document.body.dataset.continued = 'yes'">Continue</button><p>ready</p></body></html>`);
+<body>
+  <button id="continue" onclick="document.body.dataset.continued = 'yes'">Continue</button>
+  <iframe id="same-origin-frame" src="/frame"></iframe>
+  <input id="avatar" type="file" onchange="document.body.dataset.uploaded = this.files[0]?.name || ''">
+  <a id="download-report" href="/report.csv" download>Download</a>
+  <div id="account-menu" onmouseenter="document.body.dataset.hovered = 'yes'">Account</div>
+  <div id="card-a" draggable="true">Card</div>
+  <div id="column-done" ondragover="event.preventDefault()" ondrop="event.preventDefault(); document.body.dataset.dropped = 'yes'">Done</div>
+  <div id="clipboard-target">Clipboard</div>
+  <p>ready</p>
+</body></html>`);
   });
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject);

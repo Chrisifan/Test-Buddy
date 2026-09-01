@@ -15,6 +15,10 @@ vi.mock('electron', () => ({
 import { ModelSecretStore, type ModelSecretProtection, type ModelSecretScope } from './model-secret-store.js';
 
 const temporaryDirectories: string[] = [];
+const protection: ModelSecretProtection = {
+  encrypt: (value) => `safe:${Buffer.from(value).toString('base64')}`,
+  decrypt: (value) => Buffer.from(value.slice('safe:'.length), 'base64').toString('utf8'),
+};
 
 afterEach(async () => {
   await Promise.all(temporaryDirectories.splice(0).map((directory) => fs.rm(directory, { recursive: true, force: true })));
@@ -23,7 +27,7 @@ afterEach(async () => {
 describe('ModelSecretStore', () => {
   it('persists Midscene and role keys only as safeStorage ciphertext under stable scopes', async () => {
     const rootDirectory = await createTemporaryDirectory();
-    const store = new ModelSecretStore(rootDirectory);
+    const store = new ModelSecretStore(rootDirectory, protection);
 
     const midscene = await store.save({ scope: 'midscene', value: 'sk-live-midscene' });
     const planner = await store.save({ scope: 'agent:planner', value: 'sk-live-planner' });
@@ -40,7 +44,7 @@ describe('ModelSecretStore', () => {
 
   it('retains each scope when model keys are saved concurrently', async () => {
     const rootDirectory = await createTemporaryDirectory();
-    const store = new ModelSecretStore(rootDirectory);
+    const store = new ModelSecretStore(rootDirectory, protection);
 
     await Promise.all([
       store.save({ scope: 'midscene', value: 'sk-live-midscene' }),
@@ -49,6 +53,18 @@ describe('ModelSecretStore', () => {
 
     await expect(store.resolve({ scope: 'midscene' })).resolves.toBe('sk-live-midscene');
     await expect(store.resolve({ scope: 'agent:planner' })).resolves.toBe('sk-live-planner');
+  });
+
+  it('clears only the requested secret scope and returns a public empty reference', async () => {
+    const rootDirectory = await createTemporaryDirectory();
+    const store = new ModelSecretStore(rootDirectory, protection);
+    await store.save({ scope: 'midscene', value: 'sk-live-midscene' });
+    await store.save({ scope: 'agent:planner', value: 'sk-live-planner' });
+
+    await expect(store.clear({ scope: 'midscene' })).resolves.toMatchObject({ id: 'midscene', hasKey: false });
+    await expect(store.resolve({ scope: 'midscene' })).rejects.toThrow('模型密钥引用不存在，请重新保存后再试。');
+    await expect(store.resolve({ scope: 'agent:planner' })).resolves.toBe('sk-live-planner');
+    await expect(fs.readFile(store.storagePath, 'utf8')).resolves.not.toContain('sk-live-midscene');
   });
 
   it.each(['agent:unknown', 'midscene:secondary', 'model:midscene'])(
@@ -75,7 +91,7 @@ describe('ModelSecretStore', () => {
     'rejects unsupported scope %s before resolving a stored key',
     async (scope) => {
     const rootDirectory = await createTemporaryDirectory();
-    const store = new ModelSecretStore(rootDirectory);
+    const store = new ModelSecretStore(rootDirectory, protection);
     await store.save({ scope: 'midscene', value: 'sk-live-midscene' });
 
     await expect(store.resolve({ scope: scope as ModelSecretScope })).rejects.toThrow('模型密钥范围无效。');

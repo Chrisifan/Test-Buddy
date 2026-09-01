@@ -75,6 +75,10 @@ import type {
   AgentVerifierResult,
 } from './runtime/agent-verifier.js';
 import type { SemanticActionResult, SemanticActionRuntime } from './runtime/semantic-action-runtime.js';
+import type {
+  ResolvedChatCommandRequest,
+  ResolvedRunWorkflowRequest,
+} from './runtime/model-config-resolver.js';
 import {
   awaitWithRunCancellation,
   createUserRunCancellation,
@@ -82,6 +86,7 @@ import {
   markAgentRunCancelled,
   throwIfRunCancelled,
 } from './runtime/run-cancellation.js';
+import { createSecretRedactor } from './runtime/secret-redactor.js';
 
 interface BrowserObserver {
   hasRealPage?: () => boolean;
@@ -2323,7 +2328,7 @@ function createReporterMarkdown(result: AgentReporterResult): string {
   ].join('\n');
 }
 
-function plannerConfigForRequest(request: ChatCommandRequest): {
+function plannerConfigForRequest(request: ResolvedChatCommandRequest): {
   config?: AgentPlannerModelConfig;
   fallbackReason?: string;
 } {
@@ -2358,7 +2363,7 @@ function plannerConfigForRequest(request: ChatCommandRequest): {
   return { config };
 }
 
-function verifierConfigForRequest(request: ChatCommandRequest): {
+function verifierConfigForRequest(request: ResolvedChatCommandRequest): {
   config?: AgentVerifierModelConfig;
   fallbackReason?: string;
 } {
@@ -2393,7 +2398,7 @@ function verifierConfigForRequest(request: ChatCommandRequest): {
   return { config };
 }
 
-function reporterConfigForRequest(request: ChatCommandRequest): {
+function reporterConfigForRequest(request: ResolvedChatCommandRequest): {
   config?: AgentReporterModelConfig;
   fallbackReason?: string;
 } {
@@ -2426,6 +2431,39 @@ function reporterConfigForRequest(request: ChatCommandRequest): {
     return { fallbackReason: 'Reporter 模型配置不完整' };
   }
   return { config };
+}
+
+async function resolvePlannerConfigForRequest(request: ResolvedChatCommandRequest): Promise<{
+  config?: AgentPlannerModelConfig;
+  fallbackReason?: string;
+}> {
+  return request.modelConfigResolver
+    ? request.modelConfigResolver.resolveAgentProviderConfig('planner')
+    : plannerConfigForRequest(request);
+}
+
+async function resolveVerifierConfigForRequest(request: ResolvedChatCommandRequest): Promise<{
+  config?: AgentVerifierModelConfig;
+  fallbackReason?: string;
+}> {
+  return request.modelConfigResolver
+    ? request.modelConfigResolver.resolveAgentProviderConfig('verifier')
+    : verifierConfigForRequest(request);
+}
+
+async function resolveReporterConfigForRequest(request: ResolvedChatCommandRequest): Promise<{
+  config?: AgentReporterModelConfig;
+  fallbackReason?: string;
+}> {
+  return request.modelConfigResolver
+    ? request.modelConfigResolver.resolveAgentProviderConfig('reporter')
+    : reporterConfigForRequest(request);
+}
+
+function resolveMidsceneConfigForRequest(request: ResolvedChatCommandRequest) {
+  return request.modelConfigResolver
+    ? request.modelConfigResolver.resolveMidsceneConfig()
+    : Promise.resolve(request.midsceneConfig);
 }
 
 function resolveExecutionIntent(request: ChatCommandRequest, plannedStep?: AgentPlanStepDraft): ExecutionIntent {
@@ -2800,7 +2838,7 @@ export class StudioRuntime {
   ) {}
 
   private async trySelectorFallbackForStep(
-    request: ChatCommandRequest,
+    request: ResolvedChatCommandRequest,
     step: AgentPlanStepDraft,
     stepIndex: number,
     previousExecution: PlannedAgentStepExecution,
@@ -2881,6 +2919,7 @@ export class StudioRuntime {
     }
 
     let attemptedWait: Pick<AgentDynamicWaitAttempt, 'timeoutMs' | 'strategy' | 'selector' | 'urlPattern'> | undefined;
+
     try {
       const responseUrlPattern = responseUrlPatternForNetworkRecovery(step, failedExecution);
       if (this.browserObserver?.waitForResponse && responseUrlPattern) {
@@ -2999,7 +3038,7 @@ export class StudioRuntime {
     };
   }
 
-  async sendChatCommand(request: ChatCommandRequest): Promise<ChatCommandResponse> {
+  async sendChatCommand(request: ResolvedChatCommandRequest): Promise<ChatCommandResponse> {
     throwIfRunCancelled(request.cancellationSignal);
     const traceScopeId = `agent-trace-${Date.now()}`;
     const ownsTraceScope = await this.beginTraceScope(traceScopeId);
@@ -3228,7 +3267,7 @@ export class StudioRuntime {
   }
 
   private async enhanceRunWithReporter(
-    request: ChatCommandRequest,
+    request: ResolvedChatCommandRequest,
     agentRun: AgentRunResult,
   ): Promise<AgentRunResult> {
     throwIfRunCancelled(request.cancellationSignal);
@@ -3236,17 +3275,18 @@ export class StudioRuntime {
       return agentRun;
     }
 
-    const resolved = reporterConfigForRequest(request);
+    const resolved = await resolveReporterConfigForRequest(request);
     if (!resolved.config) {
       return agentRun;
     }
+    const redactor = createSecretRedactor(request.midsceneConfig, request.agentModelConfig);
 
     try {
       const result = await awaitWithRunCancellation(
         this.agentReporter.report({
           config: resolved.config,
           ...(request.cancellationSignal ? { cancellationSignal: request.cancellationSignal } : {}),
-          run: {
+          run: redactor.redactValue({
             status: agentRun.status,
             summary: agentRun.summary,
             ...(agentRun.failureReason ? { failureReason: agentRun.failureReason } : {}),
@@ -3254,16 +3294,17 @@ export class StudioRuntime {
             plan: agentRun.plan,
             events: agentRun.events,
             artifacts: agentRun.artifacts,
-          },
+          }),
         }),
         request.cancellationSignal,
       );
       throwIfRunCancelled(request.cancellationSignal);
+      const markdown = redactor.redactText(createReporterMarkdown(result));
       const reportPaths = this.reporterReportWriter
         ? await awaitWithRunCancellation(
           this.reporterReportWriter.writeReporterReport({
             runId: agentRun.runId,
-            markdown: createReporterMarkdown(result),
+            markdown,
           }),
           request.cancellationSignal,
         )
@@ -3287,7 +3328,7 @@ export class StudioRuntime {
         id: `${agentRun.runId}-event-reporter-report`,
         runId: agentRun.runId,
         type: 'agent:artifact-created',
-        message: `${result.summary}\n\n${createReporterMarkdown(result)}`,
+        message: redactor.redactText(`${result.summary}\n\n${markdown}`),
         status: agentRun.status,
         artifact,
         ...(result.metrics ? { metrics: result.metrics } : {}),
@@ -3305,9 +3346,9 @@ export class StudioRuntime {
           }
         : undefined;
       const recoveryPlan = deriveAgentRecoveryPlan(agentRun);
-      return {
+      return redactor.redactValue({
         ...agentRun,
-        summary: `${result.summary}\n${agentRun.summary}`,
+        summary: redactor.redactText(`${result.summary}\n${agentRun.summary}`),
         events: [...agentRun.events, event, ...(htmlEvent ? [htmlEvent] : [])],
         artifacts: [...agentRun.artifacts, artifact, ...(htmlArtifact ? [htmlArtifact] : [])],
         metrics: mergeExecutionMetrics(agentRun.metrics, result.metrics) ?? agentRun.metrics,
@@ -3319,7 +3360,7 @@ export class StudioRuntime {
           ...(recoveryPlan ? { recoveryPlan } : {}),
           modelName: result.modelName,
         },
-      };
+      });
     } catch (error) {
       if (isRunCancelled(error)) {
         throw error;
@@ -3332,6 +3373,10 @@ export class StudioRuntime {
     request: ChatCommandRequest,
     agentRun: AgentRunResult,
   ): ChatCommandResponse {
+    const redactor = createSecretRedactor(
+      'midsceneConfig' in request ? request.midsceneConfig : undefined,
+      'agentModelConfig' in request ? request.agentModelConfig : undefined,
+    );
     const userEntry: ChatEntry = {
       id: `chat-${Date.now()}-user`,
       role: 'user',
@@ -3354,17 +3399,23 @@ export class StudioRuntime {
       assistantEntry.text = `当前还没有活动会话，已先记录这条 ${request.mode} 指令草稿。${extractionEvidence ? `\n\n提取结果：${extractionEvidence}` : ''}\n\nAgent 计划已生成，但后续真实执行需要先启动浏览器会话。`;
     }
 
-    return {
+    return redactor.redactValue({
       userEntry,
       assistantEntry,
       agentRun,
-    };
+    });
   }
 
-  private async createAgentPlan(request: ChatCommandRequest): Promise<PlanningAttempt> {
+  private async createAgentPlan(request: ResolvedChatCommandRequest): Promise<PlanningAttempt> {
     throwIfRunCancelled(request.cancellationSignal);
-    const resolved = plannerConfigForRequest(request);
-    if (!this.agentPlanner || !resolved.config) {
+    if (!this.agentPlanner) {
+      return {
+        provenance: { source: 'rule' },
+      };
+    }
+
+    const resolved = await resolvePlannerConfigForRequest(request);
+    if (!resolved.config) {
       return {
         provenance: {
           source: 'rule',
@@ -3399,21 +3450,25 @@ export class StudioRuntime {
       return {
         provenance: {
           source: 'rule',
-          fallbackReason: (error as Error).message || 'Planner 模型调用失败',
+          fallbackReason: createSecretRedactor(resolved.config).redactError(error) || 'Planner 模型调用失败',
         },
       };
     }
   }
 
   private async createReplannedAgentPlan(
-    request: ChatCommandRequest,
+    request: ResolvedChatCommandRequest,
     currentPlan: AgentPlanDraft,
     failedStep: AgentPlanStepDraft,
     failedExecution: PlannedAgentStepExecution,
     completedSteps: CompletedPlannerStep[],
   ): Promise<AgentPlannerResult | undefined> {
-    const resolved = plannerConfigForRequest(request);
-    if (!this.agentPlanner || !resolved.config) {
+    if (!this.agentPlanner) {
+      return undefined;
+    }
+
+    const resolved = await resolvePlannerConfigForRequest(request);
+    if (!resolved.config) {
       return undefined;
     }
 
@@ -3463,7 +3518,7 @@ export class StudioRuntime {
   }
 
   private async prepareBrowserForAgent(
-    request: ChatCommandRequest,
+    request: ResolvedChatCommandRequest,
     plannedStep?: AgentPlanStepDraft,
   ): Promise<BrowserPreparationResult> {
     throwIfRunCancelled(request.cancellationSignal);
@@ -3499,6 +3554,8 @@ export class StudioRuntime {
             ...(assertionIntent ? { assertion: assertionIntent } : {}),
           };
     }
+
+    let semanticActionRedactor = createSecretRedactor(request.midsceneConfig);
 
     try {
       const current = this.browserObserver.getState();
@@ -3541,11 +3598,16 @@ export class StudioRuntime {
         );
         message = `${message}；并点击用户指定 selector：${clickIntent.selector}`;
       } else if (clickIntent?.target) {
-        if (this.semanticActionRuntime && request.midsceneConfig && isMidsceneConfigured(request.midsceneConfig)) {
-          const result = await awaitWithRunCancellation(this.semanticActionRuntime.click({
+        const semanticActionRuntime = this.semanticActionRuntime;
+        const midsceneConfig = semanticActionRuntime
+          ? await awaitWithRunCancellation(resolveMidsceneConfigForRequest(request), request.cancellationSignal)
+          : undefined;
+        semanticActionRedactor = createSecretRedactor(midsceneConfig);
+        if (semanticActionRuntime && midsceneConfig && isMidsceneConfigured(midsceneConfig)) {
+          const result = await awaitWithRunCancellation(semanticActionRuntime.click({
             target: clickIntent.target,
             prompt: plannedStep?.instruction ?? request.prompt,
-            config: request.midsceneConfig,
+            config: midsceneConfig,
           }), request.cancellationSignal);
           semanticEvaluation = toAssertionEvaluation(result);
           reportArtifactPath = result.reportPath;
@@ -3566,12 +3628,17 @@ export class StudioRuntime {
         );
         message = `${message}；并在用户指定 selector 输入内容：${inputIntent.selector}`;
       } else if (inputIntent?.target) {
-        if (this.semanticActionRuntime && request.midsceneConfig && isMidsceneConfigured(request.midsceneConfig)) {
-          const result = await awaitWithRunCancellation(this.semanticActionRuntime.input({
+        const semanticActionRuntime = this.semanticActionRuntime;
+        const midsceneConfig = semanticActionRuntime
+          ? await awaitWithRunCancellation(resolveMidsceneConfigForRequest(request), request.cancellationSignal)
+          : undefined;
+        semanticActionRedactor = createSecretRedactor(midsceneConfig);
+        if (semanticActionRuntime && midsceneConfig && isMidsceneConfigured(midsceneConfig)) {
+          const result = await awaitWithRunCancellation(semanticActionRuntime.input({
             target: inputIntent.target,
             value: inputIntent.value,
             prompt: plannedStep?.instruction ?? request.prompt,
-            config: request.midsceneConfig,
+            config: midsceneConfig,
           }), request.cancellationSignal);
           semanticEvaluation = toAssertionEvaluation(result);
           reportArtifactPath = result.reportPath;
@@ -3674,17 +3741,22 @@ export class StudioRuntime {
           message = `${message}；${pendingMessage}`;
         }
       } else if (selectIntent?.target) {
-        if (this.semanticActionRuntime && request.midsceneConfig && isMidsceneConfigured(request.midsceneConfig)) {
-          const result = await awaitWithRunCancellation(this.semanticActionRuntime.select({
+        const semanticActionRuntime = this.semanticActionRuntime;
+        const midsceneConfig = semanticActionRuntime
+          ? await awaitWithRunCancellation(resolveMidsceneConfigForRequest(request), request.cancellationSignal)
+          : undefined;
+        semanticActionRedactor = createSecretRedactor(midsceneConfig);
+        if (semanticActionRuntime && midsceneConfig && isMidsceneConfigured(midsceneConfig)) {
+          const result = await awaitWithRunCancellation(semanticActionRuntime.select({
             target: selectIntent.target,
             value: selectIntent.value,
             prompt: plannedStep?.instruction ?? request.prompt,
-            config: request.midsceneConfig,
+            config: midsceneConfig,
           }), request.cancellationSignal);
           semanticEvaluation = toAssertionEvaluation(result);
           reportArtifactPath = result.reportPath;
           executionMetrics = result.metrics;
-          session = await this.browserObserver.capture();
+          session = await awaitWithRunCancellation(this.browserObserver.capture(), request.cancellationSignal);
           message = `${message}；${result.message}`;
         } else {
           const pendingMessage = `已识别下拉选择目标「${selectIntent.target}」，等待 Midscene 语义选择执行。`;
@@ -3693,11 +3765,18 @@ export class StudioRuntime {
         }
       }
 
-      if (extractIntent?.target && this.semanticActionRuntime && request.midsceneConfig && isMidsceneConfigured(request.midsceneConfig)) {
-        const result = await awaitWithRunCancellation(this.semanticActionRuntime.extract({
+      const semanticActionRuntimeForExtraction = this.semanticActionRuntime;
+      const midsceneConfigForExtraction = extractIntent?.target && semanticActionRuntimeForExtraction
+        ? await awaitWithRunCancellation(resolveMidsceneConfigForRequest(request), request.cancellationSignal)
+        : undefined;
+      if (midsceneConfigForExtraction) {
+        semanticActionRedactor = createSecretRedactor(midsceneConfigForExtraction);
+      }
+      if (extractIntent?.target && semanticActionRuntimeForExtraction && midsceneConfigForExtraction && isMidsceneConfigured(midsceneConfigForExtraction)) {
+        const result = await awaitWithRunCancellation(semanticActionRuntimeForExtraction.extract({
           target: extractIntent.target,
           prompt: plannedStep?.instruction ?? request.prompt,
-          config: request.midsceneConfig,
+          config: midsceneConfigForExtraction,
         }), request.cancellationSignal);
         semanticEvaluation = toAssertionEvaluation(result);
         reportArtifactPath = result.reportPath;
@@ -3733,7 +3812,9 @@ export class StudioRuntime {
         assertionEvaluation = evaluateExplicitAssertion(assertionIntent, session, pageText, observation, domInspection);
         message = `${message}；${assertionEvaluation.summary}`;
       } else if (semanticAssertion) {
-        const verifierConfig = verifierConfigForRequest(request);
+        const verifierConfig = this.agentVerifier
+          ? await resolveVerifierConfigForRequest(request)
+          : {};
         if (this.agentVerifier && verifierConfig.config) {
           try {
             const result = await awaitWithRunCancellation(
@@ -3755,26 +3836,35 @@ export class StudioRuntime {
             if (isRunCancelled(error)) {
               throw error;
             }
-            const pendingMessage = `Verifier 模型判断失败，当前语义断言保持等待态：${(error as Error).message}`;
+            const pendingMessage = `Verifier 模型判断失败，当前语义断言保持等待态：${createSecretRedactor(verifierConfig.config).redactError(error)}`;
             assertionEvaluation = createPendingSemanticEvaluation(pendingMessage);
             message = `${message}；${pendingMessage}`;
           }
-        } else if (this.semanticActionRuntime && request.midsceneConfig && isMidsceneConfigured(request.midsceneConfig)) {
-          const result = await awaitWithRunCancellation(this.semanticActionRuntime.assert({
-            assertion: semanticAssertion,
-            prompt: plannedStep?.instruction ?? request.prompt,
-            config: request.midsceneConfig,
-          }), request.cancellationSignal);
-          assertionEvaluation = toAssertionEvaluation(result);
-          reportArtifactPath = result.reportPath;
-          executionMetrics = result.metrics;
-          message = `${message}；${result.message}`;
         } else {
-          const pendingMessage = verifierConfig.fallbackReason
-            ? `已识别语义断言，等待 Verifier 配置完成：${verifierConfig.fallbackReason}。`
-            : '已识别语义断言，等待 Verifier 或 Midscene 根据页面上下文执行判断。';
-          assertionEvaluation = createPendingSemanticEvaluation(pendingMessage);
-          message = `${message}；${pendingMessage}`;
+          const semanticActionRuntime = this.semanticActionRuntime;
+          const midsceneConfig = semanticActionRuntime
+            ? await awaitWithRunCancellation(resolveMidsceneConfigForRequest(request), request.cancellationSignal)
+            : undefined;
+          if (midsceneConfig) {
+            semanticActionRedactor = createSecretRedactor(midsceneConfig);
+          }
+          if (semanticActionRuntime && midsceneConfig && isMidsceneConfigured(midsceneConfig)) {
+            const result = await awaitWithRunCancellation(semanticActionRuntime.assert({
+              assertion: semanticAssertion,
+              prompt: plannedStep?.instruction ?? request.prompt,
+              config: midsceneConfig,
+            }), request.cancellationSignal);
+            assertionEvaluation = toAssertionEvaluation(result);
+            reportArtifactPath = result.reportPath;
+            executionMetrics = result.metrics;
+            message = `${message}；${result.message}`;
+          } else {
+            const pendingMessage = verifierConfig.fallbackReason
+              ? `已识别语义断言，等待 Verifier 配置完成：${verifierConfig.fallbackReason}。`
+              : '已识别语义断言，等待 Verifier 或 Midscene 根据页面上下文执行判断。';
+            assertionEvaluation = createPendingSemanticEvaluation(pendingMessage);
+            message = `${message}；${pendingMessage}`;
+          }
         }
       }
 
@@ -3806,7 +3896,7 @@ export class StudioRuntime {
       if (isRunCancelled(error)) {
         throw error;
       }
-      const failureReason = (error as Error).message || '未知错误';
+      const failureReason = semanticActionRedactor.redactError(error) || '未知错误';
       return {
         session: request.browserSession ?? this.browserObserver.getState(),
         message: `语义动作执行失败，已退回到最近一次会话快照：${failureReason}`,
@@ -4076,13 +4166,14 @@ export class StudioRuntime {
     }
   }
 
-  async runWorkflow(request: RunWorkflowRequest): Promise<RunWorkflowResponse> {
+  async runWorkflow(request: ResolvedRunWorkflowRequest): Promise<RunWorkflowResponse> {
     const runId = request.runId ?? `agent-run-workflow-${Date.now()}`;
     const title = request.workflow.name;
+    const redactor = createSecretRedactor(request.midsceneConfig, request.agentModelConfig);
     let ownsTraceScope = false;
     const emitRunEvent = (event: RunEventPayload) => {
       if (!request.parentRunId) {
-        this.emitRunEvent(event);
+        this.emitRunEvent(redactor.redactValue(event));
       }
     };
 
@@ -4111,7 +4202,7 @@ export class StudioRuntime {
         summary: detail.summary,
         detail,
       });
-      return { runId, title, detail, agentRun };
+      return redactor.redactValue({ runId, title, detail, agentRun });
     };
 
     try {
@@ -4199,6 +4290,7 @@ export class StudioRuntime {
         runtimeProfile: request.runtimeProfile,
         ...(request.midsceneConfig ? { midsceneConfig: request.midsceneConfig } : {}),
         ...(request.agentModelConfig ? { agentModelConfig: request.agentModelConfig } : {}),
+        ...(request.modelConfigResolver ? { modelConfigResolver: request.modelConfigResolver } : {}),
         ...(request.browserSession ? { browserSession: request.browserSession } : {}),
         ...(request.project ? { project: request.project, projectId: request.project.id } : {}),
         ...(request.environment ? { environment: request.environment } : {}),
@@ -4237,7 +4329,7 @@ export class StudioRuntime {
       detail,
     });
 
-    return { runId, title, detail, agentRun };
+    return redactor.redactValue({ runId, title, detail, agentRun });
     } catch (error) {
       if (isRunCancelled(error)) {
         return completeCancelledRun();

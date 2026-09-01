@@ -72,6 +72,982 @@ function fixtureEvidence(
 }
 
 describe('TestRunner recording replay', () => {
+  it('blocks an unconfirmed controlled Case action before policy, fixture, or browser startup', async () => {
+    const project = createProjectWithRecording();
+    const environment = project.environments[0]!;
+    const unconfirmedTab = {
+      id: 'step-unconfirmed-tab',
+      type: 'ai' as const,
+      title: 'Open reviewed tab',
+      body: 'Open the reviewed tab.',
+      execution: {
+        schemaVersion: 2 as const,
+        intent: 'Open the reviewed tab.',
+        reviewStatus: 'needsReview' as const,
+        actionRisk: 'low' as const,
+        action: { kind: 'tab' as const, url: `${environment.url}/help` },
+      },
+    };
+    const testCase = {
+      ...project.testCases[0]!,
+      steps: [unconfirmedTab],
+      assetReferences: {
+        fixtures: [],
+        reusableFlows: [],
+      },
+    };
+    const start = vi.fn();
+    const fixtureExecutor = { execute: vi.fn() };
+    const policy = { resolve: vi.fn(async () => ({})) };
+    const runner = new TestRunner(
+      { createSnapshot: vi.fn() } as never,
+      { start } as never,
+      vi.fn(),
+      undefined,
+      undefined,
+      undefined,
+      fixtureExecutor as never,
+      policy,
+    );
+
+    const response = await runner.run({
+      project,
+      testCase,
+      environment,
+    });
+
+    expect(response.detail.reason).toEqual({
+      code: 'unsupportedAction',
+      message: 'deterministic interaction blocked: unconfirmedAction',
+    });
+    expect(policy.resolve).not.toHaveBeenCalled();
+    expect(fixtureExecutor.execute).not.toHaveBeenCalled();
+    expect(start).not.toHaveBeenCalled();
+  });
+
+  it('blocks an invalid controlled deterministic interaction before BrowserRuntime starts', async () => {
+    const project = createProjectWithRecording();
+    const environment = project.environments[0]!;
+    const start = vi.fn();
+    const testCase = {
+      ...project.testCases[0]!,
+      steps: [{
+        id: 'step-cross-origin-frame',
+        type: 'ai' as const,
+        title: '点击跨域 iframe',
+        body: '点击 iframe 中的确认按钮。',
+        execution: {
+          schemaVersion: 2 as const,
+          intent: '点击 iframe 中的确认按钮。',
+          reviewStatus: 'confirmed' as const,
+          actionRisk: 'low' as const,
+          action: {
+            kind: 'iframe' as const,
+            frame: {
+              locator: { selector: '#remote-frame', quality: 'acceptable' as const },
+              url: 'https://outside.example.test/frame',
+            },
+            locator: { selector: '#confirm', quality: 'acceptable' as const },
+          },
+        },
+      }],
+    };
+    const deterministicRunner = { runDeterministicStep: vi.fn() };
+    const runner = new TestRunner(
+      { createSnapshot: vi.fn() } as never,
+      { start } as never,
+      vi.fn(),
+      undefined,
+      undefined,
+      deterministicRunner as never,
+      undefined,
+      { resolve: async () => ({}) },
+    );
+
+    const response = await runner.run({ project, testCase, environment });
+
+    expect(response.detail.status).toBe('blocked');
+    expect(response.detail.reason).toEqual({
+      code: 'unsupportedAction',
+      message: 'deterministic interaction blocked: crossOriginIframe',
+    });
+    expect(start).not.toHaveBeenCalled();
+    expect(deterministicRunner.runDeterministicStep).not.toHaveBeenCalled();
+  });
+
+  it('executes a confirmed controlled action through BrowserRuntime without an Agent fallback', async () => {
+    const project = createProjectWithRecording();
+    const environment = project.environments[0]!;
+    const action = {
+      kind: 'hover' as const,
+      locator: { selector: '#account-menu', quality: 'acceptable' as const },
+    };
+    const testCase = {
+      ...project.testCases[0]!,
+      steps: [{
+        id: 'step-controlled-hover',
+        type: 'ai' as const,
+        title: 'Hover account menu',
+        body: 'Hover the reviewed account menu.',
+        execution: {
+          schemaVersion: 2 as const,
+          intent: 'Hover the reviewed account menu.',
+          reviewStatus: 'confirmed' as const,
+          actionRisk: 'low' as const,
+          action,
+        },
+      }],
+    };
+    const start = vi.fn().mockResolvedValue({
+      id: 'session-controlled-hover', status: 'ready', projectId: project.id, environmentId: environment.id,
+      currentUrl: environment.url, pageTitle: project.name, message: 'ready', updatedAt: new Date(0).toISOString(),
+    });
+    const executeControlledDeterministicAction = vi.fn().mockResolvedValue({
+      message: 'Completed approved hover interaction.', artifacts: [],
+    });
+    const deterministicRunner = { runDeterministicStep: vi.fn() };
+    const runner = new TestRunner(
+      { createSnapshot: vi.fn().mockResolvedValue({ id: 'controlled-hover-snapshot', type: 'snapshot', label: 'initial', path: '/tmp/controlled-hover.svg' }) } as never,
+      { start, executeControlledDeterministicAction, hasRealPage: () => false } as never,
+      vi.fn(),
+      undefined,
+      undefined,
+      deterministicRunner as never,
+      undefined,
+      { resolve: async () => ({}) },
+    );
+
+    const response = await runner.run({ project, testCase, environment });
+
+    expect(response.detail.status).toBe('passed');
+    expect(response.detail.steps).toEqual([expect.objectContaining({ status: 'passed', stepId: 'step-controlled-hover' })]);
+    expect(executeControlledDeterministicAction).toHaveBeenCalledWith(expect.objectContaining({
+      action,
+      runId: expect.any(String),
+    }));
+    expect(deterministicRunner.runDeterministicStep).not.toHaveBeenCalled();
+  });
+
+  it('resolves an approved upload only through the main interaction policy before it starts BrowserRuntime', async () => {
+    const project = createProjectWithRecording();
+    const environment = project.environments[0]!;
+    const action = { kind: 'upload' as const, locator: { selector: '#avatar', quality: 'acceptable' as const }, fileRef: { kind: 'attachment' as const, id: 'attachment-avatar' } };
+    const testCase = {
+      ...project.testCases[0]!,
+      steps: [{
+        id: 'step-main-owned-upload', type: 'ai' as const, title: 'Upload avatar', body: 'Upload the selected file.',
+        execution: { schemaVersion: 2 as const, intent: 'Upload the selected file.', reviewStatus: 'confirmed' as const, actionRisk: 'low' as const, action },
+      }],
+    };
+    const start = vi.fn().mockResolvedValue({
+      id: 'session-main-upload', status: 'ready', projectId: project.id, environmentId: environment.id,
+      currentUrl: environment.url, pageTitle: project.name, message: 'ready', updatedAt: new Date(0).toISOString(),
+    });
+    const resolveUpload = vi.fn().mockResolvedValue({ path: '/main-owned/avatar.png', byteCount: 512 });
+    const executeControlledDeterministicAction = vi.fn().mockResolvedValue({ message: 'Uploaded approved file.', artifacts: [] });
+    const runner = new TestRunner(
+      { createSnapshot: vi.fn().mockResolvedValue({ id: 'main-upload-snapshot', type: 'snapshot', label: 'initial', path: '/tmp/main-upload.svg' }) } as never,
+      { start, executeControlledDeterministicAction, hasRealPage: () => false } as never,
+      vi.fn(), undefined, undefined, undefined, undefined,
+      { resolve: async () => ({}), resolveUpload },
+    );
+
+    const response = await runner.run({ project, testCase, environment });
+
+    expect(response.detail.status).toBe('passed');
+    expect(resolveUpload).toHaveBeenCalledWith(expect.objectContaining({ reference: action.fileRef }));
+    expect(executeControlledDeterministicAction).toHaveBeenCalledWith(expect.objectContaining({
+      resolveUploadPath: expect.any(Function),
+    }));
+  });
+
+  it('blocks a resolved main-owned secret before fixtures, BrowserRuntime, or the deterministic runner start', async () => {
+    const project = createProjectWithRecording();
+    const environment = project.environments[0]!;
+    const secret = 'resolved-model-secret';
+    const start = vi.fn();
+    const fixtureExecutor = { execute: vi.fn() };
+    const deterministicRunner = { runDeterministicStep: vi.fn() };
+    const testCase = {
+      ...project.testCases[0]!,
+      steps: [{
+        id: 'step-secret-clipboard',
+        type: 'ai' as const,
+        title: '复制受控值',
+        body: '复制审核后的剪贴板哨兵。',
+        execution: {
+          schemaVersion: 2 as const,
+          intent: '复制审核后的剪贴板哨兵。',
+          reviewStatus: 'confirmed' as const,
+          actionRisk: 'low' as const,
+          action: {
+            kind: 'clipboard' as const,
+            locator: { selector: '#clipboard-target', quality: 'acceptable' as const },
+            value: `sentinel-${secret}`,
+          },
+        },
+      }],
+    };
+    const runner = new TestRunner(
+      { createSnapshot: vi.fn() } as never,
+      { start } as never,
+      vi.fn(),
+      undefined,
+      undefined,
+      deterministicRunner as never,
+      fixtureExecutor as never,
+      {
+        resolve: async () => ({ knownSecrets: [secret] }),
+      } as never,
+    );
+
+    const response = await runner.run({ project, testCase, environment });
+
+    expect(response.detail.reason).toEqual({
+      code: 'unsupportedAction',
+      message: 'deterministic interaction blocked: resolvedSecret',
+    });
+    expect(JSON.stringify(response)).not.toContain(secret);
+    expect(fixtureExecutor.execute).not.toHaveBeenCalled();
+    expect(start).not.toHaveBeenCalled();
+    expect(deterministicRunner.runDeterministicStep).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['project label', (project: ProjectDraft, testCase: TestCaseDraft, secret: string) => ({ ...project, name: `Project ${secret}` })],
+    ['Case title', (project: ProjectDraft, testCase: TestCaseDraft, secret: string) => ({
+      ...project,
+      testCases: [{ ...testCase, name: `Case ${secret}` }],
+    })],
+    ['source step title', (project: ProjectDraft, testCase: TestCaseDraft, secret: string) => ({
+      ...project,
+      testCases: [{ ...testCase, steps: testCase.steps.map((step) => ({ ...step, title: `Step ${secret}` })) }],
+    })],
+  ] as const)('keeps a resolved secret out of preflight evidence when it appears in a controlled Case %s', async (_label, projectPatch) => {
+    const secret = 'resolved-preflight-evidence-secret';
+    const baseProject = createProjectWithRecording();
+    const environment = baseProject.environments[0]!;
+    const baseTestCase = {
+      ...baseProject.testCases[0]!,
+      steps: [{
+        id: 'step-controlled-preflight', type: 'ai' as const, title: 'Copy reviewed value', body: 'Copy the reviewed value.',
+        execution: {
+          schemaVersion: 2 as const, intent: 'Copy the reviewed value.', reviewStatus: 'confirmed' as const, actionRisk: 'low' as const,
+          action: { kind: 'clipboard' as const, locator: { selector: '#clipboard', quality: 'acceptable' as const }, value: 'reviewed sentinel' },
+        },
+      }],
+    };
+    const project = projectPatch({ ...baseProject, testCases: [baseTestCase] }, baseTestCase, secret);
+    const testCase = project.testCases[0]!;
+    const start = vi.fn().mockResolvedValue({
+      id: 'session-preflight-label', status: 'ready', projectId: project.id, environmentId: environment.id,
+      currentUrl: environment.url, pageTitle: project.name, message: 'ready', updatedAt: new Date(0).toISOString(),
+    });
+    const emitRunEvent = vi.fn();
+    const runner = new TestRunner(
+      { createSnapshot: vi.fn().mockResolvedValue({ id: 'preflight-label-artifact', type: 'snapshot', label: 'initial', path: '/tmp/preflight-label.svg' }) } as never,
+      { start } as never,
+      emitRunEvent,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { resolve: async () => ({ knownSecrets: [secret] }) },
+    );
+
+    const response = await runner.run({ project, testCase, environment });
+
+    expect(response.detail.reason).toEqual({
+      code: 'unsupportedAction',
+      message: 'deterministic interaction blocked: resolvedSecret',
+    });
+    expect(start).not.toHaveBeenCalled();
+    expect(JSON.stringify({ response, events: emitRunEvent.mock.calls })).not.toContain(secret);
+  });
+
+  it('blocks dynamic deterministic evidence that contains a resolved secret before persisting it', async () => {
+    const secret = 'resolved-dynamic-evidence-secret';
+    const project = createProjectWithRecording();
+    const environment = project.environments[0]!;
+    const testCase = {
+      ...project.testCases[0]!,
+      steps: [
+        {
+          id: 'step-safe-navigate', type: 'ai' as const, title: 'Open home', body: 'Open the home page.',
+          execution: {
+            schemaVersion: 2 as const, intent: 'Open the home page.', reviewStatus: 'confirmed' as const, actionRisk: 'low' as const,
+            action: { kind: 'navigate' as const, url: environment.url },
+          },
+        },
+        {
+          id: 'step-controlled-hover', type: 'ai' as const, title: 'Hover over menu', body: 'Hover over the reviewed menu.',
+          execution: {
+            schemaVersion: 2 as const, intent: 'Hover over the reviewed menu.', reviewStatus: 'confirmed' as const, actionRisk: 'low' as const,
+            action: { kind: 'hover' as const, locator: { selector: '#menu', quality: 'acceptable' as const } },
+          },
+        },
+      ],
+    };
+    const start = vi.fn().mockResolvedValue({
+      id: 'session-dynamic-secret', status: 'ready', projectId: project.id, environmentId: environment.id,
+      currentUrl: environment.url, pageTitle: project.name, message: 'ready', updatedAt: new Date(0).toISOString(),
+    });
+    const emitRunEvent = vi.fn();
+    const deterministicRunner = {
+      runDeterministicStep: vi.fn().mockResolvedValue({
+        runId: 'deterministic-dynamic-secret',
+        title: 'Open home',
+        detail: {
+          id: 'deterministic-dynamic-secret', projectId: project.id, testCaseId: testCase.id, environmentId: environment.id,
+          title: 'Open home', status: 'passed', startedAt: new Date(0).toISOString(), endedAt: new Date(0).toISOString(), duration: '00:00:01',
+          summary: `summary ${secret}`, logs: [`log ${secret}`],
+          steps: [{ id: 'dynamic-step', stepId: 'step-safe-navigate', title: `step ${secret}`, status: 'passed', message: `message ${secret}` }],
+          artifacts: [{ id: 'dynamic-artifact', type: 'snapshot', label: `artifact ${secret}`, path: '/tmp/dynamic-secret.svg' }],
+        },
+      }),
+    };
+    const runner = new TestRunner(
+      { createSnapshot: vi.fn().mockResolvedValue({ id: 'initial-artifact', type: 'snapshot', label: 'initial', path: '/tmp/initial.svg' }) } as never,
+      { start } as never,
+      emitRunEvent,
+      undefined,
+      undefined,
+      deterministicRunner as never,
+      undefined,
+      { resolve: async () => ({ knownSecrets: [secret] }) },
+    );
+
+    const response = await runner.run({ project, testCase, environment });
+
+    expect(response.detail.reason).toEqual({
+      code: 'unsupportedAction',
+      message: 'deterministic interaction blocked: resolvedSecret',
+    });
+    expect(start).toHaveBeenCalledOnce();
+    expect(JSON.stringify({ response, events: emitRunEvent.mock.calls })).not.toContain(secret);
+  });
+
+  it('cleans prepared fixtures and preserves their evidence when dynamic deterministic output contains a resolved secret', async () => {
+    const secret = 'resolved-dynamic-fixture-secret';
+    const project = createProjectWithRecording();
+    const environment = project.environments[0]!;
+    const fixture = createExecutableHttpFixture(environment);
+    const testCase = {
+      ...project.testCases[0]!,
+      assetReferences: { fixtures: [{ id: fixture.id, version: fixture.version }], reusableFlows: [] },
+      steps: [{
+        id: 'step-dynamic-fixture-secret-navigate',
+        type: 'ai' as const,
+        title: 'Open home',
+        body: 'Open the home page.',
+        execution: {
+          schemaVersion: 2 as const,
+          intent: 'Open the home page.',
+          reviewStatus: 'confirmed' as const,
+          actionRisk: 'low' as const,
+          action: { kind: 'navigate' as const, url: environment.url },
+        },
+      }, {
+        id: 'step-dynamic-fixture-secret-hover',
+        type: 'ai' as const,
+        title: 'Hover over menu',
+        body: 'Hover over the reviewed menu.',
+        execution: {
+          schemaVersion: 2 as const,
+          intent: 'Hover over the reviewed menu.',
+          reviewStatus: 'confirmed' as const,
+          actionRisk: 'low' as const,
+          action: { kind: 'hover' as const, locator: { selector: '#menu', quality: 'acceptable' as const } },
+        },
+      }],
+    };
+    const start = vi.fn().mockResolvedValue({
+      id: 'session-dynamic-fixture-secret', status: 'ready', projectId: project.id, environmentId: environment.id,
+      currentUrl: environment.url, pageTitle: project.name, message: 'ready', updatedAt: new Date(0).toISOString(),
+    });
+    const order: string[] = [];
+    const fixtureExecutor: FixtureLifecycleExecutor = {
+      execute: vi.fn().mockImplementation(async ({ fixture: currentFixture, lifecycle }) => {
+        order.push(lifecycle);
+        return { evidence: fixtureEvidence(currentFixture, lifecycle), message: 'ok' };
+      }),
+    };
+    const emitRunEvent = vi.fn();
+    const deterministicRunner = {
+      runDeterministicStep: vi.fn().mockResolvedValue({
+        runId: 'deterministic-dynamic-fixture-secret',
+        title: testCase.steps[0]!.title,
+        detail: {
+          id: 'deterministic-dynamic-fixture-secret', projectId: project.id, testCaseId: testCase.id, environmentId: environment.id,
+          title: testCase.steps[0]!.title, status: 'passed', startedAt: new Date(0).toISOString(), endedAt: new Date(0).toISOString(), duration: '00:00:01',
+          summary: `summary ${secret}`, logs: [`log ${secret}`], steps: [], artifacts: [],
+        },
+      }),
+    };
+    const runner = new TestRunner(
+      { createSnapshot: vi.fn().mockResolvedValue({ id: 'initial-fixture-artifact', type: 'snapshot', label: 'initial', path: '/tmp/initial-fixture.svg' }) } as never,
+      { start } as never,
+      emitRunEvent,
+      undefined,
+      undefined,
+      deterministicRunner as never,
+      fixtureExecutor,
+      { resolve: async () => ({ knownSecrets: [secret] }) },
+    );
+
+    const response = await runner.run({ project: { ...project, fixtures: [fixture] }, testCase, environment });
+
+    expect(response.detail.reason).toEqual({ code: 'unsupportedAction', message: 'deterministic interaction blocked: resolvedSecret' });
+    expect(order).toEqual(['setup', 'cleanup']);
+    expect(response.detail.fixtureLifecycles).toEqual([
+      expect.objectContaining({ fixtureId: fixture.id, lifecycle: 'setup', outcome: 'passed' }),
+      expect.objectContaining({ fixtureId: fixture.id, lifecycle: 'cleanup', outcome: 'passed' }),
+    ]);
+    expect(JSON.stringify({ response, events: emitRunEvent.mock.calls })).not.toContain(secret);
+  });
+
+  it('does not resolve the interaction policy for a Case without a controlled interaction', async () => {
+    const project = createProjectWithRecording();
+    const environment = project.environments[0]!;
+    const start = vi.fn().mockResolvedValue({
+      id: 'session-existing-action', status: 'ready', projectId: project.id, environmentId: environment.id,
+      currentUrl: environment.url, pageTitle: project.name, message: 'ready', updatedAt: new Date(0).toISOString(),
+    });
+    const policy = { resolve: vi.fn().mockRejectedValue(new Error('policy should not resolve')) };
+    const runner = new TestRunner(
+      { createSnapshot: vi.fn().mockResolvedValue({ id: 'snapshot-existing-action', type: 'snapshot', label: 'snapshot', path: '/tmp/existing-action.svg' }) } as never,
+      { start } as never,
+      vi.fn(),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      policy,
+    );
+    const testCase = {
+      ...project.testCases[0]!,
+      steps: [{
+        id: 'step-manual-existing-action', type: 'manual' as const, title: 'Existing manual check', body: 'Confirm the existing state.',
+      }],
+    };
+
+    await runner.run({ project, testCase, environment });
+
+    expect(policy.resolve).not.toHaveBeenCalled();
+    expect(start).toHaveBeenCalledOnce();
+  });
+
+  it('does not emit controlled Case labels when the main interaction policy is unavailable', async () => {
+    const secret = 'unavailable-policy-label-secret';
+    const project = createProjectWithRecording();
+    const environment = project.environments[0]!;
+    const testCase = {
+      ...project.testCases[0]!,
+      name: `Case ${secret}`,
+      steps: [{
+        id: 'step-policy-unavailable', type: 'ai' as const, title: 'Copy reviewed value', body: 'Copy the reviewed value.',
+        execution: {
+          schemaVersion: 2 as const, intent: 'Copy the reviewed value.', reviewStatus: 'confirmed' as const, actionRisk: 'low' as const,
+          action: { kind: 'clipboard' as const, locator: { selector: '#clipboard', quality: 'acceptable' as const }, value: 'reviewed sentinel' },
+        },
+      }],
+    };
+    const start = vi.fn();
+    const emitRunEvent = vi.fn();
+    const runner = new TestRunner(
+      { createSnapshot: vi.fn() } as never,
+      { start } as never,
+      emitRunEvent,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { resolve: async () => { throw new Error('main policy unavailable'); } },
+    );
+
+    const response = await runner.run({ project, testCase, environment });
+
+    expect(response.detail.reason).toEqual({
+      code: 'unsupportedAction',
+      message: 'deterministic interaction blocked: preflightPolicyUnavailable',
+    });
+    expect(start).not.toHaveBeenCalled();
+    expect(JSON.stringify({ response, events: emitRunEvent.mock.calls })).not.toContain(secret);
+  });
+
+  it('blocks a default-permitted controlled action when no main interaction policy is supplied', async () => {
+    const project = createProjectWithRecording();
+    const environment = project.environments[0]!;
+    const start = vi.fn();
+    const deterministicRunner = { runDeterministicStep: vi.fn() };
+    const testCase = {
+      ...project.testCases[0]!,
+      steps: [{
+        id: 'step-policy-missing-hover',
+        type: 'ai' as const,
+        title: 'Hover over reviewed menu',
+        body: 'Hover over the reviewed menu.',
+        execution: {
+          schemaVersion: 2 as const,
+          intent: 'Hover over the reviewed menu.',
+          reviewStatus: 'confirmed' as const,
+          actionRisk: 'low' as const,
+          action: { kind: 'hover' as const, locator: { selector: '#menu', quality: 'acceptable' as const } },
+        },
+      }],
+    };
+    const runner = new TestRunner(
+      { createSnapshot: vi.fn() } as never,
+      { start } as never,
+      vi.fn(),
+      undefined,
+      undefined,
+      deterministicRunner as never,
+    );
+
+    const response = await runner.run({ project, testCase, environment });
+
+    expect(response.detail.reason).toEqual({
+      code: 'unsupportedAction',
+      message: 'deterministic interaction blocked: preflightPolicyUnavailable',
+    });
+    expect(start).not.toHaveBeenCalled();
+    expect(deterministicRunner.runDeterministicStep).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['malformedAction', {
+      kind: 'iframe', frame: null, locator: { selector: '#confirm', quality: 'acceptable' },
+    }],
+    ['malformedAction', {
+      kind: 'networkMock', url: 'https://your-app.example.com/orders', method: 'GET', response: { status: 200, body: BigInt(1) },
+    }],
+    ['unsupportedUrlScheme', { kind: 'tab', url: 'file:///private/report.html' }],
+    ['untrustedTab', { kind: 'tab', url: 'https://outside.example.test/help' }],
+    ['untrustedDownload', {
+      kind: 'download', locator: { selector: '#download', quality: 'acceptable' }, url: 'https://outside.example.test/report.csv',
+    }],
+    ['unsupportedNetworkHost', { kind: 'networkObserve', url: 'https://outside.example.test/orders', method: 'GET' }],
+    ['unsupportedNetworkMethod', {
+      kind: 'networkMock', url: 'https://your-app.example.com/orders', method: 'POST', response: { status: 200, body: {} },
+    }],
+    ['coordinateOutOfBounds', {
+      kind: 'drag', source: { selector: '#a', quality: 'acceptable' }, target: { selector: '#b', quality: 'acceptable' }, sourcePosition: { x: -1, y: 0 },
+    }],
+    ['clipboardTooLarge', { kind: 'clipboard', value: 'x'.repeat(4 * 1024 + 1) }],
+    ['mockBodyTooLarge', {
+      kind: 'networkMock', url: 'https://your-app.example.com/orders', method: 'GET', response: { status: 200, body: 'x'.repeat(64 * 1024 + 1) },
+    }],
+    ['uploadTooLarge', {
+      kind: 'upload', locator: { selector: '#avatar', quality: 'acceptable' }, fileRef: { kind: 'attachment', id: 'attachment-large' },
+    }],
+  ] as const)('blocks %s before BrowserRuntime or the deterministic runner starts', async (reason, action) => {
+    const project = createProjectWithRecording();
+    const environment = project.environments[0]!;
+    const start = vi.fn();
+    const deterministicRunner = { runDeterministicStep: vi.fn() };
+    const runner = new TestRunner(
+      { createSnapshot: vi.fn() } as never,
+      { start } as never,
+      vi.fn(),
+      undefined,
+      undefined,
+      deterministicRunner as never,
+      undefined,
+      {
+        resolve: async () => ({
+          uploadReferences: [{ kind: 'attachment', id: 'attachment-large', byteCount: 10 }],
+          maxUploadBytes: 1,
+        }),
+      },
+    );
+    const testCase = {
+      ...project.testCases[0]!,
+      steps: [{
+        id: `step-${reason}`,
+        type: 'ai' as const,
+        title: `blocked ${reason}`,
+        body: 'Reviewed controlled action.',
+        execution: {
+          schemaVersion: 2 as const,
+          intent: 'Reviewed controlled action.',
+          reviewStatus: 'confirmed' as const,
+          actionRisk: 'low' as const,
+          action: action as never,
+        },
+      }],
+    };
+
+    const response = await runner.run({ project, testCase, environment });
+
+    expect(response.detail.reason).toEqual({
+      code: 'unsupportedAction',
+      message: `deterministic interaction blocked: ${reason}`,
+    });
+    expect(start).not.toHaveBeenCalled();
+    expect(deterministicRunner.runDeterministicStep).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['a policy-approved upload with a path-shaped file ID', {
+      kind: 'upload', locator: { selector: '#avatar', quality: 'acceptable' }, fileRef: { kind: 'attachment', id: '/private/upload.png' },
+    }, {
+      uploadReferences: [{ kind: 'attachment', id: '/private/upload.png', byteCount: 512 }],
+    }],
+    ['a network mock with a non-string content type', {
+      kind: 'networkMock', url: 'https://your-app.example.com/orders', method: 'GET', response: { status: 200, contentType: 42, body: {} },
+    }, {}],
+  ] as const)('blocks %s as malformed before BrowserRuntime starts', async (_label, action, policy) => {
+    const project = createProjectWithRecording();
+    const environment = project.environments[0]!;
+    const start = vi.fn().mockResolvedValue({
+      id: 'session-malformed-controlled-action', status: 'ready', projectId: project.id, environmentId: environment.id,
+      currentUrl: environment.url, pageTitle: project.name, message: 'ready', updatedAt: new Date(0).toISOString(),
+    });
+    const runner = new TestRunner(
+      { createSnapshot: vi.fn().mockResolvedValue({ id: 'malformed-action-artifact', type: 'snapshot', label: 'initial', path: '/tmp/malformed-action.svg' }) } as never,
+      { start } as never,
+      vi.fn(),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { resolve: async () => policy },
+    );
+    const testCase = {
+      ...project.testCases[0]!,
+      steps: [{
+        id: 'step-malformed-controlled-action', type: 'ai' as const, title: 'Malformed controlled action', body: 'Reviewed controlled action.',
+        execution: {
+          schemaVersion: 2 as const, intent: 'Reviewed controlled action.', reviewStatus: 'confirmed' as const, actionRisk: 'low' as const,
+          action: action as never,
+        },
+      }],
+    };
+
+    const response = await runner.run({ project, testCase, environment });
+
+    expect(response.detail.reason).toEqual({ code: 'unsupportedAction', message: 'deterministic interaction blocked: malformedAction' });
+    expect(start).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['a sparse array body', 'sparse'],
+    ['an array body with an own filePath', 'ownProperty'],
+    ['an array body with a symbol property', 'symbol'],
+    ['an array body with a non-standard prototype', 'nonStandardPrototype'],
+  ] as const)('blocks a network mock with %s during preflight without persisting hidden values', async (_label, bodyVariant) => {
+    const project = createProjectWithRecording();
+    const environment = project.environments[0]!;
+    const { action, hiddenValue } = malformedNetworkMockAction(bodyVariant);
+    const start = vi.fn();
+    const runner = new TestRunner(
+      { createSnapshot: vi.fn() } as never,
+      { start } as never,
+      vi.fn(),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { resolve: async () => ({ allowedNetworkMethods: ['GET'] }) },
+    );
+    const testCase = {
+      ...project.testCases[0]!,
+      steps: [{
+        id: 'step-malformed-network-mock-array',
+        type: 'ai' as const,
+        title: 'Malformed network mock',
+        body: 'Do not execute this action.',
+        execution: {
+          schemaVersion: 2 as const,
+          intent: 'Do not execute this action.',
+          reviewStatus: 'confirmed' as const,
+          actionRisk: 'low' as const,
+          action,
+        },
+      }],
+    };
+
+    const response = await runner.run({ project, testCase, environment });
+
+    expect(response.detail.reason).toEqual({
+      code: 'unsupportedAction',
+      message: 'deterministic interaction blocked: malformedAction',
+    });
+    expect(start).not.toHaveBeenCalled();
+    if (hiddenValue) {
+      expect(JSON.stringify(response)).not.toContain(hiddenValue);
+    }
+  });
+
+  it.each([
+    ['a non-enumerable filePath', 'nonEnumerable'],
+    ['an accessor getter', 'accessor'],
+    ['an Object.create(null) prototype', 'nullPrototype'],
+    ['a non-standard prototype', 'nonStandardPrototype'],
+  ] as const)('blocks a network mock body with %s during preflight without reading it', async (_label, bodyVariant) => {
+    const project = createProjectWithRecording();
+    const environment = project.environments[0]!;
+    const { action, hiddenValue, getterWasRead } = malformedNetworkMockObjectAction(bodyVariant);
+    const start = vi.fn();
+    const runner = new TestRunner(
+      { createSnapshot: vi.fn() } as never,
+      { start } as never,
+      vi.fn(),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { resolve: async () => ({ allowedNetworkMethods: ['GET'] }) },
+    );
+    const testCase = {
+      ...project.testCases[0]!,
+      steps: [{
+        id: 'step-malformed-network-mock-object',
+        type: 'ai' as const,
+        title: 'Malformed network mock',
+        body: 'Do not execute this action.',
+        execution: {
+          schemaVersion: 2 as const,
+          intent: 'Do not execute this action.',
+          reviewStatus: 'confirmed' as const,
+          actionRisk: 'low' as const,
+          action,
+        },
+      }],
+    };
+
+    const response = await runner.run({ project, testCase, environment });
+
+    expect(response.detail.reason).toEqual({
+      code: 'unsupportedAction',
+      message: 'deterministic interaction blocked: malformedAction',
+    });
+    expect(start).not.toHaveBeenCalled();
+    expect(getterWasRead()).toBe(false);
+    if (hiddenValue) {
+      expect(JSON.stringify(response)).not.toContain(hiddenValue);
+    }
+  });
+
+  it.each([
+    ['selected main-owned upload', {
+      kind: 'upload', locator: { selector: '#avatar', quality: 'acceptable' }, fileRef: { kind: 'attachment', id: 'attachment-avatar' },
+    }, { uploadReferences: [{ kind: 'attachment', id: 'attachment-avatar', byteCount: 512 }] }],
+    ['approved POST network mock', {
+      kind: 'networkMock', url: 'https://your-app.example.com/orders', method: 'POST', response: { status: 201, body: { id: 'order-1' } },
+    }, { allowedNetworkMethods: ['GET', 'POST'] }],
+  ] as const)('executes %s after the main-owned policy admits it', async (_label, action, policy) => {
+    const project = createProjectWithRecording();
+    const environment = project.environments[0]!;
+    const start = vi.fn().mockResolvedValue({
+      id: 'session-policy', status: 'ready', projectId: project.id, environmentId: environment.id,
+      currentUrl: environment.url, pageTitle: project.name, message: 'ready', updatedAt: new Date(0).toISOString(),
+    });
+    const executeControlledDeterministicAction = vi.fn().mockResolvedValue({ message: 'Controlled action completed.', artifacts: [] });
+    const deterministicRunner = { runDeterministicStep: vi.fn() };
+    const runner = new TestRunner(
+      { createSnapshot: vi.fn().mockResolvedValue({ id: 'preflight', type: 'snapshot', label: 'preflight', path: '/tmp/preflight.svg' }) } as never,
+      { start, executeControlledDeterministicAction, hasRealPage: () => false } as never,
+      vi.fn(),
+      undefined,
+      undefined,
+      deterministicRunner as never,
+      undefined,
+      { resolve: async () => policy, resolveUpload: async () => ({ path: '/main-owned/approved-upload', byteCount: 512 }) },
+    );
+    const testCase = {
+      ...project.testCases[0]!,
+      steps: [{
+        id: `step-${action.kind}`,
+        type: 'ai' as const,
+        title: action.kind,
+        body: 'Reviewed controlled action.',
+        execution: {
+          schemaVersion: 2 as const,
+          intent: 'Reviewed controlled action.',
+          reviewStatus: 'confirmed' as const,
+          actionRisk: 'low' as const,
+          action: action as never,
+        },
+      }],
+    };
+
+    const response = await runner.run({ project, testCase, environment });
+
+    expect(start).toHaveBeenCalledTimes(1);
+    expect(response.detail.status).toBe('passed');
+    expect(executeControlledDeterministicAction).toHaveBeenCalledWith(expect.objectContaining({ action }));
+    expect(deterministicRunner.runDeterministicStep).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['unselected upload', {
+      kind: 'upload', locator: { selector: '#avatar', quality: 'acceptable' }, fileRef: { kind: 'attachment', id: 'attachment-avatar' },
+    }, 'unapprovedUploadReference'],
+    ['unapproved POST mock', {
+      kind: 'networkMock', url: 'https://your-app.example.com/orders', method: 'POST', response: { status: 201, body: {} },
+    }, 'unsupportedNetworkMethod'],
+  ] as const)('keeps %s blocked when the main-owned policy does not approve it', async (_label, action, reason) => {
+    const project = createProjectWithRecording();
+    const environment = project.environments[0]!;
+    const start = vi.fn();
+    const runner = new TestRunner(
+      { createSnapshot: vi.fn() } as never,
+      { start } as never,
+      vi.fn(),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { resolve: async () => ({}) },
+    );
+    const testCase = {
+      ...project.testCases[0]!,
+      steps: [{
+        id: `step-${reason}`, type: 'ai' as const, title: reason, body: 'Reviewed controlled action.',
+        execution: {
+          schemaVersion: 2 as const, intent: 'Reviewed controlled action.', reviewStatus: 'confirmed' as const, actionRisk: 'low' as const,
+          action: action as never,
+        },
+      }],
+    };
+
+    const response = await runner.run({ project, testCase, environment });
+
+    expect(response.detail.reason).toEqual({ code: 'unsupportedAction', message: `deterministic interaction blocked: ${reason}` });
+    expect(start).not.toHaveBeenCalled();
+  });
+
+  it('executes exact reusable Flow steps before Case steps and records their origin', async () => {
+    const project = createProjectWithRecording();
+    const environment = project.environments[0]!;
+    const flow = {
+      schemaVersion: 1 as const,
+      id: 'flow/login',
+      version: 2,
+      name: '登录准备',
+      description: '',
+      tags: [],
+      steps: [
+        {
+          id: 'flow-navigate',
+          type: 'ai' as const,
+          title: 'Flow 打开登录页',
+          body: '打开登录页。',
+          execution: {
+            schemaVersion: 2 as const,
+            intent: '打开登录页。',
+            reviewStatus: 'confirmed' as const,
+            actionRisk: 'low' as const,
+            action: { kind: 'navigate' as const, url: environment.url },
+          },
+        },
+      ],
+      createdAt: new Date(0).toISOString(),
+      updatedAt: new Date(0).toISOString(),
+    };
+    const testCase = {
+      ...project.testCases[0]!,
+      steps: [{
+        id: 'case-assert',
+        type: 'aiAssert' as const,
+        title: 'Case 检查首页',
+        body: '检查首页。',
+        execution: {
+          schemaVersion: 2 as const,
+          intent: '检查首页。',
+          reviewStatus: 'confirmed' as const,
+          actionRisk: 'low' as const,
+          assertion: { id: 'assert-home', version: 1 as const, kind: 'pageContains' as const, expected: '首页' },
+        },
+      }],
+      assetReferences: { fixtures: [], reusableFlows: [{ id: flow.id, version: flow.version }] },
+    };
+    const calls: string[] = [];
+    const deterministicRunner = {
+      runDeterministicStep: vi.fn().mockImplementation(async (request) => {
+        calls.push(request.sourceStep.id);
+        return {
+          runId: `run-${request.sourceStep.id}`,
+          title: request.sourceStep.title,
+          detail: {
+            id: `run-${request.sourceStep.id}`,
+            projectId: project.id,
+            testCaseId: testCase.id,
+            environmentId: environment.id,
+            title: request.sourceStep.title,
+            status: 'passed' as const,
+            startedAt: new Date(0).toISOString(),
+            endedAt: new Date(0).toISOString(),
+            duration: '00:00:01',
+            summary: 'passed',
+            logs: [],
+            steps: [],
+            artifacts: [],
+          },
+        };
+      }),
+    };
+    const browserRuntime = {
+      start: vi.fn().mockResolvedValue({
+        id: 'session-flow', status: 'ready', projectId: project.id, environmentId: environment.id,
+        currentUrl: environment.url, pageTitle: project.name, message: 'ready', updatedAt: new Date(0).toISOString(),
+      }),
+    };
+    const runner = new TestRunner(
+      { createSnapshot: vi.fn().mockResolvedValue({ id: 'start', type: 'snapshot', label: 'start', path: '/tmp/start.svg' }) } as never,
+      browserRuntime as never,
+      vi.fn(),
+      undefined,
+      undefined,
+      deterministicRunner as never,
+    );
+
+    const response = await runner.run({ project: { ...project, reusableFlows: [flow] }, testCase, environment });
+
+    expect(calls).toHaveLength(2);
+    expect(calls[0]).toContain('flow-navigate');
+    expect(calls[1]).toBe('case-assert');
+    expect(response.detail.status).toBe('passed');
+    expect(response.detail.provenance).toBeUndefined();
+    expect(response.detail.steps[0]).toMatchObject({
+      title: 'Flow 打开登录页',
+      reusableFlow: { id: flow.id, version: flow.version },
+    });
+  });
+
+  it('blocks a missing exact Flow before browser startup without falling back to latest', async () => {
+    const project = createProjectWithRecording();
+    const environment = project.environments[0]!;
+    const start = vi.fn();
+    const runner = new TestRunner({ createSnapshot: vi.fn() } as never, { start } as never, vi.fn());
+    const testCase = {
+      ...project.testCases[0]!,
+      assetReferences: { fixtures: [], reusableFlows: [{ id: 'flow/missing', version: 1 }] },
+    };
+
+    const response = await runner.run({
+      project: { ...project, reusableFlows: [{
+        schemaVersion: 1,
+        id: 'flow/missing',
+        version: 2,
+        name: 'Latest only',
+        description: '',
+        tags: [],
+        steps: [{ id: 'flow-step', type: 'manual', title: 'invalid', body: 'invalid' }],
+        createdAt: new Date(0).toISOString(),
+        updatedAt: new Date(0).toISOString(),
+      }] },
+      testCase,
+      environment,
+    });
+
+    expect(response.detail.status).toBe('blocked');
+    expect(response.detail.reason).toMatchObject({ code: 'missingAssetVersion' });
+    expect(start).not.toHaveBeenCalled();
+  });
+
   it('uses a real browser screenshot after startup and labels the fallback a synthetic diagnostic', async () => {
     const project = createProjectWithRecording();
     const environment = project.environments[0]!;
@@ -92,12 +1068,12 @@ describe('TestRunner recording replay', () => {
       testCase: { ...project.testCases[0]!, steps: [] },
     });
 
-    expect(browserRuntime.captureRunScreenshot).toHaveBeenCalledWith(expect.stringMatching(/^run-\d+$/));
+    expect(browserRuntime.captureRunScreenshot).toHaveBeenCalledWith(expect.stringMatching(/^run-\d+$/), 'preStep');
     expect(artifacts.createSnapshot).not.toHaveBeenCalled();
     expect(response.detail.artifacts).toEqual([realScreenshot]);
 
     browserRuntime.captureRunScreenshot.mockResolvedValueOnce(null);
-    artifacts.createSnapshot.mockResolvedValueOnce({ id: 'synthetic-start', type: 'screenshot', label: 'synthetic diagnostic', path: '/tmp/synthetic-start.svg' });
+    artifacts.createSnapshot.mockResolvedValueOnce({ id: 'synthetic-start', type: 'snapshot', label: 'synthetic diagnostic', path: '/tmp/synthetic-start.svg' });
     const fallback = await runner.run({
       runId: 'run-synthetic-fallback',
       project,
@@ -114,6 +1090,143 @@ describe('TestRunner recording replay', () => {
     expect(fallback.detail.artifacts).toEqual([
       expect.objectContaining({ label: 'synthetic diagnostic', path: '/tmp/synthetic-start.svg' }),
     ]);
+  });
+
+  it('captures real PNG evidence at pre-step, post-step, and failure checkpoints', async () => {
+    const project = createProjectWithRecording();
+    const environment = project.environments[0]!;
+    const captureRunScreenshot = vi.fn(async (_runId: string, checkpoint?: string) => ({
+      id: `artifact-${checkpoint}`,
+      type: 'screenshot' as const,
+      label: checkpoint,
+      path: `/tmp/${checkpoint}.png`,
+    }));
+    const browserRuntime = {
+      start: vi.fn().mockResolvedValue({
+        id: 'session-test', status: 'ready', projectId: project.id, environmentId: environment.id,
+        currentUrl: environment.url, pageTitle: project.name, message: 'ready', updatedAt: new Date(0).toISOString(),
+      }),
+      hasRealPage: vi.fn().mockReturnValue(true),
+      captureRunScreenshot,
+    };
+    const runner = new TestRunner({ createSnapshot: vi.fn() } as never, browserRuntime as never, vi.fn());
+
+    const response = await runner.run({
+      runId: 'run-real-checkpoints',
+      project,
+      environment,
+      testCase: {
+        ...project.testCases[0]!,
+        steps: [{ id: 'manual-step', type: 'manual', title: '人工确认', body: '确认当前状态' }],
+      },
+    });
+
+    expect(response.detail.status).toBe('blocked');
+    expect(captureRunScreenshot).toHaveBeenNthCalledWith(1, 'run-real-checkpoints', 'preStep');
+    expect(captureRunScreenshot).toHaveBeenCalledWith('run-real-checkpoints', 'failure');
+    expect(response.detail.artifacts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ label: 'preStep', path: '/tmp/preStep.png' }),
+      expect.objectContaining({ label: 'failure', path: '/tmp/failure.png' }),
+    ]));
+  });
+
+  it('uses the failure checkpoint for blocked and skipped manual step evidence', async () => {
+    const project = createProjectWithRecording();
+    const environment = project.environments[0]!;
+    const captureRunScreenshot = vi.fn(async (_runId: string, checkpoint?: string) => ({
+      id: `artifact-${checkpoint}`,
+      type: 'screenshot' as const,
+      label: checkpoint,
+      path: `/tmp/${checkpoint}.png`,
+    }));
+    const browserRuntime = {
+      start: vi.fn().mockResolvedValue({
+        id: 'session-test', status: 'ready', projectId: project.id, environmentId: environment.id,
+        currentUrl: environment.url, pageTitle: project.name, message: 'ready', updatedAt: new Date(0).toISOString(),
+      }),
+      hasRealPage: vi.fn().mockReturnValue(true),
+      captureRunScreenshot,
+    };
+    const runner = new TestRunner({ createSnapshot: vi.fn() } as never, browserRuntime as never, vi.fn());
+
+    const response = await runner.run({
+      runId: 'run-manual-failure-evidence',
+      project,
+      environment,
+      testCase: {
+        ...project.testCases[0]!,
+        steps: [
+          { id: 'manual-step', type: 'manual', title: '人工确认', body: '确认当前状态' },
+          { id: 'skipped-step', type: 'manual', title: '后续步骤', body: '不应执行' },
+        ],
+      },
+    });
+
+    expect(response.detail.status).toBe('blocked');
+    expect(response.detail.steps).toEqual(expect.arrayContaining([
+      expect.objectContaining({ stepId: 'manual-step', screenshotPath: '/tmp/failure.png' }),
+      expect.objectContaining({ stepId: 'skipped-step', status: 'skipped', screenshotPath: '/tmp/failure.png' }),
+    ]));
+  });
+
+  it('captures real PNG evidence after a successful deterministic step', async () => {
+    const project = createProjectWithRecording();
+    const environment = project.environments[0]!;
+    const captureRunScreenshot = vi.fn(async (_runId: string, checkpoint?: string) => ({
+      id: `artifact-${checkpoint}`,
+      type: 'screenshot' as const,
+      label: checkpoint,
+      path: `/tmp/${checkpoint}.png`,
+    }));
+    const browserRuntime = {
+      start: vi.fn().mockResolvedValue({
+        id: 'session-test', status: 'ready', projectId: project.id, environmentId: environment.id,
+        currentUrl: environment.url, pageTitle: project.name, message: 'ready', updatedAt: new Date(0).toISOString(),
+      }),
+      hasRealPage: vi.fn().mockReturnValue(true),
+      captureRunScreenshot,
+    };
+    const deterministicRunner = {
+      runDeterministicStep: vi.fn().mockResolvedValue({
+        runId: 'deterministic-pass',
+        title: '打开页面',
+        detail: {
+          id: 'deterministic-pass', projectId: project.id, testCaseId: project.testCases[0]!.id, environmentId: environment.id,
+          title: '打开页面', status: 'passed', startedAt: new Date(0).toISOString(), endedAt: new Date(0).toISOString(), duration: '00:00:01', summary: '页面已打开', logs: [], steps: [], artifacts: [],
+        },
+      }),
+    };
+    const runner = new TestRunner(
+      { createSnapshot: vi.fn() } as never,
+      browserRuntime as never,
+      vi.fn(),
+      undefined,
+      undefined,
+      deterministicRunner as never,
+    );
+
+    const response = await runner.run({
+      runId: 'run-successful-checkpoint',
+      project,
+      environment,
+      testCase: {
+        ...project.testCases[0]!,
+        steps: [{
+          id: 'navigate-step', type: 'ai', title: '打开页面', body: '打开测试页面',
+          execution: {
+            schemaVersion: 2, intent: '打开测试页面', reviewStatus: 'confirmed', actionRisk: 'low',
+            action: { kind: 'navigate', url: environment.url },
+          },
+        }],
+      },
+    });
+
+    expect(response.detail.status).toBe('passed');
+    expect(captureRunScreenshot).toHaveBeenNthCalledWith(1, 'run-successful-checkpoint', 'preStep');
+    expect(captureRunScreenshot).toHaveBeenNthCalledWith(2, 'run-successful-checkpoint', 'postStep');
+    expect(response.detail.artifacts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ label: 'postStep', path: '/tmp/postStep.png' }),
+    ]));
   });
 
   it('records unresolved fixture execution as blocked fixture preflight before opening a browser session', async () => {
@@ -501,6 +1614,40 @@ describe('TestRunner recording replay', () => {
         }),
       ]),
     );
+  });
+
+  it('preserves registered browser replay evidence in the case RunDetail', async () => {
+    const project = createProjectWithRecording();
+    const environment = project.environments[0]!;
+    const replayArtifact = {
+      id: 'registered-replay',
+      type: 'screenshot' as const,
+      label: '实际页面截图',
+      path: '/tmp/replay-registered.png',
+      manifest: {
+        id: 'registered-replay', path: 'replay-registered.png', contentHash: 'a'.repeat(64), byteCount: 3,
+        createdAt: new Date(0).toISOString(), ownerRunId: 'run-recording', evidenceKind: 'pageScreenshot' as const,
+        retentionClass: 'standard' as const, protectedBy: [],
+      },
+    };
+    const browserRuntime = {
+      start: vi.fn().mockResolvedValue({ id: 'session-test', status: 'ready', currentUrl: environment.url, pageTitle: project.name, message: 'ready', updatedAt: new Date(0).toISOString() }),
+      replayRecordingSteps: vi.fn().mockResolvedValue([{
+        step: project.recordings[0]!.steps[0]!, status: 'passed', message: '已回放：打开首页', screenshotPath: replayArtifact.path, artifact: replayArtifact,
+      }]),
+    };
+    const runner = new TestRunner(
+      { createSnapshot: vi.fn().mockResolvedValue({ id: 'start', type: 'snapshot', label: 'start', path: '/tmp/start.svg' }) } as never,
+      browserRuntime as never,
+      vi.fn(),
+    );
+
+    const response = await runner.run({ project, testCase: project.testCases[0]!, environment });
+
+    expect(response.detail.artifacts).toEqual(expect.arrayContaining([replayArtifact]));
+    expect(response.detail.artifacts).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: expect.stringMatching(/^artifact-.+-0-0$/), type: 'snapshot' }),
+    ]));
   });
 
   it('composes recording evidence into a mixed test case and stops after a blocked replay', async () => {
@@ -1475,5 +2622,81 @@ function createProjectWithRecording(): {
     selectedEnvironmentId: environment.id,
     recordings: [recording],
     testCases: [testCase],
+  };
+}
+
+type MalformedNetworkMockBodyVariant = 'sparse' | 'ownProperty' | 'symbol' | 'nonStandardPrototype';
+
+function malformedNetworkMockAction(variant: MalformedNetworkMockBodyVariant) {
+  const body: unknown[] = ['approved'];
+  let hiddenValue: string | undefined;
+  if (variant === 'sparse') {
+    body.length = 2;
+  } else if (variant === 'ownProperty') {
+    hiddenValue = '/private/network-mock-array-filePath';
+    Object.defineProperty(body, 'filePath', { value: hiddenValue, enumerable: true });
+  } else if (variant === 'symbol') {
+    hiddenValue = 'network-mock-array-symbol-value';
+    Object.defineProperty(body, Symbol('network-mock-body'), { value: hiddenValue, enumerable: true });
+  } else {
+    class NonStandardArray extends Array<unknown> {}
+    return {
+      action: {
+        kind: 'networkMock' as const,
+        url: 'https://your-app.example.com/api/orders',
+        method: 'GET' as const,
+        response: { status: 200, body: new NonStandardArray('approved') },
+      },
+      hiddenValue,
+    };
+  }
+  return {
+    action: {
+      kind: 'networkMock' as const,
+      url: 'https://your-app.example.com/api/orders',
+      method: 'GET' as const,
+      response: { status: 200, body },
+    },
+    hiddenValue,
+  };
+}
+
+type MalformedNetworkMockObjectVariant = 'nonEnumerable' | 'accessor' | 'nullPrototype' | 'nonStandardPrototype';
+
+function malformedNetworkMockObjectAction(variant: MalformedNetworkMockObjectVariant) {
+  let getterRead = false;
+  let hiddenValue: string | undefined;
+  let body: object;
+  if (variant === 'nullPrototype') {
+    const nullPrototypeBody = Object.create(null) as Record<string, unknown>;
+    nullPrototypeBody.approved = true;
+    body = nullPrototypeBody;
+  } else if (variant === 'nonStandardPrototype') {
+    class NonStandardBody { approved = true; }
+    body = new NonStandardBody();
+  } else {
+    body = { approved: true };
+    if (variant === 'nonEnumerable') {
+      hiddenValue = '/private/network-mock-object-filePath';
+      Object.defineProperty(body, 'filePath', { value: hiddenValue, enumerable: false });
+    } else {
+      Object.defineProperty(body, 'filePath', {
+        enumerable: true,
+        get() {
+          getterRead = true;
+          throw new Error('network mock accessor must not be evaluated');
+        },
+      });
+    }
+  }
+  return {
+    action: {
+      kind: 'networkMock' as const,
+      url: 'https://your-app.example.com/api/orders',
+      method: 'GET' as const,
+      response: { status: 200, body },
+    },
+    hiddenValue,
+    getterWasRead: () => getterRead,
   };
 }

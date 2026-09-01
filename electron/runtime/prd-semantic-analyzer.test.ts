@@ -145,6 +145,36 @@ describe('PrdSemanticAnalysisRuntime', () => {
     expect(response.document.generatedPaths).toEqual(document.generatedPaths);
   });
 
+  it('returns a safe rule fallback when a provider error echoes the resolved model key', async () => {
+    const secret = 'sk-prd-semantic-redaction';
+    const document = createPrdDocumentAsset({
+      name: 'order.md',
+      kind: 'markdown',
+      size: 160,
+      sourceText: '# 订单管理\n- 用户必须填写收货地址后才能提交订单。',
+    });
+    const runtime = new PrdSemanticAnalysisRuntime(
+      new OpenAICompatiblePrdSemanticAnalyzer(
+        vi.fn<typeof fetch>().mockResolvedValue(
+          new Response(`upstream rejected Bearer ${secret}`, { status: 502 }),
+        ),
+      ),
+    );
+
+    const response = await runtime.analyze({
+      document,
+      midsceneConfig: { ...defaultMidsceneConfig, modelApiKey: secret },
+      agentModelConfig: {
+        ...plannerModelConfig(),
+        planner: { ...plannerModelConfig().planner, modelApiKey: secret },
+      },
+    });
+
+    expect(response).toMatchObject({ source: 'rule', fallbackReason: 'requestFailed' });
+    expect(JSON.stringify(response)).not.toContain(secret);
+    expect(response.document.generatedPaths).toEqual(document.generatedPaths);
+  });
+
   it('returns a labeled rule fallback without contacting a model when Planner is unconfigured', async () => {
     const document = createPrdDocumentAsset({
       name: 'order.md',
@@ -164,5 +194,38 @@ describe('PrdSemanticAnalysisRuntime', () => {
     expect(response).toMatchObject({ source: 'rule', fallbackReason: 'modelNotConfigured' });
     expect(response.document.generatedPaths).toEqual(document.generatedPaths);
     expect(analyzer.analyze).not.toHaveBeenCalled();
+  });
+
+  it('accepts a planner-only private config without requiring Midscene or other agent role configs', async () => {
+    const document = createPrdDocumentAsset({
+      name: 'settings.md',
+      kind: 'markdown',
+      size: 120,
+      sourceText: '# Settings\n- Users can save profile preferences.',
+    });
+    const analyzer = {
+      analyze: vi.fn().mockResolvedValue({
+        summary: 'Settings coverage.',
+        paths: [],
+        modelName: 'planner-only',
+      }),
+    };
+    const runtime = new PrdSemanticAnalysisRuntime(analyzer);
+
+    const response = await runtime.analyze({
+      document,
+      plannerConfig: {
+        modelBaseUrl: 'https://planner.example.test/v1',
+        modelApiKey: 'planner-only-secret',
+        modelName: 'planner-only',
+        modelFamily: 'openai',
+        temperature: '0.2',
+      },
+    } as never);
+
+    expect(response).toMatchObject({ source: 'model', modelName: 'planner-only' });
+    expect(analyzer.analyze).toHaveBeenCalledWith(expect.objectContaining({
+      config: expect.objectContaining({ modelApiKey: 'planner-only-secret' }),
+    }));
   });
 });

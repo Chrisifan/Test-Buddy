@@ -11,6 +11,7 @@ import type {
   SuiteRunResult,
 } from '../../shared/studio.js';
 import { resolveSuiteTestCases, resolveTestCaseFixtures } from '../../shared/studio.js';
+import type { BrowserPool, BrowserPoolLease } from './browser-pool.js';
 
 export interface SuiteCaseExecutionRequest {
   suite: SuiteAsset;
@@ -18,6 +19,10 @@ export interface SuiteCaseExecutionRequest {
   environment: ProjectEnvironment;
   attempt: number;
   cancellationSignal?: AbortSignal;
+  /** Worker-only pool; never the interactive BrowserRuntime session. */
+  browserPool?: BrowserPool;
+  /** Fresh isolated worker context for this Case attempt, when pool-qualified. */
+  workerLease?: BrowserPoolLease;
 }
 
 export interface SuiteCaseExecutionResult {
@@ -33,8 +38,10 @@ export interface SuiteCaseExecutor {
 }
 
 export interface SuiteRunnerOptions {
-  /** BrowserRuntime currently supplies one active session, so adapters cap this at one until they provide an isolated pool. */
+  /** Adapter cap, further bounded by an eligible BrowserPool when supplied. */
   maxConcurrency?: number;
+  /** Pool-backed workers are acquired per Case attempt and always released. */
+  browserPool?: BrowserPool;
   now?: () => Date;
 }
 
@@ -54,6 +61,7 @@ interface PendingSuiteCase {
 export class SuiteRunner {
   private readonly maxConcurrency: number;
   private readonly now: () => Date;
+  private readonly browserPool?: BrowserPool;
 
   constructor(
     private readonly executor: SuiteCaseExecutor,
@@ -61,6 +69,7 @@ export class SuiteRunner {
   ) {
     this.maxConcurrency = clampConcurrency(options.maxConcurrency ?? 1);
     this.now = options.now ?? (() => new Date());
+    this.browserPool = options.browserPool;
   }
 
   async run(
@@ -71,7 +80,11 @@ export class SuiteRunner {
     const startedAt = this.now().toISOString();
     const resolution = resolveSuiteTestCases(project, suite);
     const issues = resolution.issues.map((issue) => issue.message);
-    const effectiveConcurrency = Math.min(clampConcurrency(suite.execution.concurrency), this.maxConcurrency);
+    const effectiveConcurrency = Math.min(
+      clampConcurrency(suite.execution.concurrency),
+      this.maxConcurrency,
+      ...(this.browserPool ? [this.browserPool.maxConcurrency] : []),
+    );
     if (!resolution.environment || resolution.issues.length) {
       return this.createResult(suite, startedAt, effectiveConcurrency, [], issues, Boolean(cancellationSignal?.aborted));
     }
@@ -108,7 +121,7 @@ export class SuiteRunner {
           }
           candidate.resourceLocks.forEach((lock) => heldLocks.add(lock));
           const key = referenceKey(candidate.reference);
-          const promise = this.executeCandidate(suite, candidate, resolution.environment, cancellationSignal)
+          const promise = this.executeCandidate(suite, candidate, resolution.environment, project.id, cancellationSignal)
             .then((result) => {
               results.set(key, result);
               if (suite.execution.failurePolicy === 'failFast' && result.status !== 'passed') {
@@ -181,6 +194,7 @@ export class SuiteRunner {
     suite: SuiteAsset,
     candidate: PendingSuiteCase,
     environment: ProjectEnvironment,
+    projectId: string,
     cancellationSignal?: AbortSignal,
   ): Promise<SuiteCaseRunResult> {
     let attempts = 0;
@@ -191,13 +205,14 @@ export class SuiteRunner {
         return cancelledResult(candidate, 'Suite run was cancelled.');
       }
       attempts += 1;
-      lastResult = terminalSuiteCaseResult(await this.executor.execute({
+      lastResult = terminalSuiteCaseResult(await this.executeAttempt(
         suite,
-        testCase: candidate.testCase,
+        candidate,
         environment,
-        attempt: attempts,
+        projectId,
+        attempts,
         cancellationSignal,
-      }));
+      ));
       if (cancellationSignal?.aborted) {
         return {
           ...cancelledResult(candidate, 'Suite run was cancelled.'),
@@ -236,6 +251,38 @@ export class SuiteRunner {
       flaky: false,
       ...(result.runId ? { runId: result.runId } : {}),
     };
+  }
+
+  private async executeAttempt(
+    suite: SuiteAsset,
+    candidate: PendingSuiteCase,
+    environment: ProjectEnvironment,
+    projectId: string,
+    attempt: number,
+    cancellationSignal?: AbortSignal,
+  ): Promise<SuiteCaseExecutionResult> {
+    const workerLease = this.browserPool
+      ? await this.browserPool.acquire({
+        environment,
+        projectId,
+        ...(environment.storageStateId ? { storageStateRef: environment.storageStateId } : {}),
+        locks: candidate.resourceLocks,
+        ...(cancellationSignal ? { signal: cancellationSignal } : {}),
+      })
+      : undefined;
+    try {
+      return await this.executor.execute({
+        suite,
+        testCase: candidate.testCase,
+        environment,
+        attempt,
+        ...(cancellationSignal ? { cancellationSignal } : {}),
+        ...(this.browserPool ? { browserPool: this.browserPool } : {}),
+        ...(workerLease ? { workerLease } : {}),
+      });
+    } finally {
+      await workerLease?.release();
+    }
   }
 
   private createResult(

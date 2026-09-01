@@ -13,10 +13,13 @@ import {
   createInitialStudioState,
   findSuiteAsset,
   findTestCaseVersion,
+  isAgentRunnableTestCase,
   type ProjectDraft,
   type RunTestCaseResponse,
   type RunSuiteResponse,
+  type StudioState,
 } from '../../shared/studio.js';
+import { isSafeMaintenanceRationale } from '../../shared/maintenance.js';
 import { executeCliCommand } from '../cli.js';
 import { ProjectAssetStore } from '../projectAssetStore.js';
 import { ProjectRepository, ProjectRepositoryError } from '../projectRepository.js';
@@ -24,13 +27,15 @@ import { RunCancelledError, isRunCancelled } from '../runtime/run-cancellation.j
 import * as runtimeBundle from '../runtime/runtime-bundle.js';
 import { StudioStore } from '../studioStore.js';
 
-const { registerRuntimeIpcHandlers, runtimeIpcChannels } = loadRuntimeIpcHandlers();
+const { executeDesktopSuiteIntent, registerRuntimeIpcHandlers, runtimeIpcChannels } = loadRuntimeIpcHandlers();
 
 type RuntimeIpcDependencies = {
   handle: (channel: string, listener: (event: unknown, ...args: never[]) => unknown) => void;
   loadState: ReturnType<typeof vi.fn>;
   saveState: ReturnType<typeof vi.fn>;
   getRuntimeBundle: ReturnType<typeof vi.fn>;
+  loadResolvedModelConfiguration: ReturnType<typeof vi.fn>;
+  createLazyModelConfigResolver: ReturnType<typeof vi.fn>;
   projectRepository: Pick<ProjectRepository, 'load' | 'loadBound'>;
   getFixtureScriptTrustContext: ReturnType<typeof vi.fn>;
   openPath: ReturnType<typeof vi.fn>;
@@ -38,6 +43,12 @@ type RuntimeIpcDependencies = {
   getDownloadsPath: ReturnType<typeof vi.fn>;
   showOpenDialog: ReturnType<typeof vi.fn>;
   getRuntimeInfo: ReturnType<typeof vi.fn>;
+  maintenanceService: {
+    createFromRun: ReturnType<typeof vi.fn>;
+    accept: ReturnType<typeof vi.fn>;
+    reject: ReturnType<typeof vi.fn>;
+    openEvidence: ReturnType<typeof vi.fn>;
+  };
 };
 
 describe('registerRuntimeIpcHandlers', () => {
@@ -195,12 +206,134 @@ describe('registerRuntimeIpcHandlers', () => {
       runtimeIpcChannels.runSuite,
       runtimeIpcChannels.cancelRun,
       runtimeIpcChannels.loadRunDetail,
+      runtimeIpcChannels.loadSuiteRunRecord,
+      runtimeIpcChannels.listMaintenanceDrafts,
+      runtimeIpcChannels.createMaintenanceDraft,
+      runtimeIpcChannels.acceptMaintenanceDraft,
+      runtimeIpcChannels.rejectMaintenanceDraft,
+      runtimeIpcChannels.openMaintenanceEvidence,
+      runtimeIpcChannels.planArtifactRetention,
+      runtimeIpcChannels.confirmArtifactRetention,
       runtimeIpcChannels.planHistoricalRerun,
       runtimeIpcChannels.runHistoricalRerun,
       runtimeIpcChannels.openArtifact,
       runtimeIpcChannels.exportArtifact,
       runtimeIpcChannels.attachManualEvidence,
     ]);
+  });
+
+  it('routes retention planning and explicit confirmation through ArtifactManager without exposing paths', async () => {
+    const planArtifactRetention = vi.fn().mockResolvedValue({ id: 'retention-1', entries: [] });
+    const confirmArtifactRetention = vi.fn().mockResolvedValue({ planId: 'retention-1', deleted: [] });
+    const dependencies = createDependencies({
+      getRuntimeBundle: vi.fn().mockReturnValue({
+        artifactManager: {
+          isManagedArtifactPath: () => true,
+          exportArtifact: vi.fn(),
+          importManualEvidence: vi.fn(),
+          planArtifactRetention,
+          confirmArtifactRetention,
+        },
+        browserRuntime: { getState: () => ({ status: 'idle' }) },
+        runTestCase: vi.fn(),
+        runSuite: vi.fn(),
+        cancelRun: vi.fn(),
+      }),
+    });
+    const handlers = registerHandlers(dependencies);
+    await expect(handlers.get(runtimeIpcChannels.planArtifactRetention)!({})).resolves.toEqual({ id: 'retention-1', entries: [] });
+    await expect(handlers.get(runtimeIpcChannels.confirmArtifactRetention)!({}, 'retention-1')).resolves.toEqual({ planId: 'retention-1', deleted: [] });
+    expect(planArtifactRetention).toHaveBeenCalledWith();
+    expect(confirmArtifactRetention).toHaveBeenCalledWith('retention-1');
+  });
+
+  it('routes only redacted maintenance intents through the main-owned service', async () => {
+    const project = createEmptyProject(1);
+    const testCase = createTestCase(project, 'case-maintenance', project.environments[0]!.id);
+    const createFromRun = vi.fn().mockResolvedValue({ id: 'maintenance-1', status: 'draft' });
+    const accept = vi.fn().mockResolvedValue({ status: 'stale', draft: { id: 'maintenance-1', status: 'stale' } });
+    const reject = vi.fn().mockResolvedValue({ id: 'maintenance-1', status: 'rejected' });
+    const handlers = registerHandlers(createDependencies({ maintenanceService: { createFromRun, accept, reject, openEvidence: vi.fn() } }));
+    const request = {
+      runId: 'run-maintenance',
+      target: { kind: 'case', id: testCase.id, version: 1 },
+      proposedCase: testCase,
+      citations: [{ artifactId: 'artifact-maintenance', contentHash: 'a'.repeat(64) }],
+    };
+
+    await expect(handlers.get(runtimeIpcChannels.createMaintenanceDraft)!({}, request)).resolves.toEqual({ id: 'maintenance-1', status: 'draft' });
+    await expect(handlers.get(runtimeIpcChannels.acceptMaintenanceDraft)!({}, {
+      draftId: 'maintenance-1', expectedRevision: 'b'.repeat(64),
+    })).resolves.toMatchObject({ status: 'stale' });
+    await expect(handlers.get(runtimeIpcChannels.rejectMaintenanceDraft)!({}, {
+      draftId: 'maintenance-1',
+      rationale: 'The cited failure does not reproduce in the pinned environment.',
+    })).resolves.toMatchObject({ status: 'rejected' });
+    expect(createFromRun).toHaveBeenCalledWith(request);
+    expect(accept).toHaveBeenCalledWith({ draftId: 'maintenance-1', expectedRevision: 'b'.repeat(64) });
+    expect(reject).toHaveBeenCalledWith({
+      draftId: 'maintenance-1',
+      rationale: 'The cited failure does not reproduce in the pinned environment.',
+    });
+
+    await expect(handlers.get(runtimeIpcChannels.rejectMaintenanceDraft)!({}, {
+      draftId: 'maintenance-1',
+      rationale: 'apiKey=not-allowed',
+    })).rejects.toThrow(/maintenance request/i);
+    expect(reject).toHaveBeenCalledTimes(1);
+
+    await expect(handlers.get(runtimeIpcChannels.createMaintenanceDraft)!({}, {
+      ...request,
+      artifactPath: '/private/evidence.png',
+      projectSnapshot: project,
+      modelConfig: { apiKey: 'not-allowed' },
+    })).rejects.toThrow(/maintenance request/i);
+    expect(createFromRun).toHaveBeenCalledTimes(1);
+  });
+
+  it('opens only an exact managed maintenance citation without accepting a renderer path', async () => {
+    const managedArtifactPath = '/managed-artifacts/page-screenshots/sign-in.png';
+    const openEvidence = vi.fn()
+      .mockResolvedValueOnce(managedArtifactPath)
+      .mockResolvedValueOnce('/tmp/unmanaged.png');
+    const openPath = vi.fn().mockResolvedValue('');
+    const dependencies = createDependencies({
+      openPath,
+      getRuntimeBundle: vi.fn().mockReturnValue({
+        artifactManager: {
+          isManagedArtifactPath: (artifactPath: string) => artifactPath === managedArtifactPath,
+          exportArtifact: vi.fn(),
+          importManualEvidence: vi.fn(),
+        },
+        browserRuntime: { getState: () => ({ status: 'idle' }) },
+        runTestCase: vi.fn(),
+        runSuite: vi.fn(),
+        cancelRun: vi.fn(),
+      }),
+    });
+    (dependencies.maintenanceService as unknown as { openEvidence: typeof openEvidence }).openEvidence = openEvidence;
+    const handlers = registerHandlers(dependencies);
+    const openMaintenanceEvidence = handlers.get('runtime:open-maintenance-evidence');
+    const request = {
+      draftId: 'maintenance-1',
+      citation: {
+        runId: 'run-sign-in',
+        artifactId: 'artifact-sign-in',
+        contentHash: 'a'.repeat(64),
+      },
+    };
+
+    expect(openMaintenanceEvidence).toBeDefined();
+    await expect(openMaintenanceEvidence!({}, request)).resolves.toBeUndefined();
+    expect(openEvidence).toHaveBeenCalledWith(request);
+    expect(openPath).toHaveBeenCalledWith(managedArtifactPath);
+
+    await expect(openMaintenanceEvidence!({}, request)).rejects.toThrow('只能打开应用生成的证据文件。');
+    expect(openPath).toHaveBeenCalledTimes(1);
+    await expect(openMaintenanceEvidence!({}, {
+      ...request,
+      citation: { ...request.citation, artifactPath: '/private/evidence.png' },
+    })).rejects.toThrow(/maintenance request/i);
   });
 
   it('rejects an unmanaged artifact before calling openPath', async () => {
@@ -333,6 +466,12 @@ describe('registerRuntimeIpcHandlers', () => {
     project.environments = [environment];
     const testCase = {
       ...createTestCase(project, 'case-provenance', environment.id),
+      steps: [{
+        id: 'step-provenance-agent',
+        type: 'ai' as const,
+        title: 'Inspect checkout',
+        body: 'Inspect the checkout page.',
+      }],
       assetReferences: {
         fixtures: [{ id: 'fixture-checkout', version: 1 }],
         reusableFlows: [],
@@ -355,18 +494,34 @@ describe('registerRuntimeIpcHandlers', () => {
     state.midsceneConfig = {
       ...state.midsceneConfig,
       modelBaseUrl: 'https://model-user:model-password@models.example.test/v1?token=endpoint-secret',
-      modelApiKey: 'model-api-secret',
+      modelSecret: {
+        id: 'midscene',
+        hasKey: true,
+        updatedAt: '2026-08-17T00:00:00.000Z',
+      },
       modelName: 'model-v1',
     };
     const response = runTestCaseResponse(project.id, testCase.id, environment.id);
+    const resolveMidsceneConfig = vi.fn().mockResolvedValue({
+      ...state.midsceneConfig,
+      modelApiKey: 'main-process-model-api-secret',
+    });
+    const createLazyModelConfigResolver = vi.fn().mockReturnValue({
+      resolveMidsceneConfig,
+      resolveAgentProviderConfig: vi.fn(),
+    });
+    let receivedModelApiKey = '';
     const runTestCase = vi.fn().mockImplementation(async (request) => {
       request.testCase.assetReferences!.fixtures[0]!.version = 99;
       request.environment.url = 'https://runner-mutated.example.test';
-      state.midsceneConfig.modelApiKey = 'mutated-model-api-secret';
+      const config = await request.modelConfigResolver.resolveMidsceneConfig();
+      receivedModelApiKey = config.modelApiKey;
+      config.modelApiKey = 'mutated-model-api-secret';
       return response;
     });
     const dependencies = createDependencies({
       loadState: vi.fn().mockResolvedValue(state),
+      createLazyModelConfigResolver,
       getRuntimeBundle: vi.fn().mockReturnValue({
         artifactManager: { isManagedArtifactPath: () => true, exportArtifact: vi.fn(), importManualEvidence: vi.fn() },
         browserRuntime: { getState: () => ({ status: 'idle' }) },
@@ -396,6 +551,10 @@ describe('registerRuntimeIpcHandlers', () => {
       environment: { baseUrl: 'https://example.test/catalog' },
     });
     expect(Object.isFrozen(result.detail.provenance)).toBe(true);
+    expect(createLazyModelConfigResolver).toHaveBeenCalledTimes(1);
+    expect(resolveMidsceneConfig).toHaveBeenCalledTimes(1);
+    expect(receivedModelApiKey).toBe('main-process-model-api-secret');
+    expect(JSON.stringify(state)).not.toContain('modelApiKey');
 
     const savedState = dependencies.saveState.mock.calls.at(-1)![0];
     expect(savedState.runDetails[0]).toMatchObject({
@@ -415,6 +574,8 @@ describe('registerRuntimeIpcHandlers', () => {
     });
     const persisted = JSON.stringify(savedState.runDetails[0]!.provenance);
     expect(persisted).not.toContain('model-api-secret');
+    expect(persisted).not.toContain('main-process-model-api-secret');
+    expect(persisted).not.toContain('mutated-model-api-secret');
     expect(persisted).not.toContain('model-password');
     expect(persisted).not.toContain('endpoint-secret');
     expect(persisted).not.toContain('environment-password');
@@ -468,10 +629,9 @@ describe('registerRuntimeIpcHandlers', () => {
     await deferred.started;
     expect(runTestCase).toHaveBeenCalledWith(expect.objectContaining({
       runtimeProfile: executionState.runtimeProfile,
-      midsceneConfig: executionState.midsceneConfig,
-      agentModelConfig: executionState.agentModelConfig,
       browserSession: executionState.browserSession,
     }));
+    expect(dependencies.loadResolvedModelConfiguration).not.toHaveBeenCalled();
     currentState = concurrentState;
     deferred.resolve(response);
     await expect(pending).resolves.toMatchObject(response);
@@ -482,6 +642,82 @@ describe('registerRuntimeIpcHandlers', () => {
       midsceneConfig: concurrentState.midsceneConfig,
       runDetails: [expect.objectContaining({ id: response.detail.id })],
     }));
+  });
+
+  it('runs a deterministic Case without resolving model secrets', async () => {
+    const project = createEmptyProject(1);
+    const environment = project.environments[0]!;
+    const testCase = createTestCase(project, 'case-deterministic-no-model-resolution', environment.id);
+    project.testCases = [testCase];
+    const response = runTestCaseResponse(project.id, testCase.id, environment.id);
+    const loadResolvedModelConfiguration = vi.fn().mockRejectedValue(new Error('dangling model secret must stay unread'));
+    const runTestCase = vi.fn().mockResolvedValue(response);
+    const dependencies = createDependencies({
+      loadResolvedModelConfiguration,
+      getRuntimeBundle: vi.fn().mockReturnValue({
+        artifactManager: { isManagedArtifactPath: () => true, exportArtifact: vi.fn(), importManualEvidence: vi.fn() },
+        browserRuntime: { getState: () => ({ status: 'idle' }) },
+        runTestCase,
+        runSuite: vi.fn(),
+        cancelRun: vi.fn(),
+      }),
+      projectRepository: {
+        load: vi.fn(),
+        loadBound: vi.fn().mockResolvedValue(projectSnapshot(project, 'd'.repeat(64), 'projectDirectory')),
+      },
+    });
+    const handlers = registerHandlers(dependencies);
+
+    await expect(handlers.get(runtimeIpcChannels.runTestCase)!({}, {
+      projectId: project.id,
+      testCase: { id: testCase.id, version: testCase.version },
+    })).resolves.toMatchObject(response);
+
+    expect(loadResolvedModelConfiguration).not.toHaveBeenCalled();
+    expect(runTestCase).toHaveBeenCalledWith(expect.not.objectContaining({
+      midsceneConfig: expect.anything(),
+      agentModelConfig: expect.anything(),
+    }));
+  });
+
+  it('passes a lazy resolver into an Agent Case instead of resolving all model secrets at IPC entry', async () => {
+    const project = createEmptyProject(1);
+    const environment = project.environments[0]!;
+    const testCase = createTestCase(project, 'case-ipc-lazy-models', environment.id);
+    testCase.steps = [{ id: 'step-ipc-lazy-models', type: 'ai', title: 'Save', body: 'Click save' }];
+    project.testCases = [testCase];
+    const response = runTestCaseResponse(project.id, testCase.id, environment.id);
+    const lazyResolver = {
+      resolveMidsceneConfig: vi.fn(),
+      resolveAgentProviderConfig: vi.fn(),
+    };
+    const createLazyModelConfigResolver = vi.fn().mockReturnValue(lazyResolver);
+    const runTestCase = vi.fn().mockResolvedValue(response);
+    const dependencies = createDependencies({
+      getRuntimeBundle: vi.fn().mockReturnValue({
+        artifactManager: { isManagedArtifactPath: () => true, exportArtifact: vi.fn(), importManualEvidence: vi.fn() },
+        browserRuntime: { getState: () => ({ status: 'idle' }) },
+        runTestCase,
+        runSuite: vi.fn(),
+        cancelRun: vi.fn(),
+      }),
+      projectRepository: {
+        load: vi.fn(),
+        loadBound: vi.fn().mockResolvedValue(projectSnapshot(project, 'c'.repeat(64), 'projectDirectory')),
+      },
+      createLazyModelConfigResolver,
+    } as never);
+    const handlers = registerHandlers(dependencies);
+
+    await expect(handlers.get(runtimeIpcChannels.runTestCase)!({}, {
+      projectId: project.id,
+      testCase: { id: testCase.id, version: testCase.version },
+    })).resolves.toMatchObject(response);
+
+    expect(createLazyModelConfigResolver).toHaveBeenCalledTimes(1);
+    expect(runTestCase).toHaveBeenCalledWith(expect.objectContaining({ modelConfigResolver: lazyResolver }));
+    expect(lazyResolver.resolveMidsceneConfig).not.toHaveBeenCalled();
+    expect(lazyResolver.resolveAgentProviderConfig).not.toHaveBeenCalled();
   });
 
   it('preserves a concurrent StudioState edit while a Suite run is pending', async () => {
@@ -539,10 +775,10 @@ describe('registerRuntimeIpcHandlers', () => {
     await deferred.started;
     expect(runSuite).toHaveBeenCalledWith(expect.objectContaining({
       runtimeProfile: executionState.runtimeProfile,
-      midsceneConfig: executionState.midsceneConfig,
-      agentModelConfig: executionState.agentModelConfig,
+      modelConfigResolver: expect.any(Object),
       browserSession: executionState.browserSession,
     }));
+    expect(dependencies.loadResolvedModelConfiguration).not.toHaveBeenCalled();
     currentState = concurrentState;
     deferred.resolve(response);
     await expect(pending).resolves.toMatchObject(response);
@@ -810,6 +1046,17 @@ describe('registerRuntimeIpcHandlers', () => {
         }),
         status: 'passed',
         memberRunIds: [response.detail.caseDetails[0]!.id],
+        members: [expect.objectContaining({
+          testCaseId: testCase.id,
+          testCaseVersion,
+          status: 'passed',
+          attempts: 1,
+          flaky: false,
+          provenance: expect.objectContaining({
+            testCase: { id: testCase.id, version: testCaseVersion },
+            suite: { reference: { id: suite.id, version: suite.version }, parentRunId: 'suite-ipc-run' },
+          }),
+        })],
         summary: {
           passed: 1,
           failed: 0,
@@ -1058,8 +1305,153 @@ describe('registerRuntimeIpcHandlers', () => {
         reasonCode,
         finishedAt: expect.any(String),
         memberRunIds: [],
+        members: [],
       }),
     ]);
+  });
+
+  it('persists a completed Suite child and parent linkage before a later Suite executor rejection', async () => {
+    const project = createEmptyProject(1);
+    const environment = project.environments[0]!;
+    const testCase = createTestCase(project, 'case-progress-before-rejection', environment.id);
+    const suite = {
+      ...createEmptySuiteAsset(project, 1),
+      id: 'suite-progress-before-rejection',
+      version: 1,
+      environmentId: environment.id,
+      caseReferences: [{ id: testCase.id, version: testCase.version, dependsOn: [] }],
+    };
+    project.testCases = [testCase];
+    project.suites = [suite];
+    const childDetail = {
+      ...runSuiteResponse(project.id, testCase.id, environment.id).detail.caseDetails[0]!,
+      id: 'suite-progress-child-run',
+      testCaseId: testCase.id,
+      testCaseVersion: testCase.version,
+      title: testCase.name,
+    };
+    const rejection = new Error('runtime crashed after a completed child');
+    let persistedState = createInitialStudioState();
+    const loadState = vi.fn(async () => persistedState);
+    const saveState = vi.fn(async (nextState: StudioState) => {
+      persistedState = nextState;
+    });
+    const runSuite = vi.fn().mockImplementation(async (request) => {
+      await request.onCaseCompleted(childDetail, 1);
+      throw rejection;
+    });
+    const dependencies = createDependencies({
+      loadState,
+      saveState,
+      getRuntimeBundle: vi.fn().mockReturnValue({
+        artifactManager: { isManagedArtifactPath: () => true, exportArtifact: vi.fn(), importManualEvidence: vi.fn() },
+        browserRuntime: { getState: () => ({ status: 'idle' }) },
+        runTestCase: vi.fn(),
+        runSuite,
+        cancelRun: vi.fn(),
+      }),
+      projectRepository: {
+        load: vi.fn(),
+        loadBound: vi.fn().mockResolvedValue(projectSnapshot(project, 'c'.repeat(64), 'projectDirectory')),
+      },
+    });
+    const handlers = registerHandlers(dependencies);
+
+    await expect(handlers.get(runtimeIpcChannels.runSuite)!({}, {
+      runId: 'suite-progress-before-rejection-run',
+      projectId: project.id,
+      suite: { id: suite.id, version: suite.version },
+    })).rejects.toBe(rejection);
+
+    expect(runSuite).toHaveBeenCalledWith(expect.objectContaining({ onCaseCompleted: expect.any(Function) }));
+    expect(persistedState.runDetails).toEqual([
+      expect.objectContaining({
+        id: childDetail.id,
+        testCaseVersion: testCase.version,
+        provenance: expect.objectContaining({
+          testCase: { id: testCase.id, version: testCase.version },
+          suite: { reference: { id: suite.id, version: suite.version }, parentRunId: 'suite-progress-before-rejection-run' },
+        }),
+      }),
+    ]);
+    expect(Object.isFrozen(persistedState.runDetails[0]!.provenance)).toBe(true);
+    expect(persistedState.suiteRunRecords).toEqual([
+      expect.objectContaining({
+        id: 'suite-progress-before-rejection-run',
+        status: 'error',
+        memberRunIds: [childDetail.id],
+        members: [expect.objectContaining({
+          testCaseId: testCase.id,
+          testCaseVersion: testCase.version,
+          runId: childDetail.id,
+          status: 'passed',
+        })],
+        summary: { passed: 1, failed: 0, blocked: 0, skipped: 0, cancelled: 0, error: 0 },
+      }),
+    ]);
+  });
+
+  it('persists a terminal Suite parent before fixture trust resolution rejects', async () => {
+    const project = createEmptyProject(1);
+    const environment = project.environments[0]!;
+    const testCase = createTestCase(project, 'case-fixture-trust-rejected', environment.id);
+    const suite = {
+      ...createEmptySuiteAsset(project, 1),
+      id: 'suite-fixture-trust-rejected',
+      version: 1,
+      environmentId: environment.id,
+      caseReferences: [{ id: testCase.id, version: testCase.version, dependsOn: [] }],
+    };
+    project.testCases = [testCase];
+    project.suites = [suite];
+    let persistedState = createInitialStudioState();
+    const loadState = vi.fn(async () => persistedState);
+    const saveState = vi.fn(async (nextState: StudioState) => {
+      persistedState = nextState;
+    });
+    const fixtureTrustFailure = new Error('fixture trust lookup failed');
+    const getRuntimeBundle = vi.fn();
+    const dependencies = createDependencies({
+      loadState,
+      saveState,
+      getFixtureScriptTrustContext: vi.fn().mockRejectedValue(fixtureTrustFailure),
+      getRuntimeBundle,
+      projectRepository: {
+        load: vi.fn(),
+        loadBound: vi.fn().mockResolvedValue(projectSnapshot(project, 'b'.repeat(64), 'projectDirectory')),
+      },
+    });
+    const handlers = registerHandlers(dependencies);
+
+    await expect(handlers.get(runtimeIpcChannels.runSuite)!({}, {
+      runId: 'suite-fixture-trust-rejected-run',
+      projectId: project.id,
+      suite: { id: suite.id, version: suite.version },
+    })).rejects.toBe(fixtureTrustFailure);
+
+    expect(getRuntimeBundle).not.toHaveBeenCalled();
+    expect(saveState).toHaveBeenCalledTimes(2);
+    expect(persistedState.suiteRunRecords).toEqual([
+      expect.objectContaining({
+        id: 'suite-fixture-trust-rejected-run',
+        status: 'error',
+        reasonCode: 'executorError',
+        finishedAt: expect.any(String),
+        memberRunIds: [],
+        members: [],
+        provenance: expect.objectContaining({
+          projectId: project.id,
+          projectRevision: 'b'.repeat(64),
+          suite: { reference: { id: suite.id, version: suite.version }, parentRunId: 'suite-fixture-trust-rejected-run' },
+        }),
+      }),
+    ]);
+    expect(Object.isFrozen(persistedState.suiteRunRecords[0]!.provenance)).toBe(true);
+    await expect(handlers.get(runtimeIpcChannels.loadSuiteRunRecord)!({}, 'suite-fixture-trust-rejected-run')).resolves.toMatchObject({
+      id: 'suite-fixture-trust-rejected-run',
+      status: 'error',
+      reasonCode: 'executorError',
+    });
   });
 
   it('preserves the original Suite runtime rejection when terminal parent persistence also fails', async () => {
@@ -1365,6 +1757,49 @@ describe('registerRuntimeIpcHandlers', () => {
     });
     expect(runTestCase).not.toHaveBeenCalled();
   });
+
+  it('exposes the public desktop-main Suite execution boundary used by IPC', async () => {
+    expect(typeof executeDesktopSuiteIntent).toBe('function');
+    if (!executeDesktopSuiteIntent) {
+      return;
+    }
+    const project = createEmptyProject(1);
+    const environment = project.environments[0]!;
+    const testCase = createTestCase(project, 'case-public-desktop-boundary', environment.id);
+    const suite = {
+      ...createEmptySuiteAsset(project, 1),
+      id: 'suite-public-desktop-boundary',
+      environmentId: environment.id,
+      caseReferences: [{ id: testCase.id, version: testCase.version, dependsOn: [] }],
+    };
+    project.testCases = [testCase];
+    project.suites = [suite];
+    const response = runSuiteResponse(project.id, testCase.id, environment.id);
+    const runSuite = vi.fn().mockResolvedValue(response);
+    const dependencies = createDependencies({
+      getRuntimeBundle: vi.fn().mockReturnValue({
+        artifactManager: { isManagedArtifactPath: () => true, exportArtifact: vi.fn(), importManualEvidence: vi.fn() },
+        browserRuntime: { getState: () => ({ status: 'idle' }) },
+        runTestCase: vi.fn(),
+        runSuite,
+        cancelRun: vi.fn(),
+      }),
+      projectRepository: {
+        load: vi.fn(),
+        loadBound: vi.fn().mockResolvedValue(projectSnapshot(project, 'b'.repeat(64), 'projectDirectory')),
+      },
+    });
+
+    await expect(executeDesktopSuiteIntent(dependencies, {
+      runId: 'suite-public-desktop-boundary',
+      projectId: project.id,
+      suite: { id: suite.id, version: suite.version },
+    })).resolves.toMatchObject(response);
+    expect(runSuite).toHaveBeenCalledWith(expect.objectContaining({
+      runId: 'suite-public-desktop-boundary',
+      suite: expect.objectContaining({ id: suite.id, version: suite.version }),
+    }));
+  });
 });
 
 function registerHandlers(dependencies: RuntimeIpcDependencies) {
@@ -1379,8 +1814,9 @@ function registerHandlers(dependencies: RuntimeIpcDependencies) {
 function createDependencies(overrides: Partial<RuntimeIpcDependencies> = {}): RuntimeIpcDependencies {
   const state = createInitialStudioState();
   const project = createEmptyProject(0);
+  const loadState = overrides.loadState ?? vi.fn().mockResolvedValue(state);
   return {
-    loadState: vi.fn().mockResolvedValue(state),
+    loadState,
     saveState: vi.fn().mockResolvedValue(undefined),
     getRuntimeBundle: vi.fn().mockReturnValue({
       artifactManager: { isManagedArtifactPath: () => true, exportArtifact: vi.fn(), importManualEvidence: vi.fn() },
@@ -1388,6 +1824,23 @@ function createDependencies(overrides: Partial<RuntimeIpcDependencies> = {}): Ru
       runTestCase: vi.fn(),
       runSuite: vi.fn(),
       cancelRun: vi.fn(),
+    }),
+    loadResolvedModelConfiguration: vi.fn().mockImplementation(async () => {
+      const current = await loadState();
+      return {
+        state: current,
+        modelConfigs: {
+          midsceneConfig: {
+            ...current.midsceneConfig,
+            modelApiKey: 'test-only-main-process-midscene-key',
+          },
+          agentModelConfig: resolvedAgentModelConfig(current),
+        },
+      };
+    }),
+    createLazyModelConfigResolver: vi.fn().mockReturnValue({
+      resolveMidsceneConfig: vi.fn(),
+      resolveAgentProviderConfig: vi.fn(),
     }),
     projectRepository: {
       load: vi.fn().mockResolvedValue(projectSnapshot(project, 'f'.repeat(64), 'legacyStudioStore')),
@@ -1399,7 +1852,22 @@ function createDependencies(overrides: Partial<RuntimeIpcDependencies> = {}): Ru
     getDownloadsPath: vi.fn().mockReturnValue('/downloads'),
     showOpenDialog: vi.fn().mockResolvedValue({ canceled: true, filePaths: [] }),
     getRuntimeInfo: vi.fn().mockReturnValue({ platform: 'desktop', persistence: 'file' }),
+    maintenanceService: {
+      createFromRun: vi.fn(),
+      accept: vi.fn(),
+      reject: vi.fn(),
+      openEvidence: vi.fn(),
+    },
     ...overrides,
+  };
+}
+
+function resolvedAgentModelConfig(state: ReturnType<typeof createInitialStudioState>) {
+  return {
+    planner: { ...state.agentModelConfig.planner, modelApiKey: 'test-only-main-process-planner-key' },
+    executor: { ...state.agentModelConfig.executor, modelApiKey: 'test-only-main-process-executor-key' },
+    verifier: { ...state.agentModelConfig.verifier, modelApiKey: 'test-only-main-process-verifier-key' },
+    reporter: { ...state.agentModelConfig.reporter, modelApiKey: 'test-only-main-process-reporter-key' },
   };
 }
 
@@ -1446,6 +1914,12 @@ function deferredResult<T>() {
 }
 
 function loadRuntimeIpcHandlers(): {
+  executeDesktopSuiteIntent?: (dependencies: RuntimeIpcDependencies, request: {
+    runId?: string;
+    projectId: string;
+    suite: { id: string; version: number };
+    expectedProjectRevision?: string;
+  }) => Promise<RunSuiteResponse>;
   registerRuntimeIpcHandlers: (dependencies: RuntimeIpcDependencies) => void;
   runtimeIpcChannels: {
     getInfo: string;
@@ -1453,6 +1927,14 @@ function loadRuntimeIpcHandlers(): {
     runSuite: string;
     cancelRun: string;
     loadRunDetail: string;
+    loadSuiteRunRecord: string;
+    listMaintenanceDrafts: string;
+    createMaintenanceDraft: string;
+    acceptMaintenanceDraft: string;
+    rejectMaintenanceDraft: string;
+    openMaintenanceEvidence: string;
+    planArtifactRetention: string;
+    confirmArtifactRetention: string;
     planHistoricalRerun: string;
     runHistoricalRerun: string;
     openArtifact: string;
@@ -1517,7 +1999,10 @@ function loadRuntimeIpcHandlers(): {
       return { RunCancelledError, isRunCancelled };
     }
     if (moduleId === '../../shared/studio.js') {
-      return { findSuiteAsset, findTestCaseVersion };
+      return { findSuiteAsset, findTestCaseVersion, isAgentRunnableTestCase };
+    }
+    if (moduleId === '../../shared/maintenance.js') {
+      return { isSafeMaintenanceRationale };
     }
     if (moduleId === '../projectRepository.js') {
       return { ProjectRepositoryError };

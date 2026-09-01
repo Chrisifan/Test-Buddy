@@ -19,7 +19,10 @@ describe('BrowserRuntime page access', () => {
   it('captures a full-page PNG run artifact only from a real browser page', async () => {
     const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'playtest-browser-runtime-screenshot-'));
     const runtime = new BrowserRuntime(rootDir, new ArtifactManager(rootDir));
-    const screenshot = vi.fn().mockResolvedValue(undefined);
+    const screenshot = vi.fn(async ({ path: screenshotPath }: { path: string }) => {
+      await fs.mkdir(path.dirname(screenshotPath), { recursive: true });
+      await fs.writeFile(screenshotPath, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    });
     (runtime as unknown as { page: { screenshot: typeof screenshot } }).page = { screenshot };
 
     const artifact = await runtime.captureRunScreenshot('run-browser-evidence');
@@ -27,11 +30,276 @@ describe('BrowserRuntime page access', () => {
     expect(artifact).toEqual(expect.objectContaining({
       type: 'screenshot',
       label: '运行起始截图',
-      path: expect.stringMatching(/run-browser-evidence-.+\.png$/),
+      path: expect.stringMatching(/page-screenshot-.+\.png$/),
+      manifest: expect.objectContaining({
+        path: expect.stringMatching(/^page-screenshot-.+\.png$/),
+        evidenceKind: 'pageScreenshot',
+        ownerRunId: 'run-browser-evidence',
+      }),
     }));
     expect(screenshot).toHaveBeenCalledWith({ path: artifact?.path, fullPage: true });
     (runtime as unknown as { page: null }).page = null;
     await expect(runtime.captureRunScreenshot('run-without-page')).resolves.toBeNull();
+  });
+
+  it('uses a safe PNG filename for a malicious run ID and registers real session captures', async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'playtest-browser-runtime-screenshot-'));
+    const runtime = new BrowserRuntime(rootDir, new ArtifactManager(rootDir));
+    const screenshot = vi.fn(async ({ path: screenshotPath }: { path: string }) => {
+      await fs.mkdir(path.dirname(screenshotPath), { recursive: true });
+      await fs.writeFile(screenshotPath, 'png', 'utf8');
+    });
+    const page = { screenshot, title: async () => 'Dashboard', url: () => 'https://example.test/dashboard' };
+    (runtime as unknown as { page: typeof page; state: Record<string, unknown> }).page = page;
+    (runtime as unknown as { state: Record<string, unknown> }).state = {
+      id: '../../session-escape', status: 'ready', currentUrl: 'https://example.test/dashboard', pageTitle: 'Dashboard', message: 'ready', updatedAt: new Date(0).toISOString(),
+    };
+
+    const runArtifact = await runtime.captureRunScreenshot('../../run-escape');
+    const session = await runtime.capture();
+    const manifest = JSON.parse(await fs.readFile(path.join(rootDir, 'studio-data', 'artifacts', 'manifest.json'), 'utf8'));
+
+    expect(path.basename(runArtifact?.path ?? '')).not.toContain('run-escape');
+    expect(path.basename(session.screenshotPath ?? '')).not.toContain('session-escape');
+    expect(manifest.entries).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: path.basename(session.screenshotPath), evidenceKind: 'pageScreenshot' }),
+    ]));
+  });
+
+  it('propagates a failed PNG registration and removes its orphan file', async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'playtest-browser-runtime-screenshot-'));
+    const artifacts = new ArtifactManager(rootDir);
+    const runtime = new BrowserRuntime(rootDir, artifacts);
+    const screenshot = vi.fn(async ({ path: screenshotPath }: { path: string }) => {
+      await fs.mkdir(path.dirname(screenshotPath), { recursive: true });
+      await fs.writeFile(screenshotPath, 'png', 'utf8');
+    });
+    (runtime as unknown as { page: { screenshot: typeof screenshot } }).page = { screenshot };
+    vi.spyOn(artifacts, 'registerExisting').mockRejectedValueOnce(new Error('manifest write failed'));
+
+    await expect(runtime.captureRunScreenshot('run-registration-failure')).rejects.toThrow('manifest write failed');
+    const files = await fs.readdir(path.join(rootDir, 'studio-data', 'artifacts'));
+    expect(files.filter((fileName) => fileName.endsWith('.png'))).toEqual([]);
+  });
+
+  it('registers a controlled download with a run-owned manifest entry', async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'playtest-browser-runtime-download-'));
+    const artifacts = new ArtifactManager(rootDir);
+    const runtime = new BrowserRuntime(rootDir, artifacts);
+    const click = vi.fn().mockResolvedValue(undefined);
+    const saveAs = vi.fn(async (downloadPath: string) => {
+      await fs.mkdir(path.dirname(downloadPath), { recursive: true });
+      await fs.writeFile(downloadPath, 'report,csv\n1,passed\n', 'utf8');
+    });
+    const page = {
+      click,
+      waitForEvent: vi.fn().mockResolvedValue({ suggestedFilename: () => 'report.csv', saveAs }),
+    };
+    (runtime as unknown as { page: typeof page }).page = page;
+
+    const result = await runtime.executeControlledDeterministicAction({
+      runId: 'run-controlled-download',
+      action: {
+        kind: 'download',
+        locator: { selector: '#download-report', quality: 'acceptable' },
+        url: 'https://app.example.test/reports/latest.csv',
+      },
+    });
+
+    expect(click).toHaveBeenCalledWith('#download-report', { timeout: 10_000 });
+    expect(saveAs).toHaveBeenCalledOnce();
+    expect(result.artifacts).toEqual([
+      expect.objectContaining({
+        type: 'attachment',
+        manifest: expect.objectContaining({
+          ownerRunId: 'run-controlled-download',
+          evidenceKind: 'attachment',
+          contentHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+        }),
+      }),
+    ]);
+    await expect(artifacts.findManifestEntry(result.artifacts[0]!.id)).resolves.toMatchObject({
+      ownerRunId: 'run-controlled-download',
+    });
+  });
+
+  it('executes the remaining structured interactions without persisting raw network data', async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'playtest-browser-runtime-interactions-'));
+    const artifacts = new ArtifactManager(rootDir);
+    const runtime = new BrowserRuntime(rootDir, artifacts);
+    const frameClick = vi.fn().mockResolvedValue(undefined);
+    const dragTo = vi.fn().mockResolvedValue(undefined);
+    const route = vi.fn().mockResolvedValue(undefined);
+    const unroute = vi.fn().mockResolvedValue(undefined);
+    const page = {
+      frameLocator: vi.fn(() => ({ locator: vi.fn(() => ({ click: frameClick })) })),
+      waitForEvent: vi.fn().mockResolvedValue({}),
+      evaluate: vi.fn().mockResolvedValue(undefined),
+      setInputFiles: vi.fn().mockResolvedValue(undefined),
+      hover: vi.fn().mockResolvedValue(undefined),
+      locator: vi.fn(() => ({ dragTo })),
+      waitForResponse: vi.fn(async (predicate) => {
+        const response = {
+          url: () => 'https://app.example.test/api/orders?access_token=must-not-persist',
+          status: () => 201,
+          request: () => ({ method: () => 'GET' }),
+        };
+        expect(predicate(response)).toBe(true);
+        return response;
+      }),
+      route,
+      unroute,
+    };
+    (runtime as unknown as { page: typeof page }).page = page;
+    const locator = (selector: string) => ({ selector, quality: 'acceptable' as const });
+
+    await runtime.executeControlledDeterministicAction({
+      runId: 'run-controlled-interactions',
+      action: { kind: 'iframe', frame: { locator: locator('#payment-frame'), url: 'https://app.example.test/frame' }, locator: locator('#confirm') },
+    });
+    await runtime.executeControlledDeterministicAction({
+      runId: 'run-controlled-interactions',
+      action: { kind: 'tab', url: 'https://app.example.test/help' },
+    });
+    await runtime.executeControlledDeterministicAction({
+      runId: 'run-controlled-interactions',
+      action: { kind: 'upload', locator: locator('#avatar'), fileRef: { kind: 'attachment', id: 'attachment-avatar' } },
+      resolveUploadPath: async () => '/main-owned/attachment-avatar.png',
+    });
+    await runtime.executeControlledDeterministicAction({
+      runId: 'run-controlled-interactions',
+      action: { kind: 'hover', locator: locator('#account-menu') },
+    });
+    await runtime.executeControlledDeterministicAction({
+      runId: 'run-controlled-interactions',
+      action: { kind: 'drag', source: locator('#card-a'), target: locator('#column-done'), sourcePosition: { x: 8, y: 8 } },
+    });
+    await runtime.executeControlledDeterministicAction({
+      runId: 'run-controlled-interactions',
+      action: { kind: 'clipboard', locator: locator('#clipboard-target'), value: 'TEST_BUDDY_CLIPBOARD_SENTINEL' },
+    });
+    const observed = await runtime.executeControlledDeterministicAction({
+      runId: 'run-controlled-interactions',
+      action: { kind: 'networkObserve', url: 'https://app.example.test/api/orders?access_token=must-not-persist', method: 'GET' },
+    });
+    const mocked = await runtime.executeControlledDeterministicAction({
+      runId: 'run-controlled-interactions',
+      action: { kind: 'networkMock', url: 'https://app.example.test/api/orders', method: 'GET', response: { status: 201, body: { id: 'order-1' } } },
+    });
+
+    expect(frameClick).toHaveBeenCalledWith({ timeout: 10_000 });
+    expect(page.evaluate).toHaveBeenCalledTimes(2);
+    expect(page.setInputFiles).toHaveBeenCalledWith('#avatar', '/main-owned/attachment-avatar.png', { timeout: 10_000 });
+    expect(page.hover).toHaveBeenCalledWith('#account-menu', { timeout: 10_000 });
+    expect(dragTo).toHaveBeenCalledWith(expect.anything(), { sourcePosition: { x: 8, y: 8 } });
+    expect(route).toHaveBeenCalledWith('https://app.example.test/api/orders', expect.any(Function));
+    expect([...observed.artifacts, ...mocked.artifacts]).toEqual([
+      expect.objectContaining({ manifest: expect.objectContaining({ evidenceKind: 'syntheticDiagnostic', ownerRunId: 'run-controlled-interactions' }) }),
+      expect.objectContaining({ manifest: expect.objectContaining({ evidenceKind: 'syntheticDiagnostic', ownerRunId: 'run-controlled-interactions' }) }),
+    ]);
+    await expect(fs.readFile(observed.artifacts[0]!.path, 'utf8')).resolves.not.toContain('access_token=must-not-persist');
+
+    await runtime.close();
+    expect(unroute).toHaveBeenCalledWith('https://app.example.test/api/orders', expect.any(Function));
+  });
+
+  it('waits for a cancelled download write and removes its unregistered file', async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'playtest-browser-runtime-download-cancel-'));
+    const artifacts = new ArtifactManager(rootDir);
+    const runtime = new BrowserRuntime(rootDir, artifacts);
+    let releaseSave: (() => void) | undefined;
+    let signalSaveStarted: (() => void) | undefined;
+    const saveStarted = new Promise<void>((resolve) => { signalSaveStarted = resolve; });
+    const saveReleased = new Promise<void>((resolve) => { releaseSave = resolve; });
+    const page = {
+      click: vi.fn().mockResolvedValue(undefined),
+      waitForEvent: vi.fn().mockResolvedValue({
+        suggestedFilename: () => 'cancelled.csv',
+        saveAs: async (downloadPath: string) => {
+          signalSaveStarted?.();
+          await saveReleased;
+          await fs.writeFile(downloadPath, 'late download', 'utf8');
+        },
+      }),
+    };
+    (runtime as unknown as { page: typeof page }).page = page;
+    const controller = new AbortController();
+    const execution = runtime.executeControlledDeterministicAction({
+      runId: 'run-cancelled-download',
+      action: { kind: 'download', locator: { selector: '#download', quality: 'acceptable' }, url: 'https://app.example.test/report.csv' },
+      cancellationSignal: controller.signal,
+    });
+
+    await saveStarted;
+    controller.abort();
+    releaseSave?.();
+
+    await expect(execution).rejects.toThrow();
+    const files = await fs.readdir(path.join(rootDir, 'studio-data', 'artifacts'));
+    expect(files.filter((fileName) => fileName.endsWith('.csv'))).toEqual([]);
+  });
+
+  it('does not treat a different response query as the approved network observation', async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'playtest-browser-runtime-observe-query-'));
+    const runtime = new BrowserRuntime(rootDir, new ArtifactManager(rootDir));
+    const page = {
+      waitForResponse: vi.fn(async (predicate) => {
+        expect(predicate({
+          url: () => 'https://app.example.test/orders?state=unpaid',
+          status: () => 200,
+          request: () => ({ method: () => 'GET' }),
+        })).toBe(false);
+        throw new Error('The exact approved response was not observed.');
+      }),
+    };
+    (runtime as unknown as { page: typeof page }).page = page;
+
+    await expect(runtime.executeControlledDeterministicAction({
+      runId: 'run-observe-query',
+      action: { kind: 'networkObserve', url: 'https://app.example.test/orders?state=paid', method: 'GET' },
+    })).rejects.toThrow('exact approved response');
+  });
+
+  it('releases route mocks at the owning run boundary', async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'playtest-browser-runtime-route-release-'));
+    const runtime = new BrowserRuntime(rootDir, new ArtifactManager(rootDir));
+    const route = vi.fn().mockResolvedValue(undefined);
+    const unroute = vi.fn().mockResolvedValue(undefined);
+    const page = { route, unroute };
+    (runtime as unknown as { page: typeof page }).page = page;
+
+    await runtime.executeControlledDeterministicAction({
+      runId: 'run-route-owner',
+      action: { kind: 'networkMock', url: 'https://app.example.test/orders', method: 'GET', response: { status: 200, body: {} } },
+    });
+    await runtime.releaseControlledRouteMocks('run-route-owner');
+
+    expect(unroute).toHaveBeenCalledWith('https://app.example.test/orders', expect.any(Function));
+  });
+
+  it('cleans a browser download that is cancelled while waiting for the download event', async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'playtest-browser-runtime-download-event-cancel-'));
+    const runtime = new BrowserRuntime(rootDir, new ArtifactManager(rootDir));
+    let resolveDownload: ((download: { suggestedFilename: () => string; saveAs: () => Promise<void>; delete: () => Promise<void> }) => void) | undefined;
+    const pendingDownload = new Promise<{ suggestedFilename: () => string; saveAs: () => Promise<void>; delete: () => Promise<void> }>((resolve) => {
+      resolveDownload = resolve;
+    });
+    const deleteDownload = vi.fn().mockResolvedValue(undefined);
+    const page = { click: vi.fn().mockResolvedValue(undefined), waitForEvent: vi.fn().mockReturnValue(pendingDownload) };
+    (runtime as unknown as { page: typeof page }).page = page;
+    const controller = new AbortController();
+    const execution = runtime.executeControlledDeterministicAction({
+      runId: 'run-cancelled-download-event',
+      action: { kind: 'download', locator: { selector: '#download', quality: 'acceptable' }, url: 'https://app.example.test/report.csv' },
+      cancellationSignal: controller.signal,
+    });
+
+    controller.abort();
+    resolveDownload?.({ suggestedFilename: () => 'late.csv', saveAs: async () => undefined, delete: deleteDownload });
+
+    await expect(execution).rejects.toThrow();
+    await Promise.resolve();
+    expect(deleteDownload).toHaveBeenCalledOnce();
   });
 
   it('resolves a bound authentication state before loading Playwright and refuses an unavailable reference', async () => {
@@ -78,7 +346,10 @@ describe('BrowserRuntime page access', () => {
     const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'playtest-browser-runtime-'));
     const tracing = {
       start: vi.fn().mockResolvedValue(undefined),
-      stop: vi.fn().mockResolvedValue(undefined),
+      stop: vi.fn(async ({ path: tracePath }: { path: string }) => {
+        await fs.mkdir(path.dirname(tracePath), { recursive: true });
+        await fs.writeFile(tracePath, 'trace', 'utf8');
+      }),
     };
     const runtime = new BrowserRuntime(rootDir, new ArtifactManager(rootDir));
     (runtime as unknown as { context: { tracing: typeof tracing } }).context = { tracing };
@@ -92,10 +363,30 @@ describe('BrowserRuntime page access', () => {
       expect.objectContaining({
         type: 'trace',
         label: 'Playwright Trace',
-        path: expect.stringMatching(/agent-run-1.+-trace\.zip$/),
+        path: expect.stringMatching(/trace-.+\.zip$/),
       }),
     );
     expect(new ArtifactManager(rootDir).isManagedArtifactPath(trace?.path ?? '')).toBe(true);
+  });
+
+  it('propagates a failed trace registration and removes its orphan archive', async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'playtest-browser-runtime-'));
+    const artifacts = new ArtifactManager(rootDir);
+    const tracing = {
+      start: vi.fn().mockResolvedValue(undefined),
+      stop: vi.fn(async ({ path: tracePath }: { path: string }) => {
+        await fs.mkdir(path.dirname(tracePath), { recursive: true });
+        await fs.writeFile(tracePath, 'trace', 'utf8');
+      }),
+    };
+    const runtime = new BrowserRuntime(rootDir, artifacts);
+    (runtime as unknown as { context: { tracing: typeof tracing } }).context = { tracing };
+    await runtime.beginTrace('trace-registration-failure');
+    vi.spyOn(artifacts, 'registerExisting').mockRejectedValueOnce(new Error('trace manifest write failed'));
+
+    await expect(runtime.finishTrace()).rejects.toThrow('trace manifest write failed');
+    const files = await fs.readdir(path.join(rootDir, 'studio-data', 'artifacts'));
+    expect(files.filter((fileName) => fileName.endsWith('.zip'))).toEqual([]);
   });
 
   it('does not fabricate a trace when no real browser context is available', async () => {
@@ -449,7 +740,10 @@ describe('BrowserRuntime page access', () => {
     const page = {
       title: async () => 'Report',
       url: () => 'https://example.test/report',
-      screenshot: async () => undefined,
+      screenshot: async ({ path: screenshotPath }: { path: string }) => {
+        await fs.mkdir(path.dirname(screenshotPath), { recursive: true });
+        await fs.writeFile(screenshotPath, 'png', 'utf8');
+      },
       waitForTimeout: async (timeoutMs: number) => {
         calls.push(`wait:${timeoutMs}`);
       },
@@ -526,7 +820,10 @@ describe('BrowserRuntime page access', () => {
     const page = {
       title: async () => 'Dashboard',
       url: () => 'https://example.test/dashboard',
-      screenshot: async () => undefined,
+      screenshot: async ({ path: screenshotPath }: { path: string }) => {
+        await fs.mkdir(path.dirname(screenshotPath), { recursive: true });
+        await fs.writeFile(screenshotPath, 'png', 'utf8');
+      },
       waitForTimeout: async (timeoutMs: number) => {
         calls.push(`wait:${timeoutMs}`);
       },
@@ -566,7 +863,10 @@ describe('BrowserRuntime page access', () => {
     const page = {
       title: async () => 'Orders',
       url: () => 'https://example.test/orders',
-      screenshot: async () => undefined,
+      screenshot: async ({ path: screenshotPath }: { path: string }) => {
+        await fs.mkdir(path.dirname(screenshotPath), { recursive: true });
+        await fs.writeFile(screenshotPath, 'png', 'utf8');
+      },
       waitForTimeout: async (timeoutMs: number) => {
         calls.push(`wait:${timeoutMs}`);
       },

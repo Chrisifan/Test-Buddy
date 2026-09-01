@@ -14,15 +14,21 @@ import type {
   RecordingAsset,
   TestCaseDraft,
   FixtureAsset,
+  ReusableFlowAsset,
   SuiteAsset,
   VersionedTestAssetReference,
 } from '../shared/studio.js';
-import { hasValidFixtureHttpOutputConfiguration, normalizeFixtureHttpDeclaration, resolveSuiteTestCases } from '../shared/studio.js';
+import {
+  hasValidFixtureHttpOutputConfiguration,
+  normalizeFixtureHttpDeclaration,
+  resolveSuiteTestCases,
+  validateReusableFlow,
+} from '../shared/studio.js';
 
 const projectAssetSchemaVersion = 2 as const;
 const legacyProjectAssetSchemaVersion = 1 as const;
 
-type ProjectAssetManifestMetadata = Omit<ProjectDraft, 'testCases' | 'recordings' | 'documents' | 'fixtures' | 'suites'>;
+type ProjectAssetManifestMetadata = Omit<ProjectDraft, 'testCases' | 'recordings' | 'documents' | 'fixtures' | 'reusableFlows' | 'suites'>;
 
 /** One immutable legacy Case file retained below a migration backup directory. */
 export interface LegacyCaseBackupFileRecord {
@@ -48,6 +54,7 @@ export interface ProjectAssetManifest extends ProjectAssetManifestMetadata {
     recordings: string[];
     documents: string[];
     fixtures?: VersionedTestAssetReference[];
+    reusableFlows?: VersionedTestAssetReference[];
     suites?: VersionedTestAssetReference[];
   };
 }
@@ -66,6 +73,8 @@ interface LegacyProjectAssetManifest extends ProjectAssetManifestMetadata {
     documents: string[];
     /** Absent only in snapshots written before fixtures were introduced. */
     fixtures?: VersionedTestAssetReference[];
+    /** Absent only in snapshots written before reusable Flows were introduced. */
+    reusableFlows?: VersionedTestAssetReference[];
     /** Absent only in snapshots written before Suites were introduced. */
     suites?: VersionedTestAssetReference[];
   };
@@ -80,6 +89,7 @@ export interface ProjectAssetSnapshot {
   recordings: RecordingAsset[];
   documents: PrdDocumentAsset[];
   fixtures: FixtureAsset[];
+  reusableFlows: ReusableFlowAsset[];
   suites: SuiteAsset[];
 }
 
@@ -282,7 +292,7 @@ export function createProjectAssetSnapshot(
   legacyCaseBackup?: LegacyCaseBackupDeclaration,
 ): ProjectAssetSnapshot {
   const sanitizedProject = sanitizeProjectAsset(project);
-  const { testCases, recordings, documents, fixtures, suites, ...projectMetadata } = sanitizedProject;
+  const { testCases, recordings, documents, fixtures, reusableFlows, suites, ...projectMetadata } = sanitizedProject;
   return {
     manifest: {
       ...projectMetadata,
@@ -297,6 +307,7 @@ export function createProjectAssetSnapshot(
         recordings: recordings.map((recording) => recording.id),
         documents: documents.map((document) => document.id),
         fixtures: fixtures.map((fixture) => ({ id: fixture.id, version: fixture.version })),
+        reusableFlows: reusableFlows.map((flow) => ({ id: flow.id, version: flow.version })),
         suites: suites.map((suite) => ({ id: suite.id, version: suite.version })),
       },
     },
@@ -304,6 +315,7 @@ export function createProjectAssetSnapshot(
     recordings,
     documents,
     fixtures,
+    reusableFlows,
     suites,
   };
 }
@@ -333,6 +345,7 @@ export function validateProjectAssetSnapshot(snapshot: ProjectAssetSnapshot): Pr
   validateAssetCollection('recordings', snapshot.recordings, manifest.assetIds.recordings, issues);
   validateAssetCollection('documents', snapshot.documents, manifest.assetIds.documents, issues);
   validateFixtureCollection(snapshot.fixtures, manifest.assetIds.fixtures, manifest, snapshot.testCases, issues);
+  validateReusableFlowCollection(snapshot.reusableFlows, manifest.assetIds.reusableFlows, snapshot.testCases, issues);
   validateSuiteCollection(snapshot.suites, manifest.assetIds.suites, manifest, snapshot.testCases, issues);
 
   if (manifest.revision !== undefined) {
@@ -507,7 +520,7 @@ export class ProjectAssetStore {
     );
     validateManifest(manifest);
 
-    const [testCases, storedRecordings, documents, fixtures, suites] = await Promise.all([
+    const [testCases, storedRecordings, documents, fixtures, reusableFlows, suites] = await Promise.all([
       manifest.schemaVersion === legacyProjectAssetSchemaVersion
         ? readLegacyCaseCollectionWithContent(
           this.projectDirectory,
@@ -518,12 +531,13 @@ export class ProjectAssetStore {
       readAssetCollection<RecordingAsset>(this.projectDirectory, 'recordings', manifest.assetIds.recordings, this.fileSystem.afterProjectAssetPathValidation),
       readAssetCollection<PrdDocumentAsset>(this.projectDirectory, 'documents', manifest.assetIds.documents, this.fileSystem.afterProjectAssetPathValidation),
       readFixtureCollection(this.projectDirectory, manifest.assetIds.fixtures ?? [], this.fileSystem.afterProjectAssetPathValidation),
+      readReusableFlowCollection(this.projectDirectory, manifest.assetIds.reusableFlows ?? [], this.fileSystem.afterProjectAssetPathValidation),
       readSuiteCollection(this.projectDirectory, manifest.assetIds.suites ?? [], this.fileSystem.afterProjectAssetPathValidation),
     ]);
     const recordings = manifest.revision === undefined
       ? storedRecordings.map(stripRecordingRuntimeData)
       : storedRecordings;
-    const snapshot: ProjectAssetSnapshot = { manifest, testCases, recordings, documents, fixtures, suites };
+    const snapshot: ProjectAssetSnapshot = { manifest, testCases, recordings, documents, fixtures, reusableFlows, suites };
     const issues = validateProjectAssetSnapshot(snapshot);
     if (manifest.schemaVersion === projectAssetSchemaVersion) {
       issues.push(...await validateV2CaseDirectoryLayout(this.projectDirectory, manifest.assetIds.cases));
@@ -591,7 +605,7 @@ export class ProjectAssetStore {
       };
     }
 
-    const [legacyCases, storedRecordings, documents, fixtures, suites] = await Promise.all([
+    const [legacyCases, storedRecordings, documents, fixtures, reusableFlows, suites] = await Promise.all([
       readLegacyCaseCollectionWithContent(
         directory,
         manifest.assetIds.cases,
@@ -600,6 +614,7 @@ export class ProjectAssetStore {
       readAssetCollection<RecordingAsset>(directory, 'recordings', manifest.assetIds.recordings, this.fileSystem.afterProjectAssetPathValidation),
       readAssetCollection<PrdDocumentAsset>(directory, 'documents', manifest.assetIds.documents, this.fileSystem.afterProjectAssetPathValidation),
       readFixtureCollection(directory, manifest.assetIds.fixtures ?? [], this.fileSystem.afterProjectAssetPathValidation),
+      readReusableFlowCollection(directory, manifest.assetIds.reusableFlows ?? [], this.fileSystem.afterProjectAssetPathValidation),
       readSuiteCollection(directory, manifest.assetIds.suites ?? [], this.fileSystem.afterProjectAssetPathValidation),
     ]);
     const layoutIssues = await validateLegacyProjectDirectoryLayout(directory, manifest);
@@ -623,6 +638,7 @@ export class ProjectAssetStore {
       recordings: manifest.revision === undefined ? storedRecordings.map(stripRecordingRuntimeData) : storedRecordings,
       documents,
       fixtures,
+      reusableFlows,
       suites,
     });
     const snapshot = createProjectAssetSnapshot(project, {
@@ -757,6 +773,7 @@ export class ProjectAssetStore {
       await writeAssetCollection(temporaryDirectory, 'recordings', snapshot.recordings);
       await writeAssetCollection(temporaryDirectory, 'documents', snapshot.documents);
       await writeFixtureCollection(temporaryDirectory, snapshot.fixtures);
+      await writeReusableFlowCollection(temporaryDirectory, snapshot.reusableFlows);
       await writeSuiteCollection(temporaryDirectory, snapshot.suites);
       await writeOrCopyLegacyCaseBackup(
         temporaryDirectory,
@@ -960,6 +977,75 @@ function validateFixtureCollection(
         issues.push({
           path: `cases/${testCase.id}.assetReferences.fixtures`,
           message: `未找到 fixture ${reference.id}@${reference.version}。`,
+        });
+      }
+    });
+  });
+}
+
+function validateReusableFlowCollection(
+  reusableFlows: ReusableFlowAsset[],
+  expectedReferences: VersionedTestAssetReference[] | undefined,
+  testCases: TestCaseDraft[],
+  issues: ProjectAssetValidationIssue[],
+): void {
+  if (expectedReferences === undefined) {
+    if (reusableFlows.length) {
+      issues.push({ path: 'project.json.assetIds.reusableFlows', message: 'manifest 缺少可复用流程版本引用。' });
+    }
+    return;
+  }
+  if (!Array.isArray(expectedReferences)) {
+    issues.push({ path: 'project.json.assetIds.reusableFlows', message: '可复用流程版本引用必须是数组。' });
+    return;
+  }
+  const expectedKeys = expectedReferences.map(reusableFlowReferenceKey);
+  if (
+    expectedReferences.some((reference) => !isVersionedAssetReference(reference)) ||
+    new Set(expectedKeys).size !== expectedKeys.length
+  ) {
+    issues.push({ path: 'project.json.assetIds.reusableFlows', message: '可复用流程版本引用必须唯一且有效。' });
+  }
+  const flowKeys = reusableFlows.map(reusableFlowReferenceKey);
+  if (flowKeys.length !== reusableFlows.length || new Set(flowKeys).size !== flowKeys.length) {
+    issues.push({ path: 'reusable-flows', message: '可复用流程 ID 或版本缺失或重复。' });
+  }
+  if (!sameKeys(expectedKeys, flowKeys)) {
+    issues.push({ path: 'project.json.assetIds.reusableFlows', message: 'manifest 与可复用流程文件的版本引用不一致。' });
+  }
+  reusableFlows.forEach((flow) => {
+    const flowPath = flow?.id ? reusableFlowRelativePath(flow) : 'reusable-flows';
+    validateReusableFlow(flow).forEach((issue) => {
+      issues.push({ path: flowPath, message: issue.message });
+    });
+  });
+
+  const availableReferences = new Set(flowKeys);
+  testCases.forEach((testCase) => {
+    const references = testCase.assetReferences?.reusableFlows;
+    if (references === undefined) {
+      return;
+    }
+    if (!Array.isArray(references)) {
+      issues.push({
+        path: `cases/${testCase.id}.assetReferences.reusableFlows`,
+        message: '可复用流程引用必须是数组。',
+      });
+      return;
+    }
+    const referencedFlowIds = references.map((reference) => reference?.id);
+    if (referencedFlowIds.some((id) => !isNonEmptyString(id)) || new Set(referencedFlowIds).size !== referencedFlowIds.length) {
+      issues.push({
+        path: `cases/${testCase.id}.assetReferences.reusableFlows`,
+        message: '一个用例最多只能引用一个同 ID 的可复用流程版本。',
+      });
+      return;
+    }
+    references.forEach((reference) => {
+      if (!isVersionedAssetReference(reference) || !availableReferences.has(reusableFlowReferenceKey(reference))) {
+        issues.push({
+          path: `cases/${testCase.id}.assetReferences.reusableFlows`,
+          message: `未找到可复用流程 ${reference?.id ?? 'unknown'}@${reference?.version ?? 'unknown'}。`,
         });
       }
     });
@@ -1227,6 +1313,15 @@ function validateManifest(manifest: unknown): asserts manifest is ProjectAssetRe
           issues.push({ path: 'project.json.assetIds.cases', message: 'Case 版本引用必须唯一且有效。' });
         }
       }
+      const reusableFlowReferences = collections.reusableFlows;
+      if (
+        reusableFlowReferences !== undefined &&
+        (!Array.isArray(reusableFlowReferences) ||
+          reusableFlowReferences.some((reference) => !isVersionedAssetReference(reference)) ||
+          new Set(reusableFlowReferences.map(reusableFlowReferenceKey)).size !== reusableFlowReferences.length)
+      ) {
+        issues.push({ path: 'project.json.assetIds.reusableFlows', message: '可复用流程版本引用必须唯一且有效。' });
+      }
     }
   }
   if (issues.length) {
@@ -1241,6 +1336,7 @@ function listAssetFiles(snapshot: ProjectAssetSnapshot): string[] {
     ...snapshot.recordings.map((asset) => assetRelativePath('recordings', asset.id)),
     ...snapshot.documents.map((asset) => assetRelativePath('documents', asset.id)),
     ...snapshot.fixtures.map(fixtureRelativePath),
+    ...snapshot.reusableFlows.map(reusableFlowRelativePath),
     ...snapshot.suites.map(suiteRelativePath),
     ...legacyCaseBackupFiles(snapshot),
   ];
@@ -1255,6 +1351,7 @@ async function validateProjectDirectoryLayout(
     'documents/',
     'recordings/',
     ...(snapshot.manifest.assetIds.fixtures === undefined ? [] : ['fixtures/']),
+    ...(snapshot.manifest.assetIds.reusableFlows === undefined ? [] : ['reusable-flows/']),
     ...(snapshot.manifest.assetIds.suites === undefined ? [] : ['suites/']),
     ...legacyCaseBackupEntries(snapshot),
     ...listAssetFiles(snapshot),
@@ -1283,12 +1380,14 @@ async function validateLegacyProjectDirectoryLayout(
     'documents/',
     'recordings/',
     ...(manifest.assetIds.fixtures === undefined ? [] : ['fixtures/']),
+    ...(manifest.assetIds.reusableFlows === undefined ? [] : ['reusable-flows/']),
     ...(manifest.assetIds.suites === undefined ? [] : ['suites/']),
     'project.json',
     ...manifest.assetIds.cases.map((id) => assetRelativePath('cases', id)),
     ...manifest.assetIds.recordings.map((id) => assetRelativePath('recordings', id)),
     ...manifest.assetIds.documents.map((id) => assetRelativePath('documents', id)),
     ...(manifest.assetIds.fixtures ?? []).map(fixtureRelativePath),
+    ...(manifest.assetIds.reusableFlows ?? []).map(reusableFlowRelativePath),
     ...(manifest.assetIds.suites ?? []).map(suiteRelativePath),
   ]);
   const actualEntries = new Set(await listDirectoryTreeEntries(directory));
@@ -1752,6 +1851,10 @@ function fixtureRelativePath(fixture: Pick<FixtureAsset, 'id' | 'version'>): str
   return path.posix.join('fixtures', `${encodeURIComponent(fixture.id)}@${fixture.version}.json`);
 }
 
+function reusableFlowRelativePath(flow: Pick<ReusableFlowAsset, 'id' | 'version'>): string {
+  return path.posix.join('reusable-flows', `${encodeURIComponent(flow.id)}@${flow.version}.json`);
+}
+
 function suiteRelativePath(suite: Pick<SuiteAsset, 'id' | 'version'>): string {
   return path.posix.join('suites', `${encodeURIComponent(suite.id)}@${suite.version}.json`);
 }
@@ -1887,6 +1990,29 @@ async function readFixtureCollection(
       ]);
     }
     return fixture;
+  }));
+}
+
+async function writeReusableFlowCollection(rootDirectory: string, reusableFlows: ReusableFlowAsset[]): Promise<void> {
+  const directory = path.join(rootDirectory, 'reusable-flows');
+  await fs.mkdir(directory, { recursive: true });
+  await Promise.all(reusableFlows.map((flow) => writeJson(path.join(rootDirectory, reusableFlowRelativePath(flow)), flow)));
+}
+
+async function readReusableFlowCollection(
+  rootDirectory: string,
+  references: VersionedTestAssetReference[],
+  afterPathValidation?: (rootDirectory: string, relativePath: string) => Promise<void>,
+): Promise<ReusableFlowAsset[]> {
+  return Promise.all(references.map(async (reference) => {
+    const flowPath = reusableFlowRelativePath(reference);
+    const flow = await readJson(rootDirectory, flowPath, afterPathValidation) as ReusableFlowAsset;
+    if (!flow || flow.id !== reference.id || flow.version !== reference.version) {
+      throw new ProjectAssetStoreError('可复用流程文件与 manifest 引用不一致。', [
+        { path: flowPath, message: '可复用流程 ID 或版本不匹配。' },
+      ]);
+    }
+    return flow;
   }));
 }
 
@@ -2068,6 +2194,7 @@ function projectFromSnapshot(snapshot: ProjectAssetSnapshot): ProjectDraft {
     recordings: structuredClone(snapshot.recordings),
     documents: structuredClone(snapshot.documents),
     fixtures: structuredClone(snapshot.fixtures),
+    reusableFlows: structuredClone(snapshot.reusableFlows),
     suites: structuredClone(snapshot.suites),
   };
 }
@@ -2137,6 +2264,10 @@ function sameIds(expected: string[], actual: string[]): boolean {
 }
 
 function fixtureReferenceKey(reference: Pick<VersionedTestAssetReference, 'id' | 'version'>): string {
+  return `${reference.id}@${reference.version}`;
+}
+
+function reusableFlowReferenceKey(reference: Pick<VersionedTestAssetReference, 'id' | 'version'>): string {
   return `${reference.id}@${reference.version}`;
 }
 

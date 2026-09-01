@@ -47,7 +47,15 @@ describe('ProjectAssetStore', () => {
 
     await store.saveInitial(project);
 
-    await expect(fs.readdir(projectDirectory)).resolves.toEqual(['cases', 'documents', 'fixtures', 'project.json', 'recordings', 'suites']);
+    await expect(fs.readdir(projectDirectory)).resolves.toEqual([
+      'cases',
+      'documents',
+      'fixtures',
+      'project.json',
+      'recordings',
+      'reusable-flows',
+      'suites',
+    ]);
     const manifest = JSON.parse(await fs.readFile(path.join(projectDirectory, 'project.json'), 'utf8')) as {
       schemaVersion?: number;
       revision?: string;
@@ -958,6 +966,7 @@ describe('ProjectAssetStore', () => {
     manifest.schemaVersion = 1;
     manifest.assetIds.cases = ['case/checkout'];
     delete manifest.assetIds.fixtures;
+    delete manifest.assetIds.reusableFlows;
     delete manifest.assetIds.suites;
     await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
     await fs.rename(
@@ -965,10 +974,11 @@ describe('ProjectAssetStore', () => {
       path.join(projectDirectory, 'cases', 'case%2Fcheckout.json'),
     );
     await fs.rm(path.join(projectDirectory, 'fixtures'), { recursive: true, force: true });
+    await fs.rm(path.join(projectDirectory, 'reusable-flows'), { recursive: true, force: true });
     await fs.rm(path.join(projectDirectory, 'suites'), { recursive: true, force: true });
 
     await expect(store.loadWithRevision()).resolves.toMatchObject({
-      project: { id: project.id, fixtures: [], suites: [] },
+      project: { id: project.id, fixtures: [], reusableFlows: [], suites: [] },
     });
   });
 
@@ -1039,6 +1049,85 @@ describe('ProjectAssetStore', () => {
     });
     expect(validateProjectAssetSnapshot(invalidOutputMappingSnapshot)).toEqual(expect.arrayContaining([
       expect.objectContaining({ path: 'fixtures/fixture%2Fseed-order@1.json' }),
+    ]));
+  });
+
+  it('writes every versioned reusable Flow and rejects missing or malformed Case bindings', async () => {
+    const rootDirectory = await createTemporaryDirectory();
+    const projectDirectory = path.join(rootDirectory, 'reusable-flow-project');
+    const project = createAssetProject();
+    const flowV1 = {
+      schemaVersion: 1 as const,
+      id: 'flow/login',
+      version: 1,
+      name: '登录准备',
+      description: '进入登录页面。',
+      tags: ['auth'],
+      steps: [{
+        id: 'flow-open-login',
+        type: 'ai' as const,
+        title: '打开登录页',
+        body: '访问登录页。',
+        execution: {
+          schemaVersion: 2 as const,
+          intent: '访问登录页。',
+          reviewStatus: 'confirmed' as const,
+          actionRisk: 'low' as const,
+          action: { kind: 'navigate' as const, url: 'https://example.test/login' },
+        },
+      }],
+      createdAt: '2026-08-15T00:00:00.000Z',
+      updatedAt: '2026-08-15T00:00:00.000Z',
+    };
+    const flowV2 = {
+      ...flowV1,
+      version: 2,
+      name: '登录准备 v2',
+      updatedAt: '2026-08-16T00:00:00.000Z',
+    };
+    project.reusableFlows = [flowV1, flowV2];
+    project.testCases[0] = {
+      ...project.testCases[0]!,
+      assetReferences: { fixtures: [], reusableFlows: [{ id: flowV1.id, version: flowV1.version }] },
+    };
+    const store = new ProjectAssetStore(projectDirectory);
+
+    const plan = await store.planMigration(project);
+    expect(plan.files).toEqual(expect.arrayContaining([
+      'reusable-flows/flow%2Flogin@1.json',
+      'reusable-flows/flow%2Flogin@2.json',
+    ]));
+    await store.saveInitial(project);
+    await expect(store.load()).resolves.toMatchObject({
+      reusableFlows: [
+        expect.objectContaining({ id: flowV1.id, version: 1 }),
+        expect.objectContaining({ id: flowV2.id, version: 2 }),
+      ],
+      testCases: [expect.objectContaining({
+        assetReferences: expect.objectContaining({ reusableFlows: [{ id: flowV1.id, version: 1 }] }),
+      })],
+    });
+
+    const missingReferenceSnapshot = createProjectAssetSnapshot({
+      ...project,
+      testCases: [{
+        ...project.testCases[0]!,
+        assetReferences: { fixtures: [], reusableFlows: [{ id: 'flow/missing', version: 1 }] },
+      }],
+    });
+    expect(validateProjectAssetSnapshot(missingReferenceSnapshot)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: `cases/${project.testCases[0]!.id}.assetReferences.reusableFlows` }),
+    ]));
+
+    const malformedFlowSnapshot = createProjectAssetSnapshot({
+      ...project,
+      reusableFlows: [{
+        ...flowV1,
+        steps: [{ id: 'manual-flow-step', type: 'manual', title: '人工步骤', body: '不可执行。' }],
+      }],
+    });
+    expect(validateProjectAssetSnapshot(malformedFlowSnapshot)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: 'reusable-flows/flow%2Flogin@1.json' }),
     ]));
   });
 

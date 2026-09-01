@@ -4,10 +4,11 @@ import { PlaywrightAgent } from '@midscene/web/playwright';
 import type { Page } from 'playwright';
 
 import type { AgentExecutionMetrics, AgentRunStatus, AgentUsageBucket } from '../../shared/agent.js';
-import type { MidsceneConfig } from '../../shared/studio.js';
+import type { ResolvedMidsceneConfig } from './model-config-resolver.js';
+import { createSecretRedactor, type SecretRedactor } from './secret-redactor.js';
 
 interface SemanticActionRequest {
-  config: MidsceneConfig;
+  config: ResolvedMidsceneConfig;
   prompt: string;
 }
 
@@ -94,8 +95,8 @@ type MidsceneActionExecution<T> =
   | { ok: true; value: T; reportPath?: string; metrics?: AgentExecutionMetrics }
   | { ok: false; error: unknown; reportPath?: string; metrics?: AgentExecutionMetrics };
 
-function getErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+function getErrorMessage(error: unknown, redactor: SecretRedactor): string {
+  return redactor.redactError(error);
 }
 
 function formatExtractedValue(value: unknown): string {
@@ -113,8 +114,9 @@ function createFailedActionResult(
   actionLabel: string,
   target: string,
   execution: Extract<MidsceneActionExecution<unknown>, { ok: false }>,
+  redactor: SecretRedactor,
 ): SemanticActionResult {
-  const failureReason = getErrorMessage(execution.error);
+  const failureReason = getErrorMessage(execution.error, redactor);
   return {
     status: 'failed',
     message: `Midscene ${actionLabel}「${target}」失败：${failureReason}`,
@@ -125,7 +127,7 @@ function createFailedActionResult(
   };
 }
 
-function createModelConfig(config: MidsceneConfig): Record<string, string> {
+function createModelConfig(config: ResolvedMidsceneConfig): Record<string, string> {
   return {
     MIDSCENE_MODEL_BASE_URL: config.modelBaseUrl,
     MIDSCENE_MODEL_API_KEY: config.modelApiKey,
@@ -200,7 +202,7 @@ export class MidsceneSemanticActionRuntime {
   async click(request: SemanticClickRequest): Promise<SemanticActionResult> {
     const execution = await this.runWithMetrics(request.config, (agent) => agent.aiTap(request.target));
     if (!execution.ok) {
-      return createFailedActionResult('点击', request.target, execution);
+      return createFailedActionResult('点击', request.target, execution, createSecretRedactor(request.config));
     }
     const { metrics, reportPath } = execution;
     return {
@@ -217,7 +219,7 @@ export class MidsceneSemanticActionRuntime {
       agent.aiInput(request.target, { value: request.value }),
     );
     if (!execution.ok) {
-      return createFailedActionResult('输入', request.target, execution);
+      return createFailedActionResult('输入', request.target, execution, createSecretRedactor(request.config));
     }
     const { metrics, reportPath } = execution;
     return {
@@ -233,7 +235,7 @@ export class MidsceneSemanticActionRuntime {
     const task = `在下拉框「${request.target}」中选择「${request.value}」`;
     const execution = await this.runWithMetrics(request.config, (agent) => agent.aiAct(task));
     if (!execution.ok) {
-      return createFailedActionResult('选择', `${request.target}：${request.value}`, execution);
+      return createFailedActionResult('选择', `${request.target}：${request.value}`, execution, createSecretRedactor(request.config));
     }
     const { metrics, reportPath } = execution;
     return {
@@ -248,7 +250,7 @@ export class MidsceneSemanticActionRuntime {
   async extract(request: SemanticExtractRequest): Promise<SemanticActionResult> {
     const execution = await this.runWithMetrics(request.config, (agent) => agent.aiQuery(request.target));
     if (!execution.ok) {
-      return createFailedActionResult('提取', request.target, execution);
+      return createFailedActionResult('提取', request.target, execution, createSecretRedactor(request.config));
     }
     const { metrics, reportPath, value } = execution;
     if (value === undefined) {
@@ -276,7 +278,7 @@ export class MidsceneSemanticActionRuntime {
       agent.aiAssert(request.assertion),
     );
     if (!execution.ok) {
-      return createFailedActionResult('断言', request.assertion, execution);
+      return createFailedActionResult('断言', request.assertion, execution, createSecretRedactor(request.config));
     }
     const { metrics, reportPath, value: result } = execution;
     if (result?.pass === false) {
@@ -301,7 +303,7 @@ export class MidsceneSemanticActionRuntime {
   }
 
   private async runWithMetrics<T>(
-    config: MidsceneConfig,
+    config: ResolvedMidsceneConfig,
     action: (agent: MidsceneAgent) => Promise<T>,
   ): Promise<MidsceneActionExecution<T>> {
     const { agent, reportPath } = await this.getAgent(config);
@@ -332,7 +334,7 @@ export class MidsceneSemanticActionRuntime {
       : { ok: true, value: value as T, ...evidence };
   }
 
-  private async getAgent(config: MidsceneConfig): Promise<NonNullable<MidsceneSemanticActionRuntime['cachedAgent']>> {
+  private async getAgent(config: ResolvedMidsceneConfig): Promise<NonNullable<MidsceneSemanticActionRuntime['cachedAgent']>> {
     const page = this.pageProvider.getPage();
     if (!page) {
       throw new Error('尚未启动真实 Playwright 页面，无法执行 Midscene 语义动作。');

@@ -8,10 +8,23 @@ import {
   type ModelSecretRef,
   type StudioState,
 } from '../shared/studio.js';
+import {
+  DurableAtomicFileCommitError,
+  type DurableAtomicFileFileSystem,
+  writeDurableAtomicFile,
+} from './durable-atomic-file.js';
 import { ModelSecretStore, type ModelSecretScope } from './runtime/model-secret-store.js';
 
-export interface StudioStoreFileSystem {
-  rename(source: string, destination: string): Promise<void>;
+export interface StudioStoreFileSystem extends Partial<DurableAtomicFileFileSystem> {
+  rename: DurableAtomicFileFileSystem['rename'];
+}
+
+/** The state replacement might be visible but could not be durably committed. */
+export class DurableStudioStateCommitError extends Error {
+  constructor(cause: unknown) {
+    super('StudioState 持久化提交结果不确定。', { cause });
+    this.name = 'DurableStudioStateCommitError';
+  }
 }
 
 export interface ModelSecretWriter {
@@ -79,10 +92,17 @@ export class StudioStore {
     await this.ensureReady();
     const stagingPath = path.join(this.dataDir, `.state-staging-${randomUUID()}.json`);
     try {
-      await fs.writeFile(stagingPath, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
-      await this.fileSystem.rename(stagingPath, this.statePath);
+      await writeDurableAtomicFile({
+        directory: this.dataDir,
+        stagingPath,
+        destinationPath: this.statePath,
+        content: `${JSON.stringify(state, null, 2)}\n`,
+        fileSystem: this.fileSystem,
+      });
     } catch (error) {
-      await fs.rm(stagingPath, { force: true });
+      if (error instanceof DurableAtomicFileCommitError) {
+        throw new DurableStudioStateCommitError(error);
+      }
       throw error;
     }
   }
@@ -96,11 +116,12 @@ export class StudioStore {
   }
 
   private async sanitizeLegacyModelKeys(state: StudioState): Promise<{ state: StudioState; migrated: boolean }> {
-    const clonedState = structuredClone(state);
-    const migrations = collectLegacyModelKeyMigrations(clonedState);
+    const migrations = collectLegacyModelKeyMigrations(state);
     if (!migrations.length) {
-      return { state: clonedState, migrated: false };
+      return { state, migrated: false };
     }
+
+    const clonedState = structuredClone(state);
 
     const refs = new Map<ModelSecretScope, ModelSecretRef>();
     for (const migration of migrations) {

@@ -1,9 +1,9 @@
 import path from 'node:path';
 
 import type {
-  AgentModelConfig,
   BrowserSessionState,
   FixtureScriptTrustRecord,
+  ProjectDraft,
   ProjectEnvironment,
   RecordingCapturedEvent,
   RunEventPayload,
@@ -13,11 +13,11 @@ import type {
   RunRecordingResponse,
   RunSuiteResponse,
   RunTestCaseResponse,
-  RunWorkflowRequest,
   RunWorkflowResponse,
   RuntimeProfile,
   SuiteAsset,
   TestCaseDraft,
+  StudioState,
 } from '../../shared/studio.js';
 import {
   getExclusiveRecordingReplayId,
@@ -31,6 +31,7 @@ import { OpenAICompatibleAgentReporter } from './agent-reporter.js';
 import { OpenAICompatibleAgentVerifier } from './agent-verifier.js';
 import { ArtifactManager } from './artifact-manager.js';
 import { BrowserRuntime, type BrowserStorageStateResolver } from './browser-runtime.js';
+import type { BrowserPool, BrowserPoolLease } from './browser-pool.js';
 import { RecordingRunner } from './recording-runner.js';
 import { MidsceneSemanticActionRuntime } from './semantic-action-runtime.js';
 import { TestRunner } from './test-runner.js';
@@ -42,10 +43,21 @@ import { PixelVisualDiffService, type VisualDiffImageAdapter } from './visual-di
 import { StudioRuntime, type DeterministicInputBindingResolver } from '../studioRuntime.js';
 import { createStubAgentRun } from '../../shared/agentStub.js';
 import { isRunCancelled } from './run-cancellation.js';
+import { createSecretRedactor, type SecretRedactor } from './secret-redactor.js';
+import type { DeterministicInteractionPreflightPolicyProvider } from './deterministic-step-contract.js';
+import type {
+  ResolvedAgentModelConfig,
+  ResolvedMidsceneConfig,
+  ResolvedModelConfigs,
+  ResolvedRunWorkflowRequest,
+  LazyModelConfigResolver,
+} from './model-config-resolver.js';
 
 export interface RuntimeBundle {
   artifactManager: ArtifactManager;
   browserRuntime: BrowserRuntime;
+  /** Worker-only pool used only by eligible versioned Suite runs. */
+  browserPool?: BrowserPool;
   recordingRunner: RecordingRunner;
   studioRuntime: StudioRuntime;
   testRunner: TestRunner;
@@ -53,7 +65,7 @@ export interface RuntimeBundle {
   runTestCase: (request: ResolvedRunTestCaseRequest) => Promise<RunTestCaseResponse>;
   runSuite: (request: ResolvedRunSuiteRequest) => Promise<RunSuiteResponse>;
   runRecording: (request: RunRecordingRequest) => Promise<RunRecordingResponse>;
-  runWorkflow: (request: RunWorkflowRequest) => Promise<RunWorkflowResponse>;
+  runWorkflow: (request: ResolvedRunWorkflowRequest) => Promise<RunWorkflowResponse>;
   cancelRun: (runId: string) => boolean;
   close: () => Promise<void>;
 }
@@ -68,9 +80,14 @@ export interface ResolvedRunTestCaseRequest {
   testCase: TestCaseDraft;
   environment: ProjectEnvironment;
   runtimeProfile?: RuntimeProfile;
-  midsceneConfig?: import('../../shared/studio.js').MidsceneConfig;
-  agentModelConfig?: AgentModelConfig;
+  midsceneConfig?: ResolvedMidsceneConfig;
+  agentModelConfig?: ResolvedAgentModelConfig;
+  /** Private lazy secret resolver supplied by Electron main or the CLI. */
+  modelConfigResolver?: LazyModelConfigResolver;
+  resolveModelConfigs?: () => Promise<ResolvedModelConfigs>;
   browserSession?: BrowserSessionState;
+  /** Internal Suite worker lease; never populated from renderer IPC. */
+  workerLease?: BrowserPoolLease;
 }
 
 /** Main-process-only Suite execution input assembled from authoritative assets. */
@@ -83,23 +100,70 @@ export interface ResolvedRunSuiteRequest {
   suite: SuiteAsset;
   environment: ProjectEnvironment;
   runtimeProfile?: RuntimeProfile;
-  midsceneConfig?: import('../../shared/studio.js').MidsceneConfig;
-  agentModelConfig?: AgentModelConfig;
+  midsceneConfig?: ResolvedMidsceneConfig;
+  agentModelConfig?: ResolvedAgentModelConfig;
+  /** Private lazy secret resolver supplied by Electron main or the CLI. */
+  modelConfigResolver?: LazyModelConfigResolver;
+  resolveModelConfigs?: () => Promise<ResolvedModelConfigs>;
   browserSession?: BrowserSessionState;
+  /** Main-process progress hook invoked after each terminal Case detail is finalized. */
+  onCaseCompleted?: (detail: RunDetail, attempt: number) => void | Promise<void>;
 }
 
 export interface RuntimeBundleOptions {
   rootDir: string;
   visualDiffImageAdapter: VisualDiffImageAdapter;
   storageStateResolver?: BrowserStorageStateResolver;
+  /** Injected worker-only pool; it is never BrowserRuntime's interactive session. */
+  browserPool?: BrowserPool;
   emitRunEvent?: (event: RunEventPayload) => void;
   emitRecordingEvent?: (event: RecordingCapturedEvent) => void;
   deterministicInputBindingResolver?: DeterministicInputBindingResolver;
+  /** Main-process-only approvals and resolved values for deterministic interaction preflight. */
+  deterministicInteractionPreflightPolicy?: DeterministicInteractionPreflightPolicyProvider;
+  /** Main-process persisted state used to protect retained evidence references. */
+  loadStudioState?: () => Promise<StudioState>;
+}
+
+function createManagedInteractionPreflightPolicy(
+  artifactManager: ArtifactManager,
+  policy: DeterministicInteractionPreflightPolicyProvider | undefined,
+): DeterministicInteractionPreflightPolicyProvider | undefined {
+  if (!policy) {
+    return undefined;
+  }
+  return {
+    resolve: (request) => policy.resolve(request),
+    resolveUpload: async (request) => {
+      if (policy.resolveUpload) {
+        return policy.resolveUpload(request);
+      }
+      if (request.reference.kind !== 'attachment') {
+        throw new Error('Only managed attachment references may be resolved for upload.');
+      }
+      const entry = await artifactManager.findManifestEntry(request.reference.id);
+      if (!entry || entry.evidenceKind !== 'attachment') {
+        throw new Error('The approved upload attachment is unavailable.');
+      }
+      const artifactPath = await artifactManager.resolveManifestEntryPath(entry);
+      if (!artifactPath) {
+        throw new Error('The approved upload attachment is unavailable.');
+      }
+      return { path: artifactPath, byteCount: entry.byteCount };
+    },
+  };
 }
 
 export function createRuntimeBundle(options: RuntimeBundleOptions): RuntimeBundle {
   const emitRunEvent = options.emitRunEvent ?? (() => undefined);
-  const artifactManager = new ArtifactManager(options.rootDir);
+  const browserPool = options.browserPool;
+  const artifactManager = new ArtifactManager(options.rootDir, {
+    loadStudioState: options.loadStudioState,
+  });
+  const interactionPreflightPolicy = createManagedInteractionPreflightPolicy(
+    artifactManager,
+    options.deterministicInteractionPreflightPolicy,
+  );
   const browserRuntime = new BrowserRuntime(
     options.rootDir,
     artifactManager,
@@ -147,8 +211,61 @@ export function createRuntimeBundle(options: RuntimeBundleOptions): RuntimeBundl
       new FixtureHttpExecutor(),
       new FixtureScriptExecutor(),
     ),
+    interactionPreflightPolicy,
   );
   const activeRuns = new Map<string, AbortController>();
+
+  const createSuiteWorkerRuntime = (workerLease: BrowserPoolLease) => {
+    const workerBrowserRuntime = browserRuntime.createWorker(workerLease);
+    const workerSemanticActionRuntime = new MidsceneSemanticActionRuntime(workerBrowserRuntime, undefined, {
+      reportDirectory: path.join(options.rootDir, 'studio-data', 'artifacts'),
+    });
+    const workerStudioRuntime = new StudioRuntime(
+      emitRunEvent,
+      workerBrowserRuntime,
+      workerSemanticActionRuntime,
+      new OpenAICompatibleAgentPlanner(),
+      new OpenAICompatibleAgentVerifier(),
+      new OpenAICompatibleAgentReporter(),
+      {
+        writeReporterReport: async ({ runId, markdown }) => {
+          const reportArtifacts = await artifactManager.createReporterReport(
+            runId,
+            'Reporter 失败分析',
+            markdown,
+          );
+          return {
+            markdownPath: reportArtifacts.markdown.path,
+            htmlPath: reportArtifacts.html.path,
+          };
+        },
+      },
+      options.deterministicInputBindingResolver,
+    );
+    const workerRecordingRunner = new RecordingRunner(
+      workerBrowserRuntime,
+      emitRunEvent,
+      new PixelVisualDiffService(options.visualDiffImageAdapter),
+    );
+    return {
+      browserRuntime: workerBrowserRuntime,
+      recordingRunner: workerRecordingRunner,
+      studioRuntime: workerStudioRuntime,
+      testRunner: new TestRunner(
+        artifactManager,
+        workerBrowserRuntime,
+        emitRunEvent,
+        workerRecordingRunner,
+        workerStudioRuntime,
+        workerStudioRuntime,
+        new DefaultFixtureLifecycleExecutor(
+          new FixtureHttpExecutor(),
+          new FixtureScriptExecutor(),
+        ),
+        interactionPreflightPolicy,
+      ),
+    };
+  };
 
   const withActiveRun = async <T>(
     runId: string,
@@ -178,41 +295,53 @@ export function createRuntimeBundle(options: RuntimeBundleOptions): RuntimeBundl
     request: ResolvedRunTestCaseRequest,
     runId: string,
     cancellationSignal: AbortSignal,
+    workerLease?: BrowserPoolLease,
   ): Promise<RunTestCaseResponse> => {
+    const workerRuntime = workerLease ? createSuiteWorkerRuntime(workerLease) : undefined;
+    const activeTestRunner = workerRuntime?.testRunner ?? testRunner;
+    const activeRecordingRunner = workerRuntime?.recordingRunner ?? recordingRunner;
+    const activeStudioRuntime = workerRuntime?.studioRuntime ?? studioRuntime;
+    const browserSession = workerLease ? undefined : request.browserSession;
+    try {
     const project = request.projectSnapshot.project;
+    const modelConfigs = isAgentRunnableTestCase(request.testCase) && !request.modelConfigResolver
+      ? await resolveModelConfigs(request)
+      : undefined;
     const recordingId = getExclusiveRecordingReplayId(request.testCase);
     const documentId = getTestCasePrdPath(request.testCase)?.documentId;
     const recording = recordingId
       ? project.recordings.find((item) => item.id === recordingId)
       : undefined;
 
-    if (request.testCase.assetReferences?.fixtures.length) {
-      return testRunner.run({
+    if (request.testCase.assetReferences?.fixtures.length || request.testCase.assetReferences?.reusableFlows.length) {
+      return await activeTestRunner.run({
         runId,
         cancellationSignal,
         project,
         testCase: request.testCase,
         environment: request.environment,
         ...(request.runtimeProfile ? { runtimeProfile: request.runtimeProfile } : {}),
-        ...(request.midsceneConfig ? { midsceneConfig: request.midsceneConfig } : {}),
-        ...(request.agentModelConfig ? { agentModelConfig: request.agentModelConfig } : {}),
-        ...(request.browserSession ? { browserSession: request.browserSession } : {}),
+        ...(modelConfigs?.midsceneConfig ? { midsceneConfig: modelConfigs.midsceneConfig } : {}),
+        ...(modelConfigs?.agentModelConfig ? { agentModelConfig: modelConfigs.agentModelConfig } : {}),
+        ...(request.modelConfigResolver ? { modelConfigResolver: request.modelConfigResolver } : {}),
+        ...(browserSession ? { browserSession } : {}),
         ...(request.fixtureScriptTrustRecords ? { fixtureScriptTrustRecords: request.fixtureScriptTrustRecords } : {}),
         ...(request.fixtureScriptTrustDirectory ? { fixtureScriptTrustDirectory: request.fixtureScriptTrustDirectory } : {}),
       });
     }
 
     if (recording) {
-      return recordingRunner.run({
+      return await activeRecordingRunner.run({
         ...request,
         runId,
         cancellationSignal,
         project,
         environment: request.environment,
         ...(request.runtimeProfile ? { runtimeProfile: request.runtimeProfile } : {}),
-        ...(request.midsceneConfig ? { midsceneConfig: request.midsceneConfig } : {}),
-        ...(request.agentModelConfig ? { agentModelConfig: request.agentModelConfig } : {}),
-        ...(request.browserSession ? { browserSession: request.browserSession } : {}),
+        ...(modelConfigs?.midsceneConfig ? { midsceneConfig: modelConfigs.midsceneConfig } : {}),
+        ...(modelConfigs?.agentModelConfig ? { agentModelConfig: modelConfigs.agentModelConfig } : {}),
+        ...(request.modelConfigResolver ? { modelConfigResolver: request.modelConfigResolver } : {}),
+        ...(browserSession ? { browserSession } : {}),
         ...(request.fixtureScriptTrustRecords ? { fixtureScriptTrustRecords: request.fixtureScriptTrustRecords } : {}),
         ...(request.fixtureScriptTrustDirectory ? { fixtureScriptTrustDirectory: request.fixtureScriptTrustDirectory } : {}),
         recording,
@@ -222,34 +351,39 @@ export function createRuntimeBundle(options: RuntimeBundleOptions): RuntimeBundl
     }
 
     if (isAgentRunnableTestCase(request.testCase)) {
-      return studioRuntime.runWorkflow({
+      return await activeStudioRuntime.runWorkflow({
         runId,
         cancellationSignal,
         workflow: testCaseToWorkflow(request.testCase),
         targetEnvironment: request.environment.name,
         runtimeProfile: resolveRuntimeProfile(request.runtimeProfile, request.environment),
-        ...(request.midsceneConfig ? { midsceneConfig: request.midsceneConfig } : {}),
-        ...(request.agentModelConfig ? { agentModelConfig: request.agentModelConfig } : {}),
-        ...(request.browserSession ? { browserSession: request.browserSession } : {}),
+        ...(modelConfigs?.midsceneConfig ? { midsceneConfig: modelConfigs.midsceneConfig } : {}),
+        ...(modelConfigs?.agentModelConfig ? { agentModelConfig: modelConfigs.agentModelConfig } : {}),
+        ...(request.modelConfigResolver ? { modelConfigResolver: request.modelConfigResolver } : {}),
+        ...(browserSession ? { browserSession } : {}),
         project,
         environment: request.environment,
         ...(documentId ? { documentId } : {}),
       });
     }
 
-    return testRunner.run({
+    return await activeTestRunner.run({
       runId,
       cancellationSignal,
       project,
       testCase: request.testCase,
       environment: request.environment,
       ...(request.runtimeProfile ? { runtimeProfile: request.runtimeProfile } : {}),
-      ...(request.midsceneConfig ? { midsceneConfig: request.midsceneConfig } : {}),
-      ...(request.agentModelConfig ? { agentModelConfig: request.agentModelConfig } : {}),
-      ...(request.browserSession ? { browserSession: request.browserSession } : {}),
+      ...(modelConfigs?.midsceneConfig ? { midsceneConfig: modelConfigs.midsceneConfig } : {}),
+      ...(modelConfigs?.agentModelConfig ? { agentModelConfig: modelConfigs.agentModelConfig } : {}),
+      ...(request.modelConfigResolver ? { modelConfigResolver: request.modelConfigResolver } : {}),
+      ...(browserSession ? { browserSession } : {}),
       ...(request.fixtureScriptTrustRecords ? { fixtureScriptTrustRecords: request.fixtureScriptTrustRecords } : {}),
       ...(request.fixtureScriptTrustDirectory ? { fixtureScriptTrustDirectory: request.fixtureScriptTrustDirectory } : {}),
     });
+    } finally {
+      await workerRuntime?.browserRuntime.close();
+    }
   };
 
   const executorErrorDetail = (
@@ -259,8 +393,9 @@ export function createRuntimeBundle(options: RuntimeBundleOptions): RuntimeBundl
     environment: Pick<ProjectEnvironment, 'id' | 'name'>,
     title: string,
     error: unknown,
+    redactor: SecretRedactor,
   ): RunDetail => {
-    const message = executorErrorMessage(error);
+    const message = executorErrorMessage(error, redactor);
     const now = new Date().toISOString();
     const reason: RunReason = { code: 'executorError', message };
     const detail: RunDetail = {
@@ -285,7 +420,7 @@ export function createRuntimeBundle(options: RuntimeBundleOptions): RuntimeBundl
       }],
       artifacts: [],
     };
-    emitRunEvent({ runId, title, type: 'complete', status: detail.status, duration: detail.duration, summary: detail.summary, detail });
+    emitRunEvent(redactor.redactValue({ runId, title, type: 'complete', status: detail.status, duration: detail.duration, summary: detail.summary, detail }));
     return detail;
   };
 
@@ -296,8 +431,9 @@ export function createRuntimeBundle(options: RuntimeBundleOptions): RuntimeBundl
     environment: Pick<ProjectEnvironment, 'id' | 'name'>,
     title: string,
     error: unknown,
+    redactor: SecretRedactor,
   ) => {
-    const message = executorErrorMessage(error);
+    const message = executorErrorMessage(error, redactor);
     const agentRun = createStubAgentRun({
       mode: 'ai',
       prompt: title,
@@ -310,20 +446,27 @@ export function createRuntimeBundle(options: RuntimeBundleOptions): RuntimeBundl
       verificationSummary: message,
       verificationFailureReason: message,
     });
-    return { agentRun, detail: executorErrorDetail(runId, projectId, testCaseId, environment, title, error) };
+    return { agentRun, detail: executorErrorDetail(runId, projectId, testCaseId, environment, title, error, redactor) };
   };
 
   return {
     artifactManager,
     browserRuntime,
+    ...(browserPool ? { browserPool } : {}),
     recordingRunner,
     studioRuntime,
     testRunner,
     ensureReady: () => artifactManager.ensureReady(),
     runTestCase: async (request) => {
       const runId = request.runId ?? `run-${Date.now()}`;
+      const redactor = createSecretRedactor(request.midsceneConfig, request.agentModelConfig);
       try {
-        return await withActiveRun(runId, (cancellationSignal) => executeTestCase(request, runId, cancellationSignal));
+        return await withActiveRun(runId, (cancellationSignal) => executeTestCase(
+          request,
+          runId,
+          cancellationSignal,
+          request.workerLease,
+        ));
       } catch (error) {
         if (isRunCancelled(error)) {
           throw error;
@@ -338,18 +481,21 @@ export function createRuntimeBundle(options: RuntimeBundleOptions): RuntimeBundl
             request.environment,
             request.testCase.name,
             error,
+            redactor,
           ),
         };
       }
     },
     runSuite: async (request) => {
       const runId = request.runId ?? `suite-run-${Date.now()}`;
+      const redactor = createSecretRedactor(request.midsceneConfig, request.agentModelConfig);
       try {
         return await withActiveRun(runId, async (cancellationSignal) => {
         const { suite } = request;
+        const poolQualified = isPoolQualifiedSuiteRun(request, browserPool);
         const caseDetails: RunTestCaseResponse['detail'][] = [];
         const suiteResult = await new SuiteRunner({
-          execute: async ({ testCase, environment, attempt }) => {
+          execute: async ({ testCase, environment, attempt, workerLease }) => {
             const memberRunId = `${runId}-${testCase.id}@${testCase.version}-attempt-${attempt}`;
             const response = await executeTestCase({
               runId: memberRunId,
@@ -359,15 +505,19 @@ export function createRuntimeBundle(options: RuntimeBundleOptions): RuntimeBundl
               ...(request.runtimeProfile ? { runtimeProfile: request.runtimeProfile } : {}),
               ...(request.midsceneConfig ? { midsceneConfig: request.midsceneConfig } : {}),
               ...(request.agentModelConfig ? { agentModelConfig: request.agentModelConfig } : {}),
+              ...(request.modelConfigResolver ? { modelConfigResolver: request.modelConfigResolver } : {}),
+              ...(request.resolveModelConfigs ? { resolveModelConfigs: request.resolveModelConfigs } : {}),
               ...(request.browserSession ? { browserSession: request.browserSession } : {}),
               ...(request.fixtureScriptTrustRecords ? { fixtureScriptTrustRecords: request.fixtureScriptTrustRecords } : {}),
               ...(request.fixtureScriptTrustDirectory ? { fixtureScriptTrustDirectory: request.fixtureScriptTrustDirectory } : {}),
               cancellationSignal,
-            }, memberRunId, cancellationSignal);
-            caseDetails.push({
+            }, memberRunId, cancellationSignal, workerLease);
+            const completedDetail = {
               ...response.detail,
               testCaseVersion: testCase.version,
-            });
+            };
+            caseDetails.push(completedDetail);
+            await request.onCaseCompleted?.(completedDetail, attempt);
             return {
               status: response.detail.status === 'running' ? 'error' : response.detail.status,
               summary: response.detail.summary,
@@ -377,7 +527,10 @@ export function createRuntimeBundle(options: RuntimeBundleOptions): RuntimeBundl
               runId: response.runId,
             };
           },
-        }, { maxConcurrency: 1 }).run(request.projectSnapshot.project, suite, cancellationSignal);
+        }, {
+          maxConcurrency: poolQualified ? browserPool!.maxConcurrency : 1,
+          ...(poolQualified ? { browserPool } : {}),
+        }).run(request.projectSnapshot.project, suite, cancellationSignal);
         return {
           runId,
           title: suite.name,
@@ -391,7 +544,7 @@ export function createRuntimeBundle(options: RuntimeBundleOptions): RuntimeBundl
         if (isRunCancelled(error)) {
           throw error;
         }
-        const message = executorErrorMessage(error);
+        const message = executorErrorMessage(error, redactor);
         const now = new Date().toISOString();
         return {
           runId,
@@ -416,6 +569,7 @@ export function createRuntimeBundle(options: RuntimeBundleOptions): RuntimeBundl
     },
     runRecording: async (request) => {
       const runId = request.runId ?? `agent-run-recording-${Date.now()}`;
+      const redactor = createSecretRedactor();
       try {
         return await withActiveRun(runId, (cancellationSignal) =>
           recordingRunner.run({ ...request, runId, cancellationSignal }),
@@ -431,12 +585,14 @@ export function createRuntimeBundle(options: RuntimeBundleOptions): RuntimeBundl
           request.environment,
           `${request.recording.name} 回放`,
           error,
+          redactor,
         );
         return { runId, title: `${request.recording.name} 回放`, ...response };
       }
     },
     runWorkflow: async (request) => {
       const runId = request.runId ?? `agent-run-workflow-${Date.now()}`;
+      const redactor = createSecretRedactor(request.midsceneConfig, request.agentModelConfig);
       try {
         return await withActiveRun(runId, (cancellationSignal) =>
           studioRuntime.runWorkflow({ ...request, runId, cancellationSignal }),
@@ -456,6 +612,7 @@ export function createRuntimeBundle(options: RuntimeBundleOptions): RuntimeBundl
           environment,
           request.workflow.name,
           error,
+          redactor,
         );
         return { runId, title: request.workflow.name, ...response };
       }
@@ -468,8 +625,51 @@ export function createRuntimeBundle(options: RuntimeBundleOptions): RuntimeBundl
       controller.abort();
       return true;
     },
-    close: () => browserRuntime.close(),
+    close: async () => {
+      await Promise.all([browserRuntime.close(), browserPool?.close()]);
+    },
   };
+}
+
+function isPoolQualifiedSuiteRun(
+  request: ResolvedRunSuiteRequest,
+  browserPool: BrowserPool | undefined,
+): boolean {
+  return Boolean(browserPool) && isChromiumHeadlessVersionedSuite(
+    request.projectSnapshot.project,
+    request.projectSnapshot.reproducibility,
+    request.suite,
+  );
+}
+
+export function isChromiumHeadlessVersionedSuite(
+  project: Pick<ProjectDraft, 'environments'>,
+  reproducibility: ProjectSnapshot['reproducibility'],
+  suite: SuiteAsset,
+): boolean {
+  if (reproducibility !== 'versioned') {
+    return false;
+  }
+  if (!Number.isSafeInteger(suite.version) || suite.version < 1) {
+    return false;
+  }
+  const environment = project.environments.find((candidate) => candidate.id === suite.environmentId);
+  if (!environment || environment.browser !== 'chromium' || !environment.headless) {
+    return false;
+  }
+  return suite.caseReferences.every((reference) =>
+    Boolean(reference.id) && Number.isSafeInteger(reference.version) && reference.version >= 1,
+  );
+}
+
+async function resolveModelConfigs(request: ResolvedRunTestCaseRequest): Promise<ResolvedModelConfigs | undefined> {
+  if (request.midsceneConfig && request.agentModelConfig) {
+    return {
+      midsceneConfig: request.midsceneConfig,
+      agentModelConfig: request.agentModelConfig,
+    };
+  }
+  return request.resolveModelConfigs?.();
 }
 
 function resolveRuntimeProfile(
@@ -485,8 +685,9 @@ function resolveRuntimeProfile(
   };
 }
 
-function executorErrorMessage(error: unknown): string {
-  return error instanceof Error && error.message
-    ? `Runtime executor failed: ${error.message}`
+function executorErrorMessage(error: unknown, redactor: SecretRedactor): string {
+  const detail = redactor.redactError(error);
+  return detail
+    ? `Runtime executor failed: ${detail}`
     : 'Runtime executor failed before producing a result.';
 }

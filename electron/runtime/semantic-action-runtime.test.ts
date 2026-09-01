@@ -349,4 +349,27 @@ describe('MidsceneSemanticActionRuntime', () => {
       }),
     );
   });
+
+  it('redacts the resolved model key from semantic action failures', async () => {
+    const secret = 'sk-semantic-action-redaction';
+    const runtime = new MidsceneSemanticActionRuntime(
+      { getPage: () => ({ id: 'page-1' }) },
+      vi.fn().mockReturnValue({
+        aiTap: vi.fn().mockRejectedValue(new Error(`provider rejected Authorization: Bearer ${secret}`)),
+        aiInput: vi.fn(),
+        aiAssert: vi.fn(),
+        destroy: vi.fn(),
+      }),
+    );
+
+    const result = await runtime.click({
+      target: '登录按钮',
+      prompt: '点击登录按钮',
+      config: { ...config, modelApiKey: secret },
+    });
+
+    expect(JSON.stringify(result)).not.toContain(secret);
+    expect(result.failureReason).toContain('[REDACTED_MODEL_SECRET]');
+    expect(result.failureReason).toContain('provider rejected Authorization');
+  });
 });

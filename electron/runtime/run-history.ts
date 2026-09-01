@@ -43,10 +43,10 @@ export function appendSuiteRunToStudioState(
   record: SuiteRunRecord,
 ): StudioState {
   const existingRecords = Array.isArray(state.suiteRunRecords) ? state.suiteRunRecords : [];
-  const persistedRecord = {
+  const persistedRecord = deepFreeze({
     ...structuredClone(record),
-    provenance: deepFreeze(structuredClone(record.provenance)),
-  };
+    members: Array.isArray(record.members) ? structuredClone(record.members) : [],
+  });
   return {
     ...state,
     suiteRunRecords: [

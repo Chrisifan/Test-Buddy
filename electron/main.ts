@@ -6,24 +6,21 @@ import { app, BrowserWindow, dialog, ipcMain, nativeImage, shell } from 'electro
 
 import {
   deriveProjectRunReport,
-  mergeProjectAssetBindings,
   normalizeProjectAssetBindings,
   type BrowserNavigateRequest,
   type BrowserSessionRequest,
+  type AgentModelRole,
   type CaptureStorageStateRequest,
   type ChatCommandRequest,
   type ImportStorageStateRequest,
   type MidsceneConfig,
+  type ModelSecretRef,
+  type ModelSecretScope,
   type FixtureScriptTrustRequest,
   type FixtureScriptTrustStatus,
   type ProjectAssetBinding,
   type ProjectAssetBindingStatus,
   type ProjectAssetMigrationRequest,
-  type ProjectAssetReloadPlan,
-  type ProjectAssetReloadRequest,
-  type ProjectAssetReloadResult,
-  type ProjectAssetUpdatePlan,
-  type ProjectAssetUpdateRequest,
   type ProjectDraft,
   type ProjectReportExportRequest,
   type PrdSemanticAnalysisRequest,
@@ -36,18 +33,32 @@ import {
   type StudioState,
 } from '../shared/studio.js';
 import { CredentialStore } from './runtime/credential-store.js';
+import {
+  ModelConfigResolver,
+  type AgentProviderRole,
+  type LazyModelConfigResolver,
+} from './runtime/model-config-resolver.js';
+import { ModelSecretStore } from './runtime/model-secret-store.js';
+import { ModelSecretTransactionCoordinator } from './model-secret-transaction.js';
+import { ModelSecretTransactionJournal } from './model-secret-transaction-journal.js';
 import { ScriptTrustStore } from './runtime/script-trust-store.js';
 import { StorageStateStore } from './runtime/storage-state-store.js';
+import { createControlledChromiumBrowserPool } from './runtime/browser-pool.js';
+import type { DeterministicInteractionPreflightPolicyProvider } from './runtime/deterministic-step-contract.js';
 import { testMidsceneConnection } from './runtime/midscene-connection.js';
 import { electronNativeImageAdapter } from './runtime/electron-native-image-adapter.js';
 import { PrdSemanticAnalysisRuntime } from './runtime/prd-semantic-analyzer.js';
 import { appendRunToStudioState } from './runtime/run-history.js';
+import { MaintenanceService } from './runtime/maintenance-service.js';
 import { createRuntimeBundle, type RuntimeBundle } from './runtime/runtime-bundle.js';
 import { registerRuntimeIpcHandlers } from './ipc/runtime-ipc-handlers.js';
+import { registerModelSecretIpcHandlers } from './ipc/model-secret-ipc-handlers.js';
 import { createProjectRepository, type ProjectRepository } from './projectRepository.js';
 import { StudioStore } from './studioStore.js';
+import { StudioStateUpdateQueue } from './studio-state-update-queue.js';
+import { createMainWindowOptions } from './window-options.js';
+import { registerProjectAssetIpcHandlers } from './project-asset-ipc-handlers.js';
 import {
-  calculateProjectAssetRevision,
   inspectProjectAssetBinding,
   planProjectAssetReload,
   planProjectAssetUpdate,
@@ -60,11 +71,14 @@ const __dirname = path.dirname(__filename);
 let mainWindow: BrowserWindow | null = null;
 let studioStore: StudioStore | null = null;
 let credentialStore: CredentialStore | null = null;
+let modelSecretStore: ModelSecretStore | null = null;
+let modelSecretTransactionCoordinator: ModelSecretTransactionCoordinator | null = null;
 let scriptTrustStore: ScriptTrustStore | null = null;
 let storageStateStore: StorageStateStore | null = null;
 let runtimeBundle: RuntimeBundle | null = null;
 let projectRepository: ProjectRepository | null = null;
 let prdSemanticAnalysisRuntime: PrdSemanticAnalysisRuntime | null = null;
+let studioStateUpdateQueue: StudioStateUpdateQueue | null = null;
 const approvedProjectAssetDirectories = new Set<string>();
 
 function loadApplicationIcon() {
@@ -86,6 +100,83 @@ function getCredentialStoreOrThrow(): CredentialStore {
   }
 
   return credentialStore;
+}
+
+function getModelSecretStoreOrThrow(): ModelSecretStore {
+  if (!modelSecretStore) {
+    throw new Error('模型密钥存储尚未初始化。');
+  }
+
+  return modelSecretStore;
+}
+
+function getModelSecretTransactionCoordinatorOrThrow(): ModelSecretTransactionCoordinator {
+  if (!modelSecretTransactionCoordinator) {
+    throw new Error('模型密钥事务协调器尚未初始化。');
+  }
+  return modelSecretTransactionCoordinator;
+}
+
+function withCurrentModelConfiguration<T>(
+  callback: (resolver: ModelConfigResolver, state: StudioState) => Promise<T>,
+): Promise<T> {
+  return getModelSecretTransactionCoordinatorOrThrow().withConsistentState(
+    () => getStoreOrThrow().load(),
+    (state) => callback(new ModelConfigResolver(getModelSecretStoreOrThrow()), state),
+  );
+}
+
+function createCurrentModelConfigResolver(): LazyModelConfigResolver {
+  return {
+    resolveMidsceneConfig: () => withCurrentModelConfiguration((resolver, state) =>
+      resolver.resolveMidsceneConfig(state.midsceneConfig),
+    ),
+    resolveAgentProviderConfig: (role: AgentProviderRole) => withCurrentModelConfiguration((resolver, state) =>
+      resolver.resolveAgentProviderConfig(role, {
+        midsceneConfig: state.midsceneConfig,
+        agentModelConfig: state.agentModelConfig,
+      }),
+    ),
+  };
+}
+
+/** Resolves encrypted values only inside Electron main for redaction and preflight checks. */
+function resolveCurrentKnownSecrets(): Promise<string[]> {
+  return withCurrentModelConfiguration(async (resolver, state) => {
+    const resolved = await resolver.resolve({
+      midsceneConfig: state.midsceneConfig,
+      agentModelConfig: state.agentModelConfig,
+    });
+    return [...new Set([
+      resolved.midsceneConfig.modelApiKey,
+      ...Object.values(resolved.agentModelConfig).map((config) => config.modelApiKey),
+    ].filter((value) => value.length > 0))];
+  });
+}
+
+function createDeterministicInteractionPreflightPolicy(): DeterministicInteractionPreflightPolicyProvider {
+  return {
+    resolve: async () => ({ knownSecrets: await resolveCurrentKnownSecrets() }),
+  };
+}
+
+function modelSecretReferenceForScope(state: StudioState, scope: ModelSecretScope): ModelSecretRef {
+  if (scope === 'midscene') {
+    return state.midsceneConfig.modelSecret;
+  }
+  const role = scope.slice('agent:'.length) as AgentModelRole;
+  return state.agentModelConfig[role].modelSecret;
+}
+
+function persistModelSecretRef(scope: ModelSecretScope, modelSecret: ModelSecretRef): Promise<void> {
+  return getStudioStateUpdateQueueOrThrow().saveModelSecretRef(scope, modelSecret).then(() => undefined);
+}
+
+function getStudioStateUpdateQueueOrThrow(): StudioStateUpdateQueue {
+  if (!studioStateUpdateQueue) {
+    throw new Error('Studio state 更新队列尚未初始化。');
+  }
+  return studioStateUpdateQueue;
 }
 
 function getScriptTrustStoreOrThrow(): ScriptTrustStore {
@@ -146,78 +237,6 @@ async function getApprovedProjectAssetDirectory(request: ProjectAssetMigrationRe
     throw new Error('只能写入本次由用户选择的项目资产目录。');
   }
   return projectDirectory;
-}
-
-function getProjectForAssetRequest(request: ProjectAssetMigrationRequest): Promise<ProjectDraft> {
-  return getStoreOrThrow().load().then((state) => {
-    const project = state.projects.find((item) => item.id === request.projectId);
-    if (!project) {
-      throw new Error('项目不存在，无法生成资产快照。');
-    }
-    if (request.project && typeof request.project === 'object' && request.project.id === project.id) {
-      return request.project;
-    }
-    return project;
-  });
-}
-
-async function getBoundProjectAssetReloadRequest(request: ProjectAssetReloadRequest): Promise<{
-  binding: ProjectAssetBinding;
-  project: ProjectDraft;
-  state: StudioState;
-  storedProject: ProjectDraft;
-}> {
-  if (!request || typeof request.projectId !== 'string' || !request.projectId.trim() || !request.project || request.project.id !== request.projectId) {
-    throw new Error('项目资产重载请求无效。');
-  }
-  const state = await getStoreOrThrow().load();
-  const storedProject = state.projects.find((candidate) => candidate.id === request.projectId);
-  if (!storedProject) {
-    throw new Error('项目不存在，无法重载资产快照。');
-  }
-  const binding = normalizeProjectAssetBindings(state.projectAssetBindings, state.projects)
-    .find((candidate) => candidate.projectId === request.projectId);
-  if (!binding) {
-    throw new Error('项目尚未登记资产快照，无法重载。');
-  }
-  return { binding, project: request.project, state, storedProject };
-}
-
-async function createProjectAssetReloadPlan(request: ProjectAssetReloadRequest): Promise<ProjectAssetReloadPlan> {
-  const { binding, project, storedProject } = await getBoundProjectAssetReloadRequest(request);
-  const plan = await planProjectAssetReload(project, binding);
-  if (calculateProjectAssetRevision(storedProject) === binding.revision || plan.status === 'unavailable') {
-    return plan;
-  }
-  return {
-    ...plan,
-    status: 'requiresReview',
-    issues: [
-      ...plan.issues,
-      { path: 'studio-data', message: '持久化项目已变化，请先刷新本地编辑态。' },
-    ],
-  };
-}
-
-async function getBoundProjectAssetUpdateRequest(request: ProjectAssetUpdateRequest): Promise<{
-  binding: ProjectAssetBinding;
-  project: ProjectDraft;
-  storedProject: ProjectDraft;
-}> {
-  if (!request || typeof request.projectId !== 'string' || !request.projectId.trim() || !request.project || request.project.id !== request.projectId) {
-    throw new Error('项目资产更新请求无效。');
-  }
-  const state = await getStoreOrThrow().load();
-  const storedProject = state.projects.find((candidate) => candidate.id === request.projectId);
-  if (!storedProject) {
-    throw new Error('项目不存在，无法更新资产快照。');
-  }
-  const binding = normalizeProjectAssetBindings(state.projectAssetBindings, state.projects)
-    .find((candidate) => candidate.projectId === request.projectId);
-  if (!binding) {
-    throw new Error('项目尚未登记资产快照，无法更新。');
-  }
-  return { binding, project: request.project, storedProject };
 }
 
 function toFixtureScriptTrustStatus(record: Awaited<ReturnType<ScriptTrustStore['approve']>>): FixtureScriptTrustStatus {
@@ -283,45 +302,13 @@ async function resolveFixtureScriptTrustRequest(request: FixtureScriptTrustReque
   };
 }
 
-/** The renderer snapshot must still match studio-data before external writes are enabled. */
-async function createProjectAssetUpdatePlan(request: ProjectAssetUpdateRequest): Promise<ProjectAssetUpdatePlan> {
-  const { binding, project, storedProject } = await getBoundProjectAssetUpdateRequest(request);
-  const plan = await planProjectAssetUpdate(project, binding);
-  const issues = [...plan.issues];
-  if (request.expectedRevision !== binding.revision) {
-    issues.push({ path: 'projectAssetBindings.revision', message: '资产快照绑定已变化，请重新生成更新计划。' });
-  }
-  if (calculateProjectAssetRevision(storedProject) !== calculateProjectAssetRevision(project)) {
-    issues.push({ path: 'studio-data', message: '持久化项目已变化，请先刷新本地编辑态。' });
-  }
-  if (!issues.length || plan.status === 'unavailable') {
-    return plan;
-  }
-  return { ...plan, status: 'requiresReview', issues };
-}
-
 function createWindow(): BrowserWindow {
   const icon = loadApplicationIcon();
-  const window = new BrowserWindow({
-    width: 1200,
-    height: 760,
-    minWidth: 1200,
-    minHeight: 760,
-    title: 'TestBuddy',
+  const window = new BrowserWindow(createMainWindowOptions({
     icon,
-    backgroundColor: '#050505',
-    autoHideMenuBar: true,
-    ...(process.platform === 'darwin'
-      ? {
-          titleBarStyle: 'hiddenInset' as const,
-        }
-      : {}),
-    webPreferences: {
-      preload: path.join(__dirname, 'preload.cjs'),
-      contextIsolation: true,
-      nodeIntegration: false,
-    },
-  });
+    preloadPath: path.join(__dirname, 'preload.cjs'),
+    platform: process.platform,
+  }));
 
   void window.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
   return window;
@@ -334,43 +321,30 @@ function getRuntimeOrThrow() {
 function registerIpcHandlers(): void {
   ipcMain.handle('studio:load-state', async () => getStoreOrThrow().load());
   ipcMain.handle('studio:save-state', async (_event, state: StudioState) => {
-    const store = getStoreOrThrow();
-    const current = await store.load();
-    await store.save({
-      ...state,
-      projectAssetBindings: mergeProjectAssetBindings(
-        current.projectAssetBindings,
-        state.projectAssetBindings,
-        state.projects,
-      ),
-    });
+    await getStudioStateUpdateQueueOrThrow().saveRendererState(state);
   });
   ipcMain.handle('studio:create-project', async (_event, project: ProjectDraft) => {
-    const state = await getStoreOrThrow().load();
-    const nextState: StudioState = {
-      ...state,
-      selectedProjectId: project.id,
-      selectedGroupId: project.groups[0]?.id ?? '',
-      selectedTestCaseId: project.testCases[0]?.id ?? '',
-      projects: [project, ...state.projects],
-    };
-    await getStoreOrThrow().save(nextState);
+    await getStudioStateUpdateQueueOrThrow().createRendererProject(project);
     return project;
   });
   ipcMain.handle('studio:update-project', async (_event, project: ProjectDraft) => {
-    const state = await getStoreOrThrow().load();
-    await getStoreOrThrow().save({
-      ...state,
-      projects: state.projects.map((item) => (item.id === project.id ? project : item)),
-    });
+    await getStudioStateUpdateQueueOrThrow().updateRendererProject(project);
     return project;
   });
-  ipcMain.handle('studio:analyze-prd-document', async (_event, request: PrdSemanticAnalysisRequest) =>
-    getPrdSemanticAnalysisRuntimeOrThrow().analyze(request),
-  );
+  ipcMain.handle('studio:analyze-prd-document', async (_event, request: PrdSemanticAnalysisRequest) => {
+    const planner = await createCurrentModelConfigResolver().resolveAgentProviderConfig('planner');
+    return getPrdSemanticAnalysisRuntimeOrThrow().analyze({
+      document: request.document,
+      ...(planner.config ? { plannerConfig: planner.config } : {}),
+    });
+  });
   ipcMain.handle('studio:save-credential', async (_event, request: SaveCredentialRequest) =>
     getCredentialStoreOrThrow().save(request),
   );
+  registerModelSecretIpcHandlers({
+    handle: (channel, listener) => ipcMain.handle(channel, listener),
+    coordinator: getModelSecretTransactionCoordinatorOrThrow(),
+  });
   ipcMain.handle('studio:import-storage-state', async (event, request: ImportStorageStateRequest): Promise<StorageStateRef | null> => {
     if (
       !request ||
@@ -462,40 +436,18 @@ function registerIpcHandlers(): void {
     approvedProjectAssetDirectories.add(projectDirectory);
     return projectDirectory;
   });
-  ipcMain.handle('studio:plan-project-asset-migration', async (_event, request: ProjectAssetMigrationRequest) => {
-    const projectDirectory = await getApprovedProjectAssetDirectory(request);
-    const project = await getProjectForAssetRequest(request);
-    return new ProjectAssetStore(projectDirectory).planMigration(project);
-  });
-  ipcMain.handle('studio:write-project-asset-snapshot', async (_event, request: ProjectAssetMigrationRequest): Promise<ProjectAssetBinding> => {
-    const projectDirectory = await getApprovedProjectAssetDirectory(request);
-    const project = await getProjectForAssetRequest(request);
-    try {
-      if (request.plannedRevision !== calculateProjectAssetRevision(project)) {
-        throw new Error('项目配置已变化，请重新生成资产快照计划。');
-      }
-      const assetStore = new ProjectAssetStore(projectDirectory);
-      await assetStore.saveInitial(project);
-      const snapshot = await assetStore.loadWithRevision();
-      const state = await getStoreOrThrow().load();
-      if (!state.projects.some((candidate) => candidate.id === project.id)) {
-        throw new Error('项目已被删除，无法登记资产快照。');
-      }
-      const binding: ProjectAssetBinding = {
-        projectId: project.id,
-        projectDirectory,
-        revision: snapshot.revision,
-        boundAt: new Date().toISOString(),
-      };
-      await getStoreOrThrow().save({
-        ...state,
-        projects: state.projects.map((candidate) => candidate.id === project.id ? project : candidate),
-        projectAssetBindings: mergeProjectAssetBindings(state.projectAssetBindings, [binding], state.projects),
-      });
-      return binding;
-    } finally {
+  registerProjectAssetIpcHandlers({
+    handle: (channel, listener) => ipcMain.handle(channel, listener),
+    getApprovedProjectAssetDirectory,
+    releaseApprovedProjectAssetDirectory: (projectDirectory) => {
       approvedProjectAssetDirectories.delete(projectDirectory);
-    }
+    },
+    loadState: () => getStoreOrThrow().load(),
+    updateState: (updater) => getStudioStateUpdateQueueOrThrow().update(updater),
+    createAssetStore: (projectDirectory) => new ProjectAssetStore(projectDirectory),
+    createProjectAssetReloadPlan: planProjectAssetReload,
+    createProjectAssetUpdatePlan: planProjectAssetUpdate,
+    now: () => new Date(),
   });
   ipcMain.handle('studio:inspect-project-asset-binding', async (_event, projectId: string): Promise<ProjectAssetBindingStatus | null> => {
     if (typeof projectId !== 'string' || !projectId.trim()) {
@@ -510,76 +462,13 @@ function registerIpcHandlers(): void {
       .find((candidate) => candidate.projectId === projectId);
     return binding ? inspectProjectAssetBinding(project, binding) : null;
   });
-  ipcMain.handle('studio:plan-project-asset-reload', async (_event, request: ProjectAssetReloadRequest): Promise<ProjectAssetReloadPlan> =>
-    createProjectAssetReloadPlan(request),
-  );
-  ipcMain.handle('studio:reload-project-asset-snapshot', async (_event, request: ProjectAssetReloadRequest): Promise<ProjectAssetReloadResult> => {
-    const { binding: currentBinding, state } = await getBoundProjectAssetReloadRequest(request);
-    const plan = await createProjectAssetReloadPlan(request);
-    if (plan.status !== 'ready' || !plan.snapshotRevision || plan.snapshotRevision !== request.snapshotRevision) {
-      throw new Error('项目资产重载计划已失效，请重新生成计划。');
-    }
-    const snapshot = await new ProjectAssetStore(currentBinding.projectDirectory).loadWithRevision();
-    if (snapshot.project.id !== request.projectId || snapshot.revision !== request.snapshotRevision) {
-      throw new Error('项目资产目录已变化，请重新生成计划。');
-    }
-    const binding: ProjectAssetBinding = {
-      ...currentBinding,
-      revision: snapshot.revision,
-      boundAt: new Date().toISOString(),
-    };
-    await getStoreOrThrow().save({
-      ...state,
-      projects: state.projects.map((candidate) => candidate.id === snapshot.project.id ? snapshot.project : candidate),
-      projectAssetBindings: mergeProjectAssetBindings(state.projectAssetBindings, [binding], state.projects),
-    });
-    return { project: snapshot.project, binding };
-  });
-  ipcMain.handle('studio:plan-project-asset-update', async (_event, request: ProjectAssetUpdateRequest): Promise<ProjectAssetUpdatePlan> =>
-    createProjectAssetUpdatePlan(request),
-  );
-  ipcMain.handle('studio:update-project-asset-snapshot', async (_event, request: ProjectAssetUpdateRequest): Promise<ProjectAssetBinding> => {
-    const { binding: expectedBinding } = await getBoundProjectAssetUpdateRequest(request);
-    const plan = await createProjectAssetUpdatePlan(request);
-    if (
-      plan.status !== 'ready' ||
-      !plan.snapshotRevision ||
-      plan.snapshotRevision !== request.plannedRevision ||
-      plan.publishedRevision !== expectedBinding.revision
-    ) {
-      throw new Error('项目资产更新计划已失效，请重新生成计划。');
-    }
-
-    const assetStore = new ProjectAssetStore(expectedBinding.projectDirectory);
-    await assetStore.save(request.project, expectedBinding.revision);
-    const snapshot = await assetStore.loadWithRevision();
-    if (snapshot.project.id !== request.projectId || snapshot.revision !== request.plannedRevision) {
-      throw new Error('项目资产快照提交结果不一致，请刷新状态后再试。');
-    }
-
-    // Reload after the external commit so a queued renderer save cannot be overwritten.
-    const currentState = await getStoreOrThrow().load();
-    if (!currentState.projects.some((candidate) => candidate.id === request.projectId)) {
-      throw new Error('项目已删除，资产快照已发布但无法登记绑定。');
-    }
-    const binding: ProjectAssetBinding = {
-      projectId: request.projectId,
-      projectDirectory: expectedBinding.projectDirectory,
-      revision: snapshot.revision,
-      boundAt: new Date().toISOString(),
-    };
-    await getStoreOrThrow().save({
-      ...currentState,
-      projectAssetBindings: mergeProjectAssetBindings(currentState.projectAssetBindings, [binding], currentState.projects),
-    });
-    return binding;
-  });
   registerRuntimeIpcHandlers({
     handle: (channel, listener) => ipcMain.handle(channel, listener),
     loadState: () => getStoreOrThrow().load(),
     saveState: async (state) => {
-      await getStoreOrThrow().save(state);
+      await getStudioStateUpdateQueueOrThrow().saveRuntimeState(state);
     },
+    createLazyModelConfigResolver: createCurrentModelConfigResolver,
     getRuntimeBundle: getRuntimeBundleOrThrow,
     projectRepository: getProjectRepositoryOrThrow(),
     getFixtureScriptTrustContext,
@@ -595,10 +484,33 @@ function registerIpcHandlers(): void {
       persistence: 'file',
       storagePath: getStoreOrThrow().storagePath,
     }),
+    maintenanceService: new MaintenanceService({
+      projectRepository: getProjectRepositoryOrThrow(),
+      artifactManager: getRuntimeBundleOrThrow().artifactManager,
+      assetStoreForProject: async (projectId) => {
+        const state = await getStoreOrThrow().load();
+        const binding = normalizeProjectAssetBindings(state.projectAssetBindings, state.projects)
+          .find((candidate) => candidate.projectId === projectId);
+        if (!binding) {
+          throw new Error(`项目 ${projectId} 没有可用的项目资产绑定。`);
+        }
+        return new ProjectAssetStore(binding.projectDirectory);
+      },
+      loadState: () => getStoreOrThrow().load(),
+      updateState: (updater) => getStudioStateUpdateQueueOrThrow().update(updater),
+      getKnownSecrets: resolveCurrentKnownSecrets,
+    }),
   });
-  ipcMain.handle('runtime:test-midscene-connection', async (_event, config: MidsceneConfig) =>
-    testMidsceneConnection(config),
-  );
+  ipcMain.handle('runtime:test-midscene-connection', async (_event, config: MidsceneConfig) => {
+    const resolvedConfig = await getModelSecretTransactionCoordinatorOrThrow().withConsistentState(
+      () => getStoreOrThrow().load(),
+      (state) => new ModelConfigResolver(getModelSecretStoreOrThrow()).resolveMidsceneConfig({
+        ...config,
+        modelSecret: state.midsceneConfig.modelSecret,
+      }),
+    );
+    return testMidsceneConnection(resolvedConfig);
+  });
   ipcMain.handle('runtime:start-browser-session', async (_event, request: BrowserSessionRequest) =>
     getRuntimeBundleOrThrow().browserRuntime.start(request),
   );
@@ -610,8 +522,7 @@ function registerIpcHandlers(): void {
   );
   ipcMain.handle('runtime:run-recording', async (_event, request: RunRecordingRequest) => {
     const result = await getRuntimeBundleOrThrow().runRecording(request);
-    const state = await getStoreOrThrow().load();
-    await getStoreOrThrow().save(
+    await getStudioStateUpdateQueueOrThrow().updateRuntimeState((state) =>
       appendRunToStudioState(
         state,
         result,
@@ -638,7 +549,9 @@ function registerIpcHandlers(): void {
 
     const artifactManager = getRuntimeBundleOrThrow().artifactManager;
     const reportPath = await artifactManager.createProjectRunReport(
-      deriveProjectRunReport(project, state.recentRuns, state.runDetails),
+      deriveProjectRunReport(project, state.recentRuns, state.runDetails, undefined, {
+        knownSecrets: await resolveCurrentKnownSecrets(),
+      }),
       request.locale,
     );
     try {
@@ -660,12 +573,20 @@ function registerIpcHandlers(): void {
     getRuntimeOrThrow().startSession(request),
   );
   ipcMain.handle('runtime:end-session', async () => getRuntimeOrThrow().endSession());
-  ipcMain.handle('runtime:send-chat-command', async (_event, request: ChatCommandRequest) =>
-    getRuntimeOrThrow().sendChatCommand(request),
-  );
-  ipcMain.handle('runtime:run-workflow', async (_event, request: RunWorkflowRequest) =>
-    getRuntimeBundleOrThrow().runWorkflow(request),
-  );
+  ipcMain.handle('runtime:send-chat-command', async (_event, request: ChatCommandRequest) => {
+    const { midsceneConfig: _midsceneConfig, agentModelConfig: _agentModelConfig, ...intent } = request;
+    return getRuntimeOrThrow().sendChatCommand({
+      ...intent,
+      modelConfigResolver: createCurrentModelConfigResolver(),
+    });
+  });
+  ipcMain.handle('runtime:run-workflow', async (_event, request: RunWorkflowRequest) => {
+    const { midsceneConfig: _midsceneConfig, agentModelConfig: _agentModelConfig, ...intent } = request;
+    return getRuntimeBundleOrThrow().runWorkflow({
+      ...intent,
+      modelConfigResolver: createCurrentModelConfigResolver(),
+    });
+  });
 }
 
 function safeFileSegment(value: string): string {
@@ -681,9 +602,20 @@ app.whenReady().then(async () => {
   const rootDir = app.getPath('userData');
   studioStore = new StudioStore(rootDir);
   await studioStore.ensureReady();
-  projectRepository = createProjectRepository({ studioStore });
+  studioStateUpdateQueue = new StudioStateUpdateQueue(studioStore);
   credentialStore = new CredentialStore(rootDir);
   await credentialStore.ensureReady();
+  modelSecretStore = new ModelSecretStore(rootDir);
+  await modelSecretStore.ensureReady();
+  modelSecretTransactionCoordinator = new ModelSecretTransactionCoordinator(
+    modelSecretStore,
+    persistModelSecretRef,
+    new ModelSecretTransactionJournal(rootDir),
+  );
+  await modelSecretTransactionCoordinator.reconcile(async (scope) =>
+    modelSecretReferenceForScope(await getStoreOrThrow().load(), scope),
+  );
+  projectRepository = createProjectRepository({ studioStore });
   scriptTrustStore = new ScriptTrustStore(rootDir);
   await scriptTrustStore.ensureReady();
   storageStateStore = new StorageStateStore(rootDir);
@@ -691,12 +623,19 @@ app.whenReady().then(async () => {
   runtimeBundle = createRuntimeBundle({
     rootDir,
     visualDiffImageAdapter: electronNativeImageAdapter,
+    browserPool: createControlledChromiumBrowserPool({
+      storageStateResolver: {
+        resolve: (projectId, storageStateId) => getStorageStateStoreOrThrow().resolve(projectId, storageStateId),
+      },
+    }),
     deterministicInputBindingResolver: {
       resolve: (request) => getCredentialStoreOrThrow().resolve(request),
     },
+    deterministicInteractionPreflightPolicy: createDeterministicInteractionPreflightPolicy(),
     storageStateResolver: {
       resolve: (projectId, storageStateId) => getStorageStateStoreOrThrow().resolve(projectId, storageStateId),
     },
+    loadStudioState: () => getStoreOrThrow().load(),
     emitRunEvent: (event) => {
       for (const window of BrowserWindow.getAllWindows()) {
         window.webContents.send('runtime:run-event', event);

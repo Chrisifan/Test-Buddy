@@ -15,8 +15,10 @@ import {
   type RunReason,
   type RunStatus,
   type RunTestCaseResponse,
+  type SuiteRunMemberRecord,
   type SuiteRunProvenance,
   type SuiteRunRecord,
+  type SuiteRunResult,
   type StudioState,
   type TestCaseDraft,
   type SuiteAsset,
@@ -25,9 +27,14 @@ import {
 import { nodePngImageAdapter } from './runtime/node-png-image-adapter.js';
 import { appendRunToStudioState, appendSuiteRunToStudioState } from './runtime/run-history.js';
 import { createRunProvenance, createSuiteRunProvenance, type RunProvenanceRuntimeMetadata } from './runtime/run-provenance.js';
-import { createRuntimeBundle } from './runtime/runtime-bundle.js';
+import { ModelConfigResolver, type LazyModelConfigResolver } from './runtime/model-config-resolver.js';
+import { ModelSecretStore } from './runtime/model-secret-store.js';
+import { isRunCancelled } from './runtime/run-cancellation.js';
+import { createControlledChromiumBrowserPool, type BrowserPoolLease } from './runtime/browser-pool.js';
+import { createRuntimeBundle, isChromiumHeadlessVersionedSuite } from './runtime/runtime-bundle.js';
 import { ProjectRepository, type ProjectSnapshot } from './projectRepository.js';
 import { SuiteRunner } from './runtime/suite-runner.js';
+import { StorageStateStore } from './runtime/storage-state-store.js';
 import { StudioStore } from './studioStore.js';
 
 const usage = `Usage:
@@ -76,9 +83,15 @@ export interface CliCaseResult {
 export interface CliSuiteRunInfo {
   id: string;
   version: number;
+  /** Durable parent execution ID, distinct from the immutable Suite asset ID. */
+  runId: string;
   status: Exclude<RunStatus, 'running'>;
+  startedAt: string;
+  finishedAt: string;
   effectiveConcurrency: number;
   issues: string[];
+  summary: SuiteRunRecord['summary'];
+  members: SuiteRunMemberRecord[];
   provenance: SuiteRunProvenance;
   reason?: RunReason;
 }
@@ -163,54 +176,125 @@ export function parseCliArguments(argv: string[]): ParsedCommand {
 }
 
 export function renderJUnitReport(summary: CliRunSummary): string {
-  const suitePreflight: CliCaseResult[] = summary.suite?.issues.length
-    ? [{
-        projectId: 'suite',
-        testCaseId: 'suite-preflight',
-        environmentId: '',
-        title: `Suite ${summary.suite.id}@${summary.suite.version} preflight`,
-        status: 'blocked' as const,
-        summary: summary.suite.issues.join('\n'),
-        reason: summary.suite.reason ?? {
-          code: 'missingAssetVersion',
-          message: summary.suite.issues.join('\n'),
-        },
-        artifacts: [],
-        provenance: suitePreflightProvenance(summary),
-      } satisfies CliCaseResult]
-    : [];
-  const reportResults = [...summary.results, ...suitePreflight];
-  const failures = reportResults.filter((result) => result.status === 'failed').length;
-  const errors = reportResults.filter((result) => result.status === 'error').length;
-  const skipped = reportResults.filter((result) =>
-    result.status === 'blocked' || result.status === 'skipped' || result.status === 'cancelled',
-  ).length;
   const elapsedSeconds = Math.max(
     0,
     (new Date(summary.endedAt).getTime() - new Date(summary.startedAt).getTime()) / 1_000,
   );
-  const cases = reportResults
-    .map((result) => {
-      const testcase = `  <testcase classname="${escapeXml(result.projectId)}" name="${escapeXml(result.title)}" time="${durationToSeconds(result.duration).toFixed(3)}">`;
-      const reason = escapeXml(result.reason?.message ?? result.failureReason ?? result.summary);
-      const output = `    <system-out>${escapeXml(result.summary)}</system-out>`;
-      if (result.status === 'passed') {
-        return `${testcase}\n${output}\n  </testcase>`;
-      }
-      const outcome = result.status === 'failed'
-        ? `    <failure message="${reason}">${reason}</failure>`
-        : result.status === 'error'
-          ? `    <error message="${reason}">${reason}</error>`
-          : `    <skipped message="${reason}"/>`;
-      return `${testcase}\n${outcome}\n${output}\n  </testcase>`;
-    })
-    .join('\n');
+  if (summary.suite) {
+    const suite = summary.suite;
+    const reportResults = suite.members.map((member) => toSuiteJUnitResult(summary.results, suite, member));
+    const parentReason = suite.reason?.message ?? suite.issues.join('\n');
+    if (suite.status === 'error' && !reportResults.some((result) => result.status === 'error')) {
+      reportResults.push({
+        projectId: suite.provenance.projectId,
+        testCaseId: `suite-parent-${suite.runId}`,
+        environmentId: suite.provenance.environment.id,
+        title: `Suite ${suite.id}@${suite.version}`,
+        status: 'error',
+        summary: parentReason || 'Suite executor failed.',
+        reason: suite.reason ?? { code: 'executorError', message: parentReason || 'Suite executor failed.' },
+        artifacts: [],
+      });
+    }
+    if ((suite.status === 'blocked' || suite.status === 'cancelled') &&
+      !reportResults.some((result) => result.status === suite.status)) {
+      const defaultReason = suite.status === 'blocked'
+        ? { code: 'missingAssetVersion' as const, message: 'Suite could not start because its immutable assets were unavailable.' }
+        : { code: 'userCancelled' as const, message: 'Suite was cancelled before any Case started.' };
+      reportResults.push({
+        projectId: suite.provenance.projectId,
+        testCaseId: `suite-parent-${suite.runId}`,
+        environmentId: suite.provenance.environment.id,
+        title: `Suite ${suite.id}@${suite.version}`,
+        status: suite.status,
+        summary: parentReason || defaultReason.message,
+        reason: suite.reason ?? defaultReason,
+        artifacts: [],
+      });
+    }
+    const counts = junitCounts(reportResults);
+    const total = reportResults.length;
+    const reasonAttributes = suite.reason
+      ? ` reasonCode="${escapeXml(suite.reason.code)}" reason="${escapeXml(parentReason)}"`
+      : '';
+    const cases = renderJUnitCases(reportResults, '    ', true);
+    const parentOutput = `    <system-out>${escapeXml([
+      `status=${suite.status}`,
+      parentReason,
+    ].filter(Boolean).join('\n'))}</system-out>`;
+    return `<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="TestBuddy CLI" tests="${total}" failures="${counts.failed}" errors="${counts.error}" skipped="${counts.skipped}" time="${elapsedSeconds.toFixed(3)}" timestamp="${escapeXml(summary.startedAt)}">
+  <testsuite name="Suite ${escapeXml(suite.id)}@${suite.version}" parentRunId="${escapeXml(suite.runId)}" status="${suite.status}" tests="${total}" failures="${counts.failed}" errors="${counts.error}" skipped="${counts.skipped}" time="${durationBetween(suite.startedAt, suite.finishedAt).toFixed(3)}" timestamp="${escapeXml(suite.startedAt)}"${reasonAttributes}>
+${cases}${cases ? '\n' : ''}${parentOutput}
+  </testsuite>
+</testsuites>
+`;
+  }
 
+  const counts = junitCounts(summary.results);
+  const cases = renderJUnitCases(summary.results, '  ', false);
   return `<?xml version="1.0" encoding="UTF-8"?>
-<testsuite name="TestBuddy CLI" tests="${reportResults.length}" failures="${failures}" errors="${errors}" skipped="${skipped}" time="${elapsedSeconds.toFixed(3)}" timestamp="${escapeXml(summary.startedAt)}">
+<testsuite name="TestBuddy CLI" tests="${summary.results.length}" failures="${counts.failed}" errors="${counts.error}" skipped="${counts.skipped}" time="${elapsedSeconds.toFixed(3)}" timestamp="${escapeXml(summary.startedAt)}">
 ${cases}
 </testsuite>
 `;
+}
+
+function toSuiteJUnitResult(
+  results: readonly CliCaseResult[],
+  suite: CliSuiteRunInfo,
+  member: SuiteRunMemberRecord,
+): CliCaseResult {
+  const matching = results.find((result) =>
+    result.testCaseId === member.testCaseId && result.provenance?.testCase.version === member.testCaseVersion,
+  ) ?? results.find((result) => result.testCaseId === member.testCaseId);
+  return {
+    projectId: member.provenance.projectId,
+    testCaseId: member.testCaseId,
+    environmentId: member.provenance.environment.id,
+    title: matching?.title ?? `${member.testCaseId}@${member.testCaseVersion}`,
+    status: member.status,
+    ...(matching?.runId ? { runId: matching.runId } : member.runId ? { runId: member.runId } : {}),
+    ...(matching?.duration ? { duration: matching.duration } : {}),
+    summary: member.summary,
+    ...(member.reason ? { reason: member.reason } : {}),
+    artifacts: matching?.artifacts ?? [],
+    attempts: member.attempts,
+    flaky: member.flaky,
+    provenance: member.provenance,
+  };
+}
+
+function renderJUnitCases(results: readonly CliCaseResult[], indent: string, includeSuiteMetadata: boolean): string {
+  return results.map((result) => {
+    const metadata = includeSuiteMetadata
+      ? `${result.runId ? ` runId="${escapeXml(result.runId)}"` : ''} attempts="${result.attempts ?? 0}" flaky="${result.flaky ? 'true' : 'false'}"`
+      : '';
+    const testcase = `${indent}<testcase classname="${escapeXml(result.projectId)}" name="${escapeXml(result.title)}" time="${durationToSeconds(result.duration).toFixed(3)}"${metadata}>`;
+    const reason = escapeXml(result.reason?.message ?? result.failureReason ?? result.summary);
+    const output = `${indent}  <system-out>${escapeXml(result.summary)}</system-out>`;
+    if (result.status === 'passed') {
+      return `${testcase}\n${output}\n${indent}</testcase>`;
+    }
+    const outcome = result.status === 'failed'
+      ? `${indent}  <failure message="${reason}">${reason}</failure>`
+      : result.status === 'error'
+        ? `${indent}  <error message="${reason}">${reason}</error>`
+        : `${indent}  <skipped message="${reason}"/>`;
+    return `${testcase}\n${outcome}\n${output}\n${indent}</testcase>`;
+  }).join('\n');
+}
+
+function junitCounts(results: readonly Pick<CliCaseResult, 'status'>[]): { failed: number; error: number; skipped: number } {
+  return {
+    failed: results.filter((result) => result.status === 'failed').length,
+    error: results.filter((result) => result.status === 'error').length,
+    skipped: results.filter((result) => result.status === 'blocked' || result.status === 'skipped' || result.status === 'cancelled').length,
+  };
+}
+
+function durationBetween(startedAt: string, finishedAt: string): number {
+  return Math.max(0, (Date.parse(finishedAt) - Date.parse(startedAt)) / 1_000);
 }
 
 export async function executeCliCommand(command: Exclude<ParsedCommand, { kind: 'help' }>): Promise<CliRunSummary> {
@@ -218,19 +302,55 @@ export async function executeCliCommand(command: Exclude<ParsedCommand, { kind: 
   const store = new StudioStore(dataDir);
   const rawState = await loadExistingState(store);
   const runtimeState = hydrateStudioState(rawState);
+  let modelConfigResolver: ModelConfigResolver | undefined;
+  const createLazyModelConfigResolver = (): LazyModelConfigResolver => {
+    modelConfigResolver ??= new ModelConfigResolver(new ModelSecretStore(dataDir));
+    return {
+      resolveMidsceneConfig: () => modelConfigResolver!.resolveMidsceneConfig(runtimeState.midsceneConfig),
+      resolveAgentProviderConfig: (role) => modelConfigResolver!.resolveAgentProviderConfig(role, {
+        midsceneConfig: runtimeState.midsceneConfig,
+        agentModelConfig: runtimeState.agentModelConfig,
+      }),
+    };
+  };
+  const deterministicInteractionPreflightPolicy = {
+    resolve: async () => {
+      modelConfigResolver ??= new ModelConfigResolver(new ModelSecretStore(dataDir));
+      const resolved = await modelConfigResolver.resolve({
+        midsceneConfig: runtimeState.midsceneConfig,
+        agentModelConfig: runtimeState.agentModelConfig,
+      });
+      return {
+        knownSecrets: [
+          resolved.midsceneConfig.modelApiKey,
+          ...Object.values(resolved.agentModelConfig).map((config) => config.modelApiKey),
+        ].filter((secret) => secret.trim()),
+      };
+    },
+  };
   const projectSnapshot = await loadProjectSnapshot(store, command.projectId);
   const project = projectSnapshot.project;
   const selections = command.caseReferences.map((reference) => selectTestCase(projectSnapshot, reference, command.environmentId));
   const suite = command.suiteReference ? selectSuite(projectSnapshot, command.suiteReference) : undefined;
   const startedAt = new Date();
+  const storageStateStore = new StorageStateStore(dataDir);
   const runtime = createRuntimeBundle({
     rootDir: dataDir,
     visualDiffImageAdapter: nodePngImageAdapter,
+    browserPool: createControlledChromiumBrowserPool({ storageStateResolver: storageStateStore }),
+    deterministicInteractionPreflightPolicy,
   });
   const results: CliCaseResult[] = [];
+  const attemptedSuiteResults = new Map<string, CliCaseResult>();
+  const persistedSuiteChildRunIds = new Set<string>();
   let suiteInfo: CliSuiteRunInfo | undefined;
   const persistRun = createSerializedRunHistoryPersister(store, () => runtime.browserRuntime.getState());
   const persistSuiteRun = createSerializedSuiteRunHistoryPersister(store);
+  const suiteParent = suite ? createCliSuiteParent(projectSnapshot, suite, runtimeState) : undefined;
+  let currentSuiteParentRecord = suiteParent?.record;
+  if (suiteParent) {
+    await persistSuiteRun(suiteParent.record);
+  }
 
   try {
     await runtime.ensureReady();
@@ -240,6 +360,7 @@ export async function executeCliCommand(command: Exclude<ParsedCommand, { kind: 
         environment: ProjectEnvironment;
         suite?: NonNullable<RunProvenance['suite']>;
       },
+      workerLease?: BrowserPoolLease,
     ): Promise<CliCaseResult> => {
       const provenance = createCliRunProvenance(
         projectSnapshot,
@@ -248,7 +369,7 @@ export async function executeCliCommand(command: Exclude<ParsedCommand, { kind: 
         runtimeState,
         selection.suite,
       );
-      if (isAgentRunnableTestCase(selection.testCase) && !isMidsceneConfigured(runtimeState.midsceneConfig)) {
+      if (isAgentRunnableTestCase(selection.testCase) && !hasCliPlannerModelConfig(runtimeState)) {
         const summary = '该 Agent 用例需要已配置的 Midscene 模型，当前数据目录未包含可用模型配置。';
         return persistSyntheticCliCaseResult({
           projectId: project.id,
@@ -264,6 +385,9 @@ export async function executeCliCommand(command: Exclude<ParsedCommand, { kind: 
         }, selection.environment, persistRun);
       }
       try {
+        const modelConfigResolver = isAgentRunnableTestCase(selection.testCase)
+          ? createLazyModelConfigResolver()
+          : undefined;
         const result = await runtime.runTestCase({
           projectSnapshot,
           testCase: selection.testCase,
@@ -275,9 +399,9 @@ export async function executeCliCommand(command: Exclude<ParsedCommand, { kind: 
             locale: selection.environment.locale,
             headless: selection.environment.headless,
           },
-          midsceneConfig: runtimeState.midsceneConfig,
-          agentModelConfig: runtimeState.agentModelConfig,
+          ...(modelConfigResolver ? { modelConfigResolver } : {}),
           browserSession: runtimeState.browserSession,
+          ...(workerLease ? { workerLease } : {}),
         });
         const persistedResult = normalizeTerminalRunResponse(withCliProvenance(result, provenance));
         await persistRun(persistedResult, selection.environment);
@@ -300,16 +424,24 @@ export async function executeCliCommand(command: Exclude<ParsedCommand, { kind: 
       }
     };
 
-    if (suite) {
-      const attemptedResults = new Map<string, CliCaseResult>();
-      const parentRunId = createCliSuiteRunId();
-      const environment = suiteRunEnvironment(projectSnapshot, suite);
-      const provenance = createCliSuiteRunProvenance(projectSnapshot, suite, environment, runtimeState, parentRunId);
-      const suiteMembership = provenance.suite;
+    if (suite && suiteParent) {
+      const suiteMembership = suiteParent.provenance.suite;
+      const poolQualified = Boolean(runtime.browserPool && isChromiumHeadlessVersionedSuite(
+        project,
+        projectSnapshot.reproducibility,
+        suite,
+      ));
       const suiteResult = await new SuiteRunner({
-        execute: async ({ testCase, environment }) => {
-          const result = await executeSelection({ testCase, environment, suite: suiteMembership });
-          attemptedResults.set(`${testCase.id}@${testCase.version ?? 1}`, result);
+        execute: async ({ testCase, environment, workerLease }) => {
+          const result = await executeSelection({ testCase, environment, suite: suiteMembership }, workerLease);
+          attemptedSuiteResults.set(`${testCase.id}@${testCase.version ?? 1}`, result);
+          if (result.runId) persistedSuiteChildRunIds.add(result.runId);
+          currentSuiteParentRecord = updateRunningCliSuiteRunRecord(
+            currentSuiteParentRecord ?? suiteParent.record,
+            attemptedSuiteResults,
+            persistedSuiteChildRunIds,
+          );
+          await persistSuiteRun(currentSuiteParentRecord);
           return {
             status: result.status,
             summary: result.summary,
@@ -317,23 +449,17 @@ export async function executeCliCommand(command: Exclude<ParsedCommand, { kind: 
             ...(result.runId ? { runId: result.runId } : {}),
           };
         },
+      }, {
+        maxConcurrency: poolQualified ? runtime.browserPool!.maxConcurrency : 1,
+        ...(poolQualified ? { browserPool: runtime.browserPool } : {}),
       }).run(project, suite);
-      suiteInfo = {
-        id: suiteResult.suiteId,
-        version: suiteResult.suiteVersion,
-        status: suiteResult.status,
-        effectiveConcurrency: suiteResult.effectiveConcurrency,
-        issues: suiteResult.issues,
-        provenance,
-        ...(suiteResult.reason ? { reason: suiteResult.reason } : {}),
-      };
       for (const suiteCaseResult of suiteResult.results) {
         const testCase = findTestCaseVersion(project, {
           id: suiteCaseResult.testCaseId,
           version: suiteCaseResult.testCaseVersion,
         });
         if (!testCase) continue;
-        const attempted = attemptedResults.get(`${suiteCaseResult.testCaseId}@${suiteCaseResult.testCaseVersion}`);
+        const attempted = attemptedSuiteResults.get(`${suiteCaseResult.testCaseId}@${suiteCaseResult.testCaseVersion}`);
         const cliResult = attempted
           ? {
               ...attempted,
@@ -362,18 +488,41 @@ export async function executeCliCommand(command: Exclude<ParsedCommand, { kind: 
                 suiteMembership,
               ),
             };
-        results.push(attempted ? cliResult : await persistSyntheticCliCaseResult(
+        const persistedMember = attempted ? cliResult : await persistSyntheticCliCaseResult(
           cliResult,
           suiteEnvironment(projectSnapshot, suite, testCase),
           persistRun,
-        ));
+        );
+        results.push(persistedMember);
+        if (persistedMember.runId) persistedSuiteChildRunIds.add(persistedMember.runId);
       }
-      await persistSuiteRun(createCliSuiteRunRecord(provenance, suiteResult, results));
+      const completedParent = createCliSuiteRunRecord(
+        suiteParent.provenance,
+        suiteResult,
+        results,
+        persistedSuiteChildRunIds,
+      );
+      currentSuiteParentRecord = completedParent;
+      suiteInfo = toCliSuiteRunInfo(completedParent, suiteResult);
+      await persistSuiteRun(completedParent);
     } else {
       for (const selection of selections) {
         results.push(await executeSelection(selection));
       }
     }
+  } catch (error) {
+    if (!suiteParent || !suite) {
+      throw error;
+    }
+    appendMissingSuiteResults(results, attemptedSuiteResults);
+    const terminalParent = terminalizeCliSuiteRunRecord(
+      currentSuiteParentRecord ?? suiteParent.record,
+      error,
+      attemptedSuiteResults,
+      persistedSuiteChildRunIds,
+    );
+    await persistSuiteRun(terminalParent);
+    suiteInfo = terminalCliSuiteRunInfo(terminalParent, suite, messageFor(error));
   } finally {
     await runtime.close();
   }
@@ -459,6 +608,21 @@ async function loadExistingState(store: StudioStore): Promise<StudioState> {
   return store.loadExisting();
 }
 
+function hasCliPlannerModelConfig(state: StudioState): boolean {
+  const planner = state.agentModelConfig.planner;
+  if (!planner.enabled) {
+    return false;
+  }
+  if (planner.provider === 'openaiCompatible') {
+    return Boolean(
+      planner.modelBaseUrl.trim() &&
+      planner.modelName.trim() &&
+      planner.modelSecret.hasKey,
+    );
+  }
+  return isMidsceneConfigured(state.midsceneConfig);
+}
+
 async function loadProjectSnapshot(store: StudioStore, projectId: string): Promise<ProjectSnapshot> {
   return new ProjectRepository({ studioStore: store }).load(projectId);
 }
@@ -489,11 +653,9 @@ function createSerializedSuiteRunHistoryPersister(
 
 function createCliSuiteRunRecord(
   provenance: SuiteRunProvenance,
-  result: Pick<CliSuiteRunInfo, 'status' | 'reason'> & {
-    startedAt: string;
-    endedAt: string;
-  },
-  members: readonly CliCaseResult[],
+  result: SuiteRunResult,
+  results: readonly CliCaseResult[],
+  persistedChildRunIds: ReadonlySet<string>,
 ): SuiteRunRecord {
   const summary: SuiteRunRecord['summary'] = {
     passed: 0,
@@ -503,8 +665,27 @@ function createCliSuiteRunRecord(
     cancelled: 0,
     error: 0,
   };
-  members.forEach((member) => {
+  result.results.forEach((member) => {
     summary[member.status] += 1;
+  });
+  const members = result.results.map((member): SuiteRunMemberRecord => {
+    const matching = results.find((candidate) =>
+      candidate.testCaseId === member.testCaseId && candidate.provenance?.testCase.version === member.testCaseVersion,
+    ) ?? results.find((candidate) => candidate.testCaseId === member.testCaseId);
+    if (!matching?.provenance) {
+      throw new Error(`CLI Suite member ${member.testCaseId}@${member.testCaseVersion} is missing frozen provenance.`);
+    }
+    return {
+      testCaseId: member.testCaseId,
+      testCaseVersion: member.testCaseVersion,
+      status: member.status,
+      summary: member.summary,
+      ...(member.reason ? { reason: structuredClone(member.reason) } : {}),
+      attempts: member.attempts,
+      flaky: member.flaky,
+      ...(member.runId && persistedChildRunIds.has(member.runId) ? { runId: member.runId } : {}),
+      provenance: structuredClone(matching.provenance),
+    };
   });
   return {
     id: provenance.suite.parentRunId,
@@ -513,8 +694,171 @@ function createCliSuiteRunRecord(
     finishedAt: result.endedAt,
     status: result.status,
     ...(result.reason ? { reasonCode: result.reason.code } : {}),
-    memberRunIds: members.flatMap((member) => member.runId ? [member.runId] : []),
+    memberRunIds: [...persistedChildRunIds],
+    members,
     summary,
+  };
+}
+
+function createCliSuiteParent(
+  snapshot: ProjectSnapshot,
+  suite: SuiteAsset,
+  state: StudioState,
+): { provenance: SuiteRunProvenance; record: SuiteRunRecord } {
+  const parentRunId = createCliSuiteRunId();
+  const environment = suiteRunEnvironment(snapshot, suite);
+  const provenance = createCliSuiteRunProvenance(snapshot, suite, environment, state, parentRunId);
+  return {
+    provenance,
+    record: {
+      id: parentRunId,
+      provenance,
+      startedAt: provenance.createdAt,
+      status: 'running',
+      memberRunIds: [],
+      members: [],
+      summary: emptyCliSuiteSummary(),
+    },
+  };
+}
+
+function toCliSuiteRunInfo(record: SuiteRunRecord, result: SuiteRunResult): CliSuiteRunInfo {
+  if (!record.finishedAt || record.status === 'running') {
+    throw new Error('CLI Suite summary requires a terminal parent record.');
+  }
+  return {
+    id: result.suiteId,
+    version: result.suiteVersion,
+    runId: record.id,
+    status: record.status,
+    startedAt: record.startedAt,
+    finishedAt: record.finishedAt,
+    effectiveConcurrency: result.effectiveConcurrency,
+    issues: [...result.issues],
+    summary: structuredClone(record.summary),
+    members: structuredClone(record.members ?? []),
+    provenance: record.provenance,
+    ...(result.reason ? { reason: structuredClone(result.reason) } : {}),
+  };
+}
+
+function emptyCliSuiteSummary(): SuiteRunRecord['summary'] {
+  return {
+    passed: 0,
+    failed: 0,
+    blocked: 0,
+    skipped: 0,
+    cancelled: 0,
+    error: 0,
+  };
+}
+
+function updateRunningCliSuiteRunRecord(
+  record: SuiteRunRecord,
+  attemptedResults: ReadonlyMap<string, CliCaseResult>,
+  persistedChildRunIds: ReadonlySet<string>,
+): SuiteRunRecord {
+  const members = cliSuiteMembersFromResults(attemptedResults.values(), persistedChildRunIds);
+  return {
+    ...record,
+    status: 'running',
+    memberRunIds: [...persistedChildRunIds],
+    members,
+    summary: cliSuiteSummaryFromMembers(members),
+  };
+}
+
+function terminalizeCliSuiteRunRecord(
+  record: SuiteRunRecord,
+  error: unknown,
+  attemptedResults: ReadonlyMap<string, CliCaseResult>,
+  persistedChildRunIds: ReadonlySet<string>,
+): SuiteRunRecord {
+  const cancelled = isRunCancelled(error);
+  const members = cliSuiteMembersFromResults(attemptedResults.values(), persistedChildRunIds);
+  return {
+    ...record,
+    status: cancelled ? 'cancelled' : 'error',
+    reasonCode: cancelled ? 'userCancelled' : 'executorError',
+    finishedAt: new Date().toISOString(),
+    memberRunIds: [...persistedChildRunIds],
+    members,
+    summary: cliSuiteSummaryFromMembers(members),
+  };
+}
+
+function cliSuiteMembersFromResults(
+  results: Iterable<CliCaseResult>,
+  persistedChildRunIds: ReadonlySet<string>,
+): SuiteRunMemberRecord[] {
+  return Array.from(results, (result) => {
+    if (!result.provenance) {
+      throw new Error(`CLI Suite child ${result.testCaseId} is missing frozen provenance.`);
+    }
+    return {
+      testCaseId: result.testCaseId,
+      testCaseVersion: result.provenance.testCase.version,
+      status: result.status,
+      summary: result.summary,
+      ...(result.reason ? { reason: structuredClone(result.reason) } : {}),
+      attempts: result.attempts ?? 1,
+      flaky: result.flaky ?? false,
+      ...(result.runId && persistedChildRunIds.has(result.runId) ? { runId: result.runId } : {}),
+      provenance: structuredClone(result.provenance),
+    };
+  });
+}
+
+function cliSuiteSummaryFromMembers(
+  members: readonly SuiteRunMemberRecord[],
+): SuiteRunRecord['summary'] {
+  return members.reduce((summary, member) => ({
+    ...summary,
+    [member.status]: summary[member.status] + 1,
+  }), emptyCliSuiteSummary());
+}
+
+function appendMissingSuiteResults(
+  results: CliCaseResult[],
+  attemptedResults: ReadonlyMap<string, CliCaseResult>,
+): void {
+  attemptedResults.forEach((candidate) => {
+    const version = candidate.provenance?.testCase.version;
+    const alreadyReported = results.some((result) =>
+      (candidate.runId && result.runId === candidate.runId) ||
+      (result.testCaseId === candidate.testCaseId && result.provenance?.testCase.version === version),
+    );
+    if (!alreadyReported) {
+      results.push(candidate);
+    }
+  });
+}
+
+function terminalCliSuiteRunInfo(
+  record: SuiteRunRecord,
+  suite: SuiteAsset,
+  message: string,
+): CliSuiteRunInfo {
+  if (!record.finishedAt || record.status === 'running') {
+    throw new Error('CLI Suite rejection requires a terminal parent record.');
+  }
+  const reason = {
+    code: record.reasonCode ?? 'executorError',
+    message,
+  } satisfies RunReason;
+  return {
+    id: suite.id,
+    version: suite.version,
+    runId: record.id,
+    status: record.status,
+    startedAt: record.startedAt,
+    finishedAt: record.finishedAt,
+    effectiveConcurrency: 0,
+    issues: [message],
+    summary: structuredClone(record.summary),
+    members: structuredClone(record.members ?? []),
+    provenance: record.provenance,
+    reason,
   };
 }
 
@@ -693,7 +1037,7 @@ function createCliRuntimeMetadata(
       provider: 'midscene',
       name: state.midsceneConfig.modelName,
       endpoint: state.midsceneConfig.modelBaseUrl,
-      apiKey: state.midsceneConfig.modelApiKey,
+      hasKey: state.midsceneConfig.modelSecret.hasKey,
     },
     createdAt: new Date().toISOString(),
   };
@@ -719,25 +1063,6 @@ function suiteEnvironment(
   return snapshot.project.environments.find((environment) => environment.id === suite.environmentId)
     ?? snapshot.project.environments.find((environment) => environment.id === testCase.environmentId)
     ?? (() => { throw new Error(`Suite ${suite.id}@${suite.version} has no exact environment.`); })();
-}
-
-function suitePreflightProvenance(summary: CliRunSummary): RunProvenance {
-  return {
-    schemaVersion: 1,
-    projectId: 'suite',
-    projectRevision: 'unavailable',
-    source: 'legacyStudioStore',
-    reproducibility: 'legacy',
-    testCase: { id: 'suite-preflight', version: 1 },
-    fixtures: [],
-    reusableFlows: [],
-    baselines: [],
-    environment: { id: '', name: '', baseUrl: '' },
-    browserProfile: { engine: 'chromium', headless: true },
-    executor: { appVersion: 'test-buddy-cli', runnerVersion: 'runtime-bundle-v1' },
-    model: { hasKey: false },
-    createdAt: summary.startedAt,
-  };
 }
 
 function resolveOutputPath(candidatePath: string): string {

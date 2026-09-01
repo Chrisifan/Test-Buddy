@@ -1,4 +1,4 @@
-import path from 'node:path';
+import fs from 'node:fs/promises';
 
 import type { AgentChartObservation, AgentDomInspection, AgentTableObservation } from '../../shared/agent.js';
 import type {
@@ -20,9 +20,13 @@ import type {
   RecordingStepDraft,
   RecordingStepKind,
   RunArtifact,
+  DeterministicFileReference,
+  DeterministicTestAction,
 } from '../../shared/studio.js';
-import { awaitWithRunCancellation, throwIfRunCancelled } from './run-cancellation.js';
+import { awaitWithRunCancellation, isRunCancelled, throwIfRunCancelled } from './run-cancellation.js';
 import { ArtifactManager } from './artifact-manager.js';
+import { DurableAtomicFileCommitError } from '../durable-atomic-file.js';
+import type { BrowserPoolLease } from './browser-pool.js';
 
 type PlaywrightPage = {
   goto: (url: string, options?: { waitUntil?: string; timeout?: number }) => Promise<unknown>;
@@ -46,7 +50,41 @@ type PlaywrightPage = {
   ) => Promise<unknown>;
   waitForSelector: (selector: string, options?: { timeout?: number; state?: 'attached' | 'detached' | 'visible' | 'hidden' }) => Promise<unknown>;
   waitForTimeout: (timeout: number) => Promise<unknown>;
+  waitForEvent: {
+    (event: 'popup'): Promise<PlaywrightPage>;
+    (event: 'download'): Promise<PlaywrightDownload>;
+  };
+  frameLocator: (selector: string) => PlaywrightFrameLocator;
+  hover: (selector: string, options?: { timeout?: number }) => Promise<unknown>;
+  locator: (selector: string) => PlaywrightLocator;
+  setInputFiles: (selector: string, files: string, options?: { timeout?: number }) => Promise<unknown>;
+  route: (url: string, handler: (route: PlaywrightRoute) => Promise<void>) => Promise<unknown>;
+  unroute: (url: string, handler?: (route: PlaywrightRoute) => Promise<void>) => Promise<unknown>;
   close?: () => Promise<unknown>;
+};
+
+type PlaywrightLocator = {
+  click: (options?: { timeout?: number }) => Promise<unknown>;
+  dragTo: (
+    target: PlaywrightLocator,
+    options?: { sourcePosition?: { x: number; y: number }; targetPosition?: { x: number; y: number } },
+  ) => Promise<unknown>;
+};
+
+type PlaywrightFrameLocator = {
+  locator: (selector: string) => PlaywrightLocator;
+};
+
+type PlaywrightDownload = {
+  suggestedFilename: () => string;
+  saveAs: (path: string) => Promise<void>;
+  delete?: () => Promise<void>;
+};
+
+type PlaywrightRoute = {
+  request: () => { method: () => string };
+  fulfill: (options: { status: number; contentType: string; body: string }) => Promise<void>;
+  continue: () => Promise<void>;
 };
 
 type PlaywrightConsoleMessage = {
@@ -63,6 +101,7 @@ type PlaywrightRequest = {
 type PlaywrightResponse = {
   url: () => string;
   status: () => number;
+  request?: () => { method: () => string };
 };
 
 export interface RecordingReplayResult {
@@ -70,6 +109,7 @@ export interface RecordingReplayResult {
   status: 'passed' | 'failed';
   message: string;
   screenshotPath?: string;
+  artifact?: RunArtifact;
 }
 
 export interface BrowserObservationSnapshot {
@@ -89,6 +129,7 @@ export interface BrowserStorageStateResolver {
 
 type PlaywrightContext = {
   newPage: () => Promise<PlaywrightPage>;
+  grantPermissions?: (permissions: string[], options?: { origin?: string }) => Promise<unknown>;
   storageState: () => Promise<unknown>;
   tracing: {
     start: (options?: { screenshots?: boolean; snapshots?: boolean; sources?: boolean }) => Promise<unknown>;
@@ -107,6 +148,26 @@ type PlaywrightModule = {
   webkit?: { launch: (options?: Record<string, unknown>) => Promise<PlaywrightBrowser> };
 };
 
+type RunScreenshotCheckpoint = 'preStep' | 'postStep' | 'failure';
+
+type ControlledDeterministicAction = Extract<
+  DeterministicTestAction,
+  { kind: 'iframe' | 'tab' | 'upload' | 'download' | 'hover' | 'drag' | 'clipboard' | 'networkObserve' | 'networkMock' }
+>;
+
+export interface ControlledDeterministicActionRequest {
+  runId: string;
+  action: ControlledDeterministicAction;
+  /** Main-only resolver; a project asset never contains or receives a local path. */
+  resolveUploadPath?: (reference: DeterministicFileReference) => Promise<string>;
+  cancellationSignal?: AbortSignal;
+}
+
+export interface ControlledDeterministicActionResult {
+  message: string;
+  artifacts: RunArtifact[];
+}
+
 function describeBrowserLaunchFailure(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   if (/executable doesn't exist|playwright install/i.test(message)) {
@@ -114,6 +175,26 @@ function describeBrowserLaunchFailure(error: unknown): string {
   }
 
   return '浏览器启动失败，请检查浏览器运行环境后重试。';
+}
+
+function screenshotCheckpointLabel(checkpoint: RunScreenshotCheckpoint): string {
+  if (checkpoint === 'postStep') {
+    return '步骤后页面截图';
+  }
+  if (checkpoint === 'failure') {
+    return '失败页面截图';
+  }
+  return '运行起始截图';
+}
+
+/** Query strings can contain tokens; diagnostic evidence retains origin and path only. */
+function redactDiagnosticUrl(value: string): string {
+  try {
+    const url = new URL(value);
+    return `${url.origin}${url.pathname}`;
+  } catch {
+    return '[invalid-url]';
+  }
 }
 
 export class BrowserRuntime {
@@ -125,13 +206,17 @@ export class BrowserRuntime {
   private recordingEnabled = true;
   private consoleMessages: string[] = [];
   private networkHints: string[] = [];
+  private readonly activeRouteMocks: Array<{ runId: string; url: string; handler: (route: PlaywrightRoute) => Promise<void> }> = [];
   private state: BrowserSessionState;
+  private workerClosePromise: Promise<void> | undefined;
 
   constructor(
     private readonly rootDir: string,
     private readonly artifacts: ArtifactManager,
     private readonly emitRecordingEvent?: (event: RecordingCapturedEvent) => void,
     private readonly storageStateResolver?: BrowserStorageStateResolver,
+    /** A Suite-only lease. Worker runtimes never own or update interactive browser state. */
+    private readonly workerLease?: BrowserPoolLease,
   ) {
     this.state = {
       id: 'session-idle',
@@ -151,6 +236,134 @@ export class BrowserRuntime {
     return Boolean(this.page);
   }
 
+  /** Executes one preflight-approved structured interaction against the active real page. */
+  async executeControlledDeterministicAction(
+    request: ControlledDeterministicActionRequest,
+  ): Promise<ControlledDeterministicActionResult> {
+    const page = this.page;
+    if (!page) {
+      throw new Error('A controlled deterministic interaction requires a real BrowserRuntime page.');
+    }
+    throwIfRunCancelled(request.cancellationSignal);
+    const action = request.action;
+
+    switch (action.kind) {
+      case 'iframe':
+        await awaitWithRunCancellation(
+          page.frameLocator(action.frame.locator.selector).locator(action.locator.selector).click({ timeout: 10_000 }),
+          request.cancellationSignal,
+        );
+        return { message: 'Completed approved same-origin iframe interaction.', artifacts: [] };
+      case 'tab': {
+        const popup = page.waitForEvent('popup');
+        await awaitWithRunCancellation(
+          page.evaluate((url) => window.open(url, '_blank', 'noopener,noreferrer'), action.url),
+          request.cancellationSignal,
+        );
+        await awaitWithRunCancellation(popup, request.cancellationSignal);
+        return { message: 'Opened approved tab.', artifacts: [] };
+      }
+      case 'upload': {
+        if (!request.resolveUploadPath) {
+          throw new Error('The approved upload reference could not be resolved in the main process.');
+        }
+        const uploadPath = await request.resolveUploadPath(action.fileRef);
+        throwIfRunCancelled(request.cancellationSignal);
+        await awaitWithRunCancellation(
+          page.setInputFiles(action.locator.selector, uploadPath, { timeout: 10_000 }),
+          request.cancellationSignal,
+        );
+        return { message: 'Completed approved main-owned file upload.', artifacts: [] };
+      }
+      case 'download':
+        return this.executeDownload(page, { ...request, action });
+      case 'hover':
+        await awaitWithRunCancellation(page.hover(action.locator.selector, { timeout: 10_000 }), request.cancellationSignal);
+        return { message: 'Completed approved hover interaction.', artifacts: [] };
+      case 'drag': {
+        const options = {
+          ...(action.sourcePosition ? { sourcePosition: action.sourcePosition } : {}),
+          ...(action.targetPosition ? { targetPosition: action.targetPosition } : {}),
+        };
+        await awaitWithRunCancellation(
+          page.locator(action.source.selector).dragTo(page.locator(action.target.selector), options),
+          request.cancellationSignal,
+        );
+        return { message: 'Completed approved drag interaction.', artifacts: [] };
+      }
+      case 'clipboard':
+        await this.grantCurrentPageClipboardPermission();
+        await awaitWithRunCancellation(
+          page.evaluate(async ({ locator, value }) => {
+            if (locator && !document.querySelector(locator)) {
+              throw new Error('Clipboard target is no longer present.');
+            }
+            if (!navigator.clipboard?.writeText) {
+              throw new Error('Clipboard access is unavailable in the controlled browser context.');
+            }
+            await navigator.clipboard.writeText(value);
+          }, { locator: action.locator?.selector, value: action.value }),
+          request.cancellationSignal,
+        );
+        return { message: 'Completed approved clipboard write.', artifacts: [] };
+      case 'networkObserve': {
+        const response = await awaitWithRunCancellation(
+          page.waitForResponse((candidate) =>
+            candidate.url() === action.url &&
+            (!action.method || candidate.request?.().method() === action.method),
+          ),
+          request.cancellationSignal,
+        ) as PlaywrightResponse;
+        const artifact = await this.artifacts.createDiagnosticArtifact(request.runId, 'Observed network response', {
+          kind: 'networkObserve',
+          url: redactDiagnosticUrl(response.url()),
+          method: action.method,
+          status: response.status(),
+        });
+        return { message: 'Recorded approved network response metadata.', artifacts: [artifact] };
+      }
+      case 'networkMock': {
+        const handler = async (route: PlaywrightRoute) => {
+          if (route.request().method() !== action.method) {
+            await route.continue();
+            return;
+          }
+          await route.fulfill({
+            status: action.response.status,
+            contentType: action.response.contentType ?? 'application/json',
+            body: JSON.stringify(action.response.body),
+          });
+        };
+        const registration = page.route(action.url, handler);
+        try {
+          await awaitWithRunCancellation(registration, request.cancellationSignal);
+        } catch (error) {
+          if (isRunCancelled(error)) {
+            await registration.then(
+              async () => { await page.unroute(action.url, handler); },
+              () => undefined,
+            );
+          }
+          throw error;
+        }
+        this.activeRouteMocks.push({ runId: request.runId, url: action.url, handler });
+        const artifact = await this.artifacts.createDiagnosticArtifact(request.runId, 'Registered network mock', {
+          kind: 'networkMock',
+          url: redactDiagnosticUrl(action.url),
+          method: action.method,
+          status: action.response.status,
+          contentType: action.response.contentType ?? 'application/json',
+        });
+        return { message: 'Registered approved network mock.', artifacts: [artifact] };
+      }
+    }
+  }
+
+  /** Creates a private BrowserRuntime over an already-isolated worker context. */
+  createWorker(workerLease: BrowserPoolLease): BrowserRuntime {
+    return new BrowserRuntime(this.rootDir, this.artifacts, undefined, undefined, workerLease);
+  }
+
   async start(request: BrowserSessionRequest): Promise<BrowserSessionState> {
     const targetUrl = composeEnvironmentUrl(request.environment);
     this.recordingEnabled = request.record !== false;
@@ -165,7 +378,7 @@ export class BrowserRuntime {
     });
 
     let storageState: string | undefined;
-    if (request.environment.storageStateId) {
+    if (!this.workerLease && request.environment.storageStateId) {
       try {
         if (!this.storageStateResolver) {
           throw new Error('认证状态执行器尚未初始化。');
@@ -178,6 +391,36 @@ export class BrowserRuntime {
         return this.patchState({
           status: 'error',
           message: error instanceof Error ? error.message : '认证状态无法解析，未启动浏览器会话。',
+        });
+      }
+    }
+
+    if (this.workerLease) {
+      try {
+        const context = this.workerLease.context as unknown as PlaywrightContext;
+        if (typeof context.newPage !== 'function') {
+          throw new Error('Worker browser context cannot create a page.');
+        }
+        this.context = context;
+        this.page = await context.newPage();
+        this.installObservationListeners(this.page);
+        await this.startPendingTrace();
+        await this.page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 20_000 });
+        const screenshot = await this.captureRunScreenshot(this.state.id, 'postStep');
+        if (!screenshot) {
+          throw new Error('无法捕获独立 Worker 浏览器会话截图。');
+        }
+        return this.patchState({
+          status: 'ready',
+          currentUrl: this.page.url(),
+          pageTitle: await this.page.title(),
+          screenshotPath: screenshot.path,
+          message: 'Playwright Worker 会话已启动。',
+        });
+      } catch (error) {
+        return this.patchState({
+          status: 'error',
+          message: describeBrowserLaunchFailure(error),
         });
       }
     }
@@ -218,13 +461,15 @@ export class BrowserRuntime {
       if (this.recordingEnabled) {
         await this.emitNavigationEvent(targetUrl);
       }
-      const screenshotPath = await this.captureScreenshotPath(this.state.id);
-      await this.page.screenshot({ path: screenshotPath, fullPage: true });
+      const screenshot = await this.captureRunScreenshot(this.state.id, 'postStep');
+      if (!screenshot) {
+        throw new Error('无法捕获真实浏览器会话截图。');
+      }
       return this.patchState({
         status: 'ready',
         currentUrl: this.page.url(),
         pageTitle: await this.page.title(),
-        screenshotPath,
+        screenshotPath: screenshot.path,
         message: 'Playwright Chromium 会话已启动。',
       });
     } catch (error) {
@@ -737,34 +982,51 @@ export class BrowserRuntime {
       });
     }
 
-    const screenshotPath = await this.captureScreenshotPath(this.state.id);
-    await this.page.screenshot({ path: screenshotPath, fullPage: true });
+    const screenshot = await this.captureRunScreenshot(this.state.id, 'postStep');
+    if (!screenshot) {
+      throw new Error('无法捕获当前真实页面截图。');
+    }
     return this.patchState({
       status: 'ready',
       currentUrl: this.page.url(),
       pageTitle: await this.page.title(),
-      screenshotPath,
+      screenshotPath: screenshot.path,
       message: '已捕获当前页面截图。',
     });
   }
 
   /** Main-process-only run evidence; renderer callers receive only its artifact metadata. */
-  async captureRunScreenshot(runId: string): Promise<RunArtifact | null> {
+  async captureRunScreenshot(
+    runId: string,
+    checkpoint: RunScreenshotCheckpoint = 'preStep',
+  ): Promise<RunArtifact | null> {
     if (!this.page) {
       return null;
     }
 
+    let screenshotPath: string;
     try {
-      const screenshotPath = await this.captureScreenshotPath(runId);
+      screenshotPath = await this.captureScreenshotPath();
       await this.page.screenshot({ path: screenshotPath, fullPage: true });
-      return {
-        id: `artifact-${runId}-screenshot`,
-        type: 'screenshot',
-        label: '运行起始截图',
-        path: screenshotPath,
-      };
     } catch {
       return null;
+    }
+
+    try {
+      return await this.artifacts.registerExisting({
+        path: screenshotPath,
+        type: 'screenshot',
+        label: screenshotCheckpointLabel(checkpoint),
+        evidenceKind: 'pageScreenshot',
+        ownerRunId: runId,
+        retentionClass: 'standard',
+        protectedBy: checkpoint === 'failure' ? ['failureInvestigation'] : [],
+      });
+    } catch (error) {
+      if (!(error instanceof DurableAtomicFileCommitError)) {
+        await fs.rm(screenshotPath, { force: true }).catch(() => undefined);
+      }
+      throw error;
     }
   }
 
@@ -1399,23 +1661,29 @@ export class BrowserRuntime {
       throwIfRunCancelled(cancellationSignal);
       try {
         await awaitWithRunCancellation(this.replayStep(step), cancellationSignal);
-        const screenshotPath = await awaitWithRunCancellation(this.captureScreenshotPath(sessionId), cancellationSignal);
-        await awaitWithRunCancellation(this.page.screenshot({ path: screenshotPath, fullPage: true }), cancellationSignal);
+        const screenshot = await awaitWithRunCancellation(
+          this.captureRunScreenshot(sessionId, 'postStep'),
+          cancellationSignal,
+        );
+        if (!screenshot) {
+          throw new Error('无法捕获回放后的真实页面截图。');
+        }
         results.push({
           step,
           status: 'passed',
           message: `已回放：${step.title}`,
-          screenshotPath,
+          screenshotPath: screenshot.path,
+          artifact: screenshot,
         });
       } catch (error) {
         throwIfRunCancelled(cancellationSignal);
-        const screenshotPath = await this.captureScreenshotPath(sessionId);
-        await this.page.screenshot({ path: screenshotPath, fullPage: true }).catch(() => undefined);
+        const screenshot = await this.captureRunScreenshot(sessionId, 'failure');
         results.push({
           step,
           status: 'failed',
           message: `回放失败：${(error as Error).message}`,
-          screenshotPath,
+          ...(screenshot ? { screenshotPath: screenshot.path } : {}),
+          ...(screenshot ? { artifact: screenshot } : {}),
         });
         break;
       }
@@ -1447,19 +1715,49 @@ export class BrowserRuntime {
 
     try {
       await this.context.tracing.stop({ path: trace.path });
-      return {
-        id: `artifact-${trace.runId}-trace`,
-        type: 'trace',
-        label: 'Playwright Trace',
-        path: trace.path,
-      };
     } catch {
       return undefined;
+    }
+
+    try {
+      return await this.artifacts.registerExisting({
+        path: trace.path,
+        type: 'trace',
+        label: 'Playwright Trace',
+        evidenceKind: 'trace',
+        ownerRunId: trace.runId,
+        retentionClass: 'standard',
+        protectedBy: [],
+      });
+    } catch (error) {
+      if (!(error instanceof DurableAtomicFileCommitError)) {
+        await fs.rm(trace.path, { force: true }).catch(() => undefined);
+      }
+      throw error;
     }
   }
 
   async close(): Promise<void> {
+    if (this.workerLease) {
+      if (!this.workerClosePromise) {
+        this.workerClosePromise = (async () => {
+          const page = this.page;
+          this.browser = null;
+          this.context = null;
+          this.page = null;
+          try {
+            await this.finishTrace();
+            await page?.close?.();
+          } finally {
+            await this.workerLease!.release();
+          }
+        })();
+      }
+      return this.workerClosePromise;
+    }
     await this.finishTrace();
+    const page = this.page;
+    await Promise.allSettled(this.activeRouteMocks.splice(0).map(({ url, handler }) => page?.unroute(url, handler)));
     await this.browser?.close();
     this.browser = null;
     this.context = null;
@@ -1468,6 +1766,18 @@ export class BrowserRuntime {
 
   getState(): BrowserSessionState {
     return this.state;
+  }
+
+  /** Removes mocks registered by one completed Case without changing another active run. */
+  async releaseControlledRouteMocks(runId: string): Promise<void> {
+    const page = this.page;
+    const owned = this.activeRouteMocks.filter((mock) => mock.runId === runId);
+    if (!owned.length) {
+      return;
+    }
+    const retained = this.activeRouteMocks.filter((mock) => mock.runId !== runId);
+    this.activeRouteMocks.splice(0, this.activeRouteMocks.length, ...retained);
+    await Promise.allSettled(owned.map(({ url, handler }) => page?.unroute(url, handler)));
   }
 
   private patchState(patch: Partial<BrowserSessionState>): BrowserSessionState {
@@ -1479,9 +1789,67 @@ export class BrowserRuntime {
     return this.state;
   }
 
-  private async captureScreenshotPath(sessionId: string): Promise<string> {
-    await this.artifacts.ensureReady();
-    return path.join(this.rootDir, 'studio-data', 'artifacts', `${sessionId}-${Date.now()}.png`);
+  private async captureScreenshotPath(): Promise<string> {
+    return this.artifacts.createPageScreenshotPath();
+  }
+
+  /** Clipboard permission is scoped to the active approved page origin inside this main-owned context. */
+  private async grantCurrentPageClipboardPermission(): Promise<void> {
+    if (!this.context?.grantPermissions || !this.page) {
+      return;
+    }
+    let origin: string;
+    try {
+      origin = new URL(this.page.url()).origin;
+    } catch {
+      return;
+    }
+    if (origin === 'null') {
+      return;
+    }
+    await this.context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin });
+  }
+
+  private async executeDownload(
+    page: PlaywrightPage,
+    request: ControlledDeterministicActionRequest & { action: Extract<ControlledDeterministicAction, { kind: 'download' }> },
+  ): Promise<ControlledDeterministicActionResult> {
+    const downloadPromise = page.waitForEvent('download');
+    // A cancellation can win before Playwright resolves the event. Keep the
+    // eventual browser-owned Download only long enough to delete it.
+    void downloadPromise.then(
+      async (download) => {
+        if (request.cancellationSignal?.aborted) {
+          await download.delete?.().catch(() => undefined);
+        }
+      },
+      () => undefined,
+    );
+    await awaitWithRunCancellation(page.click(request.action.locator.selector, { timeout: 10_000 }), request.cancellationSignal);
+    const download = await awaitWithRunCancellation(downloadPromise, request.cancellationSignal);
+    const downloadPath = await this.artifacts.createDownloadPath(download.suggestedFilename());
+    const save = download.saveAs(downloadPath);
+    try {
+      await awaitWithRunCancellation(save, request.cancellationSignal);
+      throwIfRunCancelled(request.cancellationSignal);
+      const artifact = await this.artifacts.registerExisting({
+        path: downloadPath,
+        type: 'attachment',
+        label: 'Approved browser download',
+        evidenceKind: 'attachment',
+        ownerRunId: request.runId,
+        retentionClass: 'standard',
+        protectedBy: [],
+      });
+      return { message: 'Downloaded and registered approved browser artifact.', artifacts: [artifact] };
+    } catch (error) {
+      await download.delete?.().catch(() => undefined);
+      await save.catch(() => undefined);
+      if (!(error instanceof DurableAtomicFileCommitError)) {
+        await fs.rm(downloadPath, { force: true }).catch(() => undefined);
+      }
+      throw error;
+    }
   }
 
   private async startPendingTrace(): Promise<void> {

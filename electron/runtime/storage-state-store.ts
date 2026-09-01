@@ -1,8 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import path from 'node:path';
-
-import { safeStorage } from 'electron';
 
 import type { StorageStateAvailability, StorageStateRef } from '../../shared/studio.js';
 
@@ -27,6 +26,12 @@ export interface StorageStateInspection {
 export interface StorageStateProtection {
   encrypt: (serializedState: string) => string;
   decrypt: (encryptedState: string) => string;
+}
+
+interface ElectronSafeStorage {
+  isEncryptionAvailable(): boolean;
+  encryptString(value: string): Buffer;
+  decryptString(value: Buffer): string;
 }
 
 export class StorageStateStore {
@@ -289,13 +294,15 @@ function requiredString(value: string, label: string): string {
 
 const electronStorageStateProtection: StorageStateProtection = {
   encrypt(serializedState) {
-    if (!safeStorage.isEncryptionAvailable()) {
+    const safeStorage = loadElectronSafeStorage();
+    if (!safeStorage?.isEncryptionAvailable()) {
       throw new Error('本机安全存储不可用，无法保存认证状态。');
     }
     return `safe:${safeStorage.encryptString(serializedState).toString('base64')}`;
   },
   decrypt(encryptedState) {
-    if (!encryptedState.startsWith('safe:') || !safeStorage.isEncryptionAvailable()) {
+    const safeStorage = loadElectronSafeStorage();
+    if (!encryptedState.startsWith('safe:') || !safeStorage?.isEncryptionAvailable()) {
       throw new Error('认证状态无法通过本机安全存储解析。');
     }
     try {
@@ -305,3 +312,28 @@ const electronStorageStateProtection: StorageStateProtection = {
     }
   },
 };
+
+const requireElectron = createRequire(import.meta.url);
+
+function loadElectronSafeStorage(): ElectronSafeStorage | undefined {
+  try {
+    const electron = requireElectron('electron') as unknown;
+    if (!electron || typeof electron !== 'object') {
+      return undefined;
+    }
+    const safeStorage = (electron as { safeStorage?: unknown }).safeStorage;
+    return isElectronSafeStorage(safeStorage) ? safeStorage : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function isElectronSafeStorage(value: unknown): value is ElectronSafeStorage {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+  const candidate = value as Partial<ElectronSafeStorage>;
+  return typeof candidate.isEncryptionAvailable === 'function' &&
+    typeof candidate.encryptString === 'function' &&
+    typeof candidate.decryptString === 'function';
+}

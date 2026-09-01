@@ -87,6 +87,39 @@ describe('appendRunToStudioState', () => {
       finishedAt: '2026-08-15T00:00:02.000Z',
       status: 'passed' as const,
       memberRunIds: ['case-run-1'],
+      members: [{
+        testCaseId: 'case-login',
+        testCaseVersion: 1,
+        status: 'passed' as const,
+        summary: 'Case completed after a retry.',
+        attempts: 2,
+        flaky: true,
+        runId: 'case-run-1',
+        provenance: {
+          schemaVersion: 1 as const,
+          projectId: 'project-web',
+          projectRevision: 'a'.repeat(64),
+          source: 'projectDirectory' as const,
+          reproducibility: 'versioned' as const,
+          testCase: { id: 'case-login', version: 1 },
+          suite: {
+            reference: { id: 'suite-login', version: 1 },
+            parentRunId: 'suite-run-1',
+          },
+          fixtures: [],
+          reusableFlows: [{ id: 'flow-login', version: 3 }],
+          baselines: [],
+          environment: {
+            id: 'env-ci',
+            name: 'CI',
+            baseUrl: 'https://example.test',
+          },
+          browserProfile: { engine: 'chromium' as const, headless: true },
+          executor: { appVersion: 'test-buddy-desktop', runnerVersion: 'runtime-bundle-v1' },
+          model: { hasKey: false },
+          createdAt: '2026-08-15T00:00:00.000Z',
+        },
+      }],
       summary: {
         passed: 1,
         failed: 0,
@@ -100,6 +133,7 @@ describe('appendRunToStudioState', () => {
     const next = appendSuiteRunToStudioState(legacyState, parentRecord);
     parentRecord.provenance.suite.reference.version = 2;
     parentRecord.memberRunIds.push('case-run-2');
+    parentRecord.members[0]!.provenance.reusableFlows[0]!.version = 4;
 
     expect(next.runDetails).toEqual([]);
     expect(next.suiteRunRecords).toEqual([
@@ -112,6 +146,16 @@ describe('appendRunToStudioState', () => {
           },
         }),
         memberRunIds: ['case-run-1'],
+        members: [expect.objectContaining({
+          testCaseId: 'case-login',
+          attempts: 2,
+          flaky: true,
+          runId: 'case-run-1',
+          provenance: expect.objectContaining({
+            testCase: { id: 'case-login', version: 1 },
+            reusableFlows: [{ id: 'flow-login', version: 3 }],
+          }),
+        })],
       }),
     ]);
   });

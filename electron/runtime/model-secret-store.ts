@@ -1,20 +1,25 @@
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 
-import { safeStorage } from 'electron';
+import { writeDurableAtomicFile } from '../durable-atomic-file.js';
+import type {
+  ClearModelSecretRequest,
+  ModelSecretRef,
+  ModelSecretScope,
+  SaveModelSecretRequest,
+} from '../../shared/studio.js';
 
-import type { AgentModelRole, ModelSecretRef } from '../../shared/studio.js';
-
-export type ModelSecretScope = 'midscene' | `agent:${AgentModelRole}`;
+export type { ModelSecretScope, SaveModelSecretRequest } from '../../shared/studio.js';
 
 interface StoredModelSecret extends ModelSecretRef {
   encryptedValue: string;
 }
 
-export interface SaveModelSecretRequest {
-  scope: ModelSecretScope;
-  value: string;
+/** Encrypted main-process state used only to compensate a failed ref write. */
+export interface ModelSecretSnapshot extends ModelSecretRef {
+  encryptedValue: string;
 }
 
 export interface ResolveModelSecretRequest {
@@ -24,6 +29,12 @@ export interface ResolveModelSecretRequest {
 export interface ModelSecretProtection {
   encrypt(value: string): string;
   decrypt(value: string): string;
+}
+
+interface ElectronSafeStorage {
+  isEncryptionAvailable(): boolean;
+  encryptString(value: string): Buffer;
+  decryptString(value: Buffer): string;
 }
 
 export class ModelSecretStore {
@@ -47,13 +58,11 @@ export class ModelSecretStore {
     await fs.mkdir(this.secretsDirectory, { recursive: true });
   }
 
-  async save(request: SaveModelSecretRequest): Promise<ModelSecretRef> {
+  async save(request: SaveModelSecretRequest, reference?: ModelSecretRef): Promise<ModelSecretRef> {
     assertModelSecretScope(request.scope);
     const value = requiredSecretValue(request.value);
     const record: StoredModelSecret = {
-      id: request.scope,
-      hasKey: true,
-      updatedAt: new Date().toISOString(),
+      ...modelSecretReference(request.scope, true, reference),
       encryptedValue: this.protection.encrypt(value),
     };
     return this.serializeWrite(async () => {
@@ -75,6 +84,38 @@ export class ModelSecretStore {
     return this.protection.decrypt(record.encryptedValue);
   }
 
+  async clear(request: ClearModelSecretRequest, reference?: ModelSecretRef): Promise<ModelSecretRef> {
+    assertModelSecretScope(request.scope);
+    const ref = modelSecretReference(request.scope, false, reference);
+    return this.serializeWrite(async () => {
+      const records = await this.loadRecords();
+      await this.saveRecords(records.filter((candidate) => candidate.id !== request.scope));
+      return ref;
+    });
+  }
+
+  async snapshot(scope: ModelSecretScope): Promise<ModelSecretSnapshot | undefined> {
+    assertModelSecretScope(scope);
+    return this.serializeWrite(async () => {
+      const record = (await this.loadRecords()).find((candidate) => candidate.id === scope);
+      return record ? { ...record } : undefined;
+    });
+  }
+
+  async restore(scope: ModelSecretScope, snapshot: ModelSecretSnapshot | undefined): Promise<void> {
+    assertModelSecretScope(scope);
+    if (snapshot && (!isStoredModelSecret(snapshot) || snapshot.id !== scope)) {
+      throw new Error('模型密钥恢复数据无效。');
+    }
+    await this.serializeWrite(async () => {
+      const records = await this.loadRecords();
+      await this.saveRecords([
+        ...records.filter((candidate) => candidate.id !== scope),
+        ...(snapshot ? [{ ...snapshot }] : []),
+      ]);
+    });
+  }
+
   private async loadRecords(): Promise<StoredModelSecret[]> {
     try {
       const content = await fs.readFile(this.secretsPath, 'utf8');
@@ -91,13 +132,12 @@ export class ModelSecretStore {
   private async saveRecords(records: StoredModelSecret[]): Promise<void> {
     await this.ensureReady();
     const stagingPath = path.join(this.secretsDirectory, `.model-secret-staging-${randomUUID()}.json`);
-    try {
-      await fs.writeFile(stagingPath, `${JSON.stringify(records, null, 2)}\n`, 'utf8');
-      await fs.rename(stagingPath, this.secretsPath);
-    } catch (error) {
-      await fs.rm(stagingPath, { force: true });
-      throw error;
-    }
+    await writeDurableAtomicFile({
+      directory: this.secretsDirectory,
+      stagingPath,
+      destinationPath: this.secretsPath,
+      content: `${JSON.stringify(records, null, 2)}\n`,
+    });
   }
 
   private serializeWrite<T>(operation: () => Promise<T>): Promise<T> {
@@ -115,6 +155,25 @@ function requiredSecretValue(value: string): string {
     throw new Error('模型密钥不能为空。');
   }
   return value;
+}
+
+function modelSecretReference(
+  scope: ModelSecretScope,
+  hasKey: boolean,
+  reference?: ModelSecretRef,
+): ModelSecretRef {
+  if (!reference) {
+    return { id: scope, hasKey, updatedAt: new Date().toISOString() };
+  }
+  if (
+    reference.id !== scope ||
+    reference.hasKey !== hasKey ||
+    typeof reference.updatedAt !== 'string' ||
+    Number.isNaN(Date.parse(reference.updatedAt))
+  ) {
+    throw new Error('模型密钥引用无效。');
+  }
+  return { ...reference };
 }
 
 function isStoredModelSecret(value: unknown): value is StoredModelSecret {
@@ -149,14 +208,19 @@ function toModelSecretRef(record: StoredModelSecret): ModelSecretRef {
 
 const electronModelSecretProtection: ModelSecretProtection = {
   encrypt(value) {
+    const safeStorage = loadElectronSafeStorage();
     if (!safeStorage?.isEncryptionAvailable()) {
       throw new Error('本机安全存储不可用，无法保存模型密钥。');
     }
     return `safe:${safeStorage.encryptString(value).toString('base64')}`;
   },
   decrypt(value) {
-    if (!value.startsWith('safe:') || !safeStorage?.isEncryptionAvailable()) {
-      throw new Error('模型密钥无法通过本机安全存储解析。');
+    const safeStorage = loadElectronSafeStorage();
+    if (!value.startsWith('safe:')) {
+      throw new Error('模型密钥已损坏或无法解密。');
+    }
+    if (!safeStorage?.isEncryptionAvailable()) {
+      throw new Error('本机安全存储不可用，无法解析模型密钥。');
     }
     try {
       return safeStorage.decryptString(Buffer.from(value.slice('safe:'.length), 'base64'));
@@ -165,3 +229,28 @@ const electronModelSecretProtection: ModelSecretProtection = {
     }
   },
 };
+
+const requireElectron = createRequire(import.meta.url);
+
+function loadElectronSafeStorage(): ElectronSafeStorage | undefined {
+  try {
+    const electron = requireElectron('electron') as unknown;
+    if (!electron || typeof electron !== 'object') {
+      return undefined;
+    }
+    const safeStorage = (electron as { safeStorage?: unknown }).safeStorage;
+    return isElectronSafeStorage(safeStorage) ? safeStorage : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function isElectronSafeStorage(value: unknown): value is ElectronSafeStorage {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+  const candidate = value as Partial<ElectronSafeStorage>;
+  return typeof candidate.isEncryptionAvailable === 'function' &&
+    typeof candidate.encryptString === 'function' &&
+    typeof candidate.decryptString === 'function';
+}

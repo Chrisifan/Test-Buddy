@@ -5,7 +5,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createInitialStudioState, hydrateStudioState } from '../shared/studio.js';
-import { ModelSecretStore } from './runtime/model-secret-store.js';
+import { ModelSecretStore, type ModelSecretProtection } from './runtime/model-secret-store.js';
 import { StudioStore } from './studioStore.js';
 
 vi.mock('electron', () => ({
@@ -17,6 +17,10 @@ vi.mock('electron', () => ({
 }));
 
 const temporaryDirectories: string[] = [];
+const protection: ModelSecretProtection = {
+  encrypt: (value) => `safe:${Buffer.from(value).toString('base64')}`,
+  decrypt: (value) => Buffer.from(value.slice('safe:'.length), 'base64').toString('utf8'),
+};
 
 afterEach(async () => {
   await Promise.all(temporaryDirectories.splice(0).map((directory) => fs.rm(directory, { recursive: true, force: true })));
@@ -40,6 +44,46 @@ describe('StudioStore', () => {
     expect(renameCalls[0]?.destination).toBe(store.storagePath);
     expect(path.dirname(renameCalls[0]?.source ?? '')).toBe(path.dirname(store.storagePath));
     await expect(store.loadExisting()).resolves.toEqual(state);
+  });
+
+  it('returns key-free supplied state without cloning or mutating it', async () => {
+    const rootDirectory = await createTemporaryDirectory();
+    const store = new StudioStore(rootDirectory);
+    const state = createInitialStudioState();
+    const beforeSave = structuredClone(state);
+
+    const saved = await store.save(state);
+
+    expect(saved).toBe(state);
+    expect(state).toEqual(beforeSave);
+  });
+
+  it('syncs the staged state file and state directory before publishing', async () => {
+    const rootDirectory = await createTemporaryDirectory();
+    const store = new StudioStore(rootDirectory);
+    const syncedPaths: string[] = [];
+    const originalOpen = fs.open.bind(fs);
+    const open = vi.spyOn(fs, 'open');
+    open.mockImplementation(async (target, flags, mode) => {
+      const handle = await originalOpen(target, flags, mode);
+      const sync = handle.sync.bind(handle);
+      vi.spyOn(handle, 'sync').mockImplementation(async () => {
+        syncedPaths.push(String(target));
+        await sync();
+      });
+      return handle;
+    });
+
+    try {
+      await store.save(createInitialStudioState());
+    } finally {
+      open.mockRestore();
+    }
+
+    expect(syncedPaths).toEqual(expect.arrayContaining([
+      expect.stringMatching(/\.state-staging-.*\.json$/),
+      path.dirname(store.storagePath),
+    ]));
   });
 
   it('keeps the previous state file when publishing a replacement fails', async () => {
@@ -194,7 +238,7 @@ describe('StudioStore', () => {
 
   it('migrates raw model keys before saving supplied state and returns only secret references', async () => {
     const rootDirectory = await createTemporaryDirectory();
-    const secrets = new ModelSecretStore(rootDirectory);
+    const secrets = new ModelSecretStore(rootDirectory, protection);
     const store = new StudioStore(rootDirectory, fs, secrets);
     const state = legacyModelKeyState();
 

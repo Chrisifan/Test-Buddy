@@ -8,6 +8,7 @@ vi.mock('electron', () => ({ safeStorage: undefined }));
 
 import { createEmptyProject, createInitialStudioState } from '../shared/studio.js';
 import { executeCliCommand } from './cli.js';
+import * as runtimeBundle from './runtime/runtime-bundle.js';
 
 const temporaryDirectories: string[] = [];
 
@@ -35,6 +36,75 @@ describe('TestBuddy CLI model secrets', () => {
       caseReferences: [],
     })).rejects.toThrow('本机安全存储不可用，无法保存模型密钥。');
     await expect(fs.readFile(statePath, 'utf8')).resolves.toContain('sk-live-cli');
+  });
+
+  it('reports unavailable secure storage when an Agent CLI run resolves an encrypted model key', async () => {
+    const directory = await createTemporaryDirectory();
+    const project = createEmptyProject(1);
+    const environment = project.environments[0]!;
+    project.testCases = [{
+      id: 'case-agent-secret',
+      version: 1,
+      kind: 'scenario',
+      name: '需要模型密钥的用例',
+      category: '回归',
+      lastEdited: new Date(0).toISOString(),
+      url: environment.url,
+      notes: '',
+      groupId: project.groups[0]!.id,
+      environmentId: environment.id,
+      source: 'manual',
+      steps: [{ id: 'step-agent-secret', type: 'ai', title: '执行', body: '点击登录按钮' }],
+    }];
+    const state = createInitialStudioState();
+    state.projects = [project];
+    state.midsceneConfig = {
+      ...state.midsceneConfig,
+      modelBaseUrl: 'https://models.example.test/v1',
+      modelSecret: { id: 'midscene', hasKey: true, updatedAt: '2026-08-20T00:00:00.000Z' },
+      modelName: 'ui-agent-model',
+      modelFamily: 'vlm-ui-tars',
+    };
+    await fs.mkdir(path.join(directory, 'studio-data', 'credentials'), { recursive: true });
+    await fs.writeFile(
+      path.join(directory, 'studio-data', 'credentials', 'model-secrets.json'),
+      `${JSON.stringify([{
+        ...state.midsceneConfig.modelSecret,
+        encryptedValue: 'safe:ZW5jcnlwdGVkLW1vZGVsLWtleQ==',
+      }])}\n`,
+      'utf8',
+    );
+    const statePath = path.join(directory, 'studio-data', 'state.json');
+    await fs.writeFile(statePath, `${JSON.stringify(state)}\n`, 'utf8');
+    const runTestCase = vi.fn(async (request: { modelConfigResolver?: { resolveAgentProviderConfig: (role: 'planner') => Promise<unknown> } }) => {
+      await request.modelConfigResolver?.resolveAgentProviderConfig('planner');
+      throw new Error('expected model resolver to reject');
+    });
+    const createRuntimeBundle = vi.spyOn(runtimeBundle, 'createRuntimeBundle').mockReturnValue({
+      ensureReady: vi.fn(),
+      runTestCase,
+      browserRuntime: { getState: vi.fn(() => state.browserSession) },
+      close: vi.fn(),
+    } as never);
+
+    try {
+      const summary = await executeCliCommand({
+        kind: 'run',
+        dataDir: directory,
+        projectId: project.id,
+        caseReferences: [{ id: 'case-agent-secret', version: 1 }],
+      });
+
+      expect(runTestCase).toHaveBeenCalledOnce();
+      expect(summary.results).toEqual([
+        expect.objectContaining({
+          status: 'error',
+          failureReason: '本机安全存储不可用，无法解析模型密钥。',
+        }),
+      ]);
+    } finally {
+      createRuntimeBundle.mockRestore();
+    }
   });
 });
 

@@ -2,6 +2,10 @@ import type {
   RunIntentIpcErrorResponse,
   HistoricalRerunExecutionResult,
   HistoricalRerunPlan,
+  MaintenanceDraftAcceptanceRequest,
+  MaintenanceDraftCreationRequest,
+  MaintenanceDraftRejectionRequest,
+  MaintenanceEvidenceOpenRequest,
   RunSuiteIntent,
   RunSuiteResponse,
   RunTestCaseIntent,
@@ -9,7 +13,29 @@ import type {
 } from '../shared/studio.js';
 
 const { contextBridge, ipcRenderer } = require('electron');
-const { runtimeIpcChannels } = require('./ipc/runtime-ipc-channels.cjs');
+
+// Sandboxed preloads can only require Electron built-ins, so these channels
+// must remain local rather than loading the shared CommonJS module.
+const runtimeIpcChannels = {
+  getInfo: 'runtime:get-info',
+  runTestCase: 'runtime:run-test-case',
+  runSuite: 'runtime:run-suite',
+  cancelRun: 'runtime:cancel-run',
+  loadRunDetail: 'runtime:load-run-detail',
+  loadSuiteRunRecord: 'runtime:load-suite-run-record',
+  listMaintenanceDrafts: 'runtime:list-maintenance-drafts',
+  createMaintenanceDraft: 'runtime:create-maintenance-draft',
+  acceptMaintenanceDraft: 'runtime:accept-maintenance-draft',
+  rejectMaintenanceDraft: 'runtime:reject-maintenance-draft',
+  openMaintenanceEvidence: 'runtime:open-maintenance-evidence',
+  planArtifactRetention: 'runtime:plan-artifact-retention',
+  confirmArtifactRetention: 'runtime:confirm-artifact-retention',
+  planHistoricalRerun: 'runtime:plan-historical-rerun',
+  runHistoricalRerun: 'runtime:run-historical-rerun',
+  openArtifact: 'runtime:open-artifact',
+  exportArtifact: 'runtime:export-artifact',
+  attachManualEvidence: 'runtime:attach-manual-evidence',
+} as const;
 
 function invokeRunIntent<T>(channel: string, request: RunSuiteIntent | RunTestCaseIntent): Promise<T> {
   return ipcRenderer.invoke(channel, request).then((response: unknown) => {
@@ -36,6 +62,8 @@ function isRunIntentIpcError(response: unknown): response is RunIntentIpcErrorRe
 contextBridge.exposeInMainWorld('desktopApi', {
   loadStudioState: () => ipcRenderer.invoke('studio:load-state'),
   saveStudioState: (state: unknown) => ipcRenderer.invoke('studio:save-state', state),
+  saveModelSecret: (request: unknown) => ipcRenderer.invoke('runtime:save-model-secret', request),
+  clearModelSecret: (request: unknown) => ipcRenderer.invoke('runtime:clear-model-secret', request),
   createProject: (project: unknown) => ipcRenderer.invoke('studio:create-project', project),
   updateProject: (project: unknown) => ipcRenderer.invoke('studio:update-project', project),
   analyzePrdDocument: (request: unknown) => ipcRenderer.invoke('studio:analyze-prd-document', request),
@@ -65,6 +93,14 @@ contextBridge.exposeInMainWorld('desktopApi', {
   cancelRun: (runId: string) => ipcRenderer.invoke(runtimeIpcChannels.cancelRun, runId),
   exportProjectReport: (request: unknown) => ipcRenderer.invoke('runtime:export-project-report', request),
   loadRunDetail: (runId: string) => ipcRenderer.invoke(runtimeIpcChannels.loadRunDetail, runId),
+  loadSuiteRunRecord: (runId: string) => ipcRenderer.invoke(runtimeIpcChannels.loadSuiteRunRecord, runId),
+  listMaintenanceDrafts: () => ipcRenderer.invoke(runtimeIpcChannels.listMaintenanceDrafts),
+  createMaintenanceDraft: (request: MaintenanceDraftCreationRequest) => ipcRenderer.invoke(runtimeIpcChannels.createMaintenanceDraft, request),
+  acceptMaintenanceDraft: (request: MaintenanceDraftAcceptanceRequest) => ipcRenderer.invoke(runtimeIpcChannels.acceptMaintenanceDraft, request),
+  rejectMaintenanceDraft: (request: MaintenanceDraftRejectionRequest) => ipcRenderer.invoke(runtimeIpcChannels.rejectMaintenanceDraft, request),
+  openMaintenanceEvidence: (request: MaintenanceEvidenceOpenRequest) => ipcRenderer.invoke(runtimeIpcChannels.openMaintenanceEvidence, request),
+  planArtifactRetention: () => ipcRenderer.invoke(runtimeIpcChannels.planArtifactRetention),
+  confirmArtifactRetention: (planId: string) => ipcRenderer.invoke(runtimeIpcChannels.confirmArtifactRetention, planId),
   planHistoricalRerun: (runId: string) => ipcRenderer.invoke(runtimeIpcChannels.planHistoricalRerun, runId) as Promise<HistoricalRerunPlan>,
   runHistoricalRerun: (runId: string) => ipcRenderer.invoke(runtimeIpcChannels.runHistoricalRerun, runId) as Promise<HistoricalRerunExecutionResult>,
   openArtifact: (artifactPath: string) => ipcRenderer.invoke(runtimeIpcChannels.openArtifact, artifactPath),

@@ -3,14 +3,14 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   createEmptyProject,
   defaultAgentModelConfig,
-  type AgentModelConfig,
   type BrowserSessionState,
-  type MidsceneConfig,
 } from '../shared/studio.js';
+import type { ResolvedAgentModelConfig, ResolvedMidsceneConfig } from './runtime/model-config-resolver.js';
 import { StudioRuntime } from './studioRuntime.js';
 
-const midsceneConfig: MidsceneConfig = {
+const midsceneConfig: ResolvedMidsceneConfig = {
   modelBaseUrl: 'https://models.example.test/v1',
+  modelSecret: { id: 'midscene', hasKey: true, updatedAt: '2026-08-17T00:00:00.000Z' },
   modelApiKey: 'test-key',
   modelName: 'ui-agent-model',
   modelFamily: 'vlm-ui-tars',
@@ -18,6 +18,29 @@ const midsceneConfig: MidsceneConfig = {
   replanningCycleLimit: '10',
   openaiHttpProxy: '',
   defaultContext: '',
+};
+
+const defaultResolvedAgentModelConfig: ResolvedAgentModelConfig = {
+  planner: {
+    ...defaultAgentModelConfig.planner,
+    modelSecret: { id: 'agent:planner', hasKey: true, updatedAt: '2026-08-17T00:00:00.000Z' },
+    modelApiKey: 'test-planner-key',
+  },
+  executor: {
+    ...defaultAgentModelConfig.executor,
+    modelSecret: { id: 'agent:executor', hasKey: true, updatedAt: '2026-08-17T00:00:00.000Z' },
+    modelApiKey: 'test-executor-key',
+  },
+  verifier: {
+    ...defaultAgentModelConfig.verifier,
+    modelSecret: { id: 'agent:verifier', hasKey: true, updatedAt: '2026-08-17T00:00:00.000Z' },
+    modelApiKey: 'test-verifier-key',
+  },
+  reporter: {
+    ...defaultAgentModelConfig.reporter,
+    modelSecret: { id: 'agent:reporter', hasKey: true, updatedAt: '2026-08-17T00:00:00.000Z' },
+    modelApiKey: 'test-reporter-key',
+  },
 };
 
 describe('StudioRuntime agent observation', () => {
@@ -194,10 +217,10 @@ describe('StudioRuntime agent observation', () => {
       message: 'ready',
       updatedAt: '2026-07-03T08:00:00.000Z',
     };
-    const agentModelConfig: AgentModelConfig = {
-      ...defaultAgentModelConfig,
+    const agentModelConfig: ResolvedAgentModelConfig = {
+      ...defaultResolvedAgentModelConfig,
       planner: {
-        ...defaultAgentModelConfig.planner,
+        ...defaultResolvedAgentModelConfig.planner,
         provider: 'openaiCompatible',
         modelBaseUrl: 'https://planner.example.test/v1',
         modelApiKey: 'planner-secret',
@@ -309,10 +332,10 @@ describe('StudioRuntime agent observation', () => {
       undefined,
       { createPlan },
     );
-    const agentModelConfig: AgentModelConfig = {
-      ...defaultAgentModelConfig,
+    const agentModelConfig: ResolvedAgentModelConfig = {
+      ...defaultResolvedAgentModelConfig,
       planner: {
-        ...defaultAgentModelConfig.planner,
+        ...defaultResolvedAgentModelConfig.planner,
         provider: 'openaiCompatible',
         modelBaseUrl: 'https://planner.example.test/v1',
         modelApiKey: 'planner-secret',
@@ -371,6 +394,78 @@ describe('StudioRuntime agent observation', () => {
     expect(response.agentRun.metrics).toEqual(expect.objectContaining({ calls: 1, totalTokens: 30 }));
   });
 
+  it('resolves only the planner provider for a successful selector-based Agent action', async () => {
+    const currentState: BrowserSessionState = {
+      id: 'session-lazy-planner',
+      status: 'ready',
+      currentUrl: 'https://example.test/login',
+      pageTitle: 'Login',
+      message: 'ready',
+      updatedAt: '2026-08-17T00:00:00.000Z',
+    };
+    const createPlan = vi.fn().mockResolvedValue({
+      plan: {
+        title: 'Save settings',
+        summary: 'Click the save button.',
+        risks: [],
+        steps: [{ action: 'click', title: 'Save', instruction: 'Click save', selector: '#save' }],
+      },
+      modelName: 'planner-model',
+      metrics: { durationMs: 1, modelTimeCostMs: 1, calls: 1, promptTokens: 1, completionTokens: 1, totalTokens: 2, cachedInputTokens: 0, byIntent: {}, byModel: {} },
+    });
+    const lazyModelResolver = {
+      resolveMidsceneConfig: vi.fn().mockRejectedValue(new Error('midscene must not be resolved')),
+      resolveAgentProviderConfig: vi.fn(async (role: string) => {
+        if (role !== 'planner') throw new Error(`${role} must not be resolved`);
+        return {
+          config: {
+            modelBaseUrl: 'https://planner.example.test/v1',
+            modelApiKey: 'planner-only-secret',
+            modelName: 'planner-model',
+            modelFamily: 'openai',
+            temperature: '0.2',
+          },
+        };
+      }),
+    };
+    const runtime = new StudioRuntime(
+      vi.fn(),
+      {
+        start: vi.fn(),
+        navigate: vi.fn(),
+        click: vi.fn().mockResolvedValue(currentState),
+        input: vi.fn(),
+        capture: vi.fn<() => Promise<BrowserSessionState>>().mockResolvedValue(currentState),
+        getState: () => currentState,
+      },
+      undefined,
+      { createPlan },
+    );
+
+    await runtime.sendChatCommand({
+      mode: 'ai',
+      prompt: 'Save settings',
+      targetEnvironment: 'staging',
+      deepThink: true,
+      deepLocate: true,
+      runtimeProfile: {
+        browser: 'chromium',
+        baseUrl: 'https://example.test',
+        viewport: 'desktop',
+        locale: 'en-US',
+        headless: true,
+      },
+      modelConfigResolver: lazyModelResolver,
+    } as never);
+
+    expect(createPlan).toHaveBeenCalledWith(expect.objectContaining({
+      config: expect.objectContaining({ modelApiKey: 'planner-only-secret' }),
+    }));
+    expect(lazyModelResolver.resolveAgentProviderConfig).toHaveBeenCalledTimes(1);
+    expect(lazyModelResolver.resolveAgentProviderConfig).toHaveBeenCalledWith('planner');
+    expect(lazyModelResolver.resolveMidsceneConfig).not.toHaveBeenCalled();
+  });
+
   it('falls back to rule planning when the configured Planner request fails', async () => {
     const currentState: BrowserSessionState = {
       id: 'session-ready',
@@ -401,10 +496,10 @@ describe('StudioRuntime agent observation', () => {
       undefined,
       { createPlan },
     );
-    const agentModelConfig: AgentModelConfig = {
-      ...defaultAgentModelConfig,
+    const agentModelConfig: ResolvedAgentModelConfig = {
+      ...defaultResolvedAgentModelConfig,
       planner: {
-        ...defaultAgentModelConfig.planner,
+        ...defaultResolvedAgentModelConfig.planner,
         provider: 'openaiCompatible',
         modelBaseUrl: 'https://planner.example.test/v1',
         modelApiKey: 'planner-secret',
@@ -519,10 +614,10 @@ describe('StudioRuntime agent observation', () => {
       undefined,
       { createPlan },
     );
-    const agentModelConfig: AgentModelConfig = {
-      ...defaultAgentModelConfig,
+    const agentModelConfig: ResolvedAgentModelConfig = {
+      ...defaultResolvedAgentModelConfig,
       planner: {
-        ...defaultAgentModelConfig.planner,
+        ...defaultResolvedAgentModelConfig.planner,
         provider: 'openaiCompatible',
         modelBaseUrl: 'https://planner.example.test/v1',
         modelApiKey: 'planner-secret',
@@ -607,10 +702,10 @@ describe('StudioRuntime agent observation', () => {
       { click: vi.fn(), input: vi.fn(), select: semanticSelect, assert: vi.fn() },
       { createPlan },
     );
-    const agentModelConfig: AgentModelConfig = {
-      ...defaultAgentModelConfig,
+    const agentModelConfig: ResolvedAgentModelConfig = {
+      ...defaultResolvedAgentModelConfig,
       planner: {
-        ...defaultAgentModelConfig.planner,
+        ...defaultResolvedAgentModelConfig.planner,
         provider: 'openaiCompatible',
         modelBaseUrl: 'https://planner.example.test/v1',
         modelApiKey: 'planner-secret',
@@ -698,10 +793,10 @@ describe('StudioRuntime agent observation', () => {
       { click: vi.fn(), input: vi.fn(), select: vi.fn(), extract: semanticExtract, assert: vi.fn() },
       { createPlan },
     );
-    const agentModelConfig: AgentModelConfig = {
-      ...defaultAgentModelConfig,
+    const agentModelConfig: ResolvedAgentModelConfig = {
+      ...defaultResolvedAgentModelConfig,
       planner: {
-        ...defaultAgentModelConfig.planner,
+        ...defaultResolvedAgentModelConfig.planner,
         provider: 'openaiCompatible',
         modelBaseUrl: 'https://planner.example.test/v1',
         modelApiKey: 'planner-secret',
@@ -987,10 +1082,10 @@ describe('StudioRuntime agent observation', () => {
       { click: vi.fn(), input: vi.fn(), assert: semanticAssert },
       { createPlan },
     );
-    const agentModelConfig: AgentModelConfig = {
-      ...defaultAgentModelConfig,
+    const agentModelConfig: ResolvedAgentModelConfig = {
+      ...defaultResolvedAgentModelConfig,
       planner: {
-        ...defaultAgentModelConfig.planner,
+        ...defaultResolvedAgentModelConfig.planner,
         provider: 'openaiCompatible',
         modelBaseUrl: 'https://planner.example.test/v1',
         modelApiKey: 'planner-secret',
@@ -1075,10 +1170,10 @@ describe('StudioRuntime agent observation', () => {
       undefined,
       { verify },
     );
-    const agentModelConfig: AgentModelConfig = {
-      ...defaultAgentModelConfig,
+    const agentModelConfig: ResolvedAgentModelConfig = {
+      ...defaultResolvedAgentModelConfig,
       verifier: {
-        ...defaultAgentModelConfig.verifier,
+        ...defaultResolvedAgentModelConfig.verifier,
         provider: 'openaiCompatible',
         modelBaseUrl: 'https://verifier.example.test/v1',
         modelApiKey: 'verifier-secret',
@@ -1124,6 +1219,7 @@ describe('StudioRuntime agent observation', () => {
   });
 
   it('uses the configured Reporter model to summarize failed agent runs', async () => {
+    const reporterSecret = 'reporter-secret';
     const currentState: BrowserSessionState = {
       id: 'session-ready',
       status: 'ready',
@@ -1137,7 +1233,7 @@ describe('StudioRuntime agent observation', () => {
       status: 'failed',
       message: '未找到刷新成功状态。',
       evidence: '页面仍显示加载中。',
-      failureReason: '图表未刷新完成。',
+      failureReason: `图表未刷新完成。provider echoed ${reporterSecret}`,
       metrics: {
         durationMs: 20,
         modelTimeCostMs: 20,
@@ -1151,10 +1247,10 @@ describe('StudioRuntime agent observation', () => {
       },
     });
     const report = vi.fn().mockResolvedValue({
-      summary: 'Reporter 判断失败集中在图表刷新未完成。',
-      evidenceSummary: '断言失败证据：页面仍显示加载中。',
-      failureAnalysis: '图表接口或前端渲染可能未在等待窗口内完成。',
-      suggestedFixes: ['增加图表稳定等待', '检查 /api/chart 响应耗时'],
+      summary: `Reporter 判断失败集中在图表刷新未完成。provider echoed ${reporterSecret}`,
+      evidenceSummary: `断言失败证据：页面仍显示加载中。provider echoed ${reporterSecret}`,
+      failureAnalysis: `图表接口或前端渲染可能未在等待窗口内完成。provider echoed ${reporterSecret}`,
+      suggestedFixes: [`增加图表稳定等待 ${reporterSecret}`, '检查 /api/chart 响应耗时'],
       modelName: 'reporter-large',
       metrics: {
         durationMs: 50,
@@ -1193,13 +1289,13 @@ describe('StudioRuntime agent observation', () => {
       { report },
       { writeReporterReport },
     );
-    const agentModelConfig: AgentModelConfig = {
-      ...defaultAgentModelConfig,
+    const agentModelConfig: ResolvedAgentModelConfig = {
+      ...defaultResolvedAgentModelConfig,
       reporter: {
-        ...defaultAgentModelConfig.reporter,
+        ...defaultResolvedAgentModelConfig.reporter,
         provider: 'openaiCompatible',
         modelBaseUrl: 'https://reporter.example.test/v1',
-        modelApiKey: 'reporter-secret',
+        modelApiKey: reporterSecret,
         modelName: 'reporter-large',
         modelFamily: 'openai',
         temperature: '0.1',
@@ -1226,23 +1322,25 @@ describe('StudioRuntime agent observation', () => {
     expect(report).toHaveBeenCalledWith(
       expect.objectContaining({
         config: expect.objectContaining({
-          modelApiKey: 'reporter-secret',
+          modelApiKey: reporterSecret,
           modelName: 'reporter-large',
         }),
         run: expect.objectContaining({
           status: 'failed',
-          failureReason: '图表未刷新完成。',
+          failureReason: expect.stringContaining('[REDACTED_MODEL_SECRET]'),
         }),
       }),
     );
+    expect(JSON.stringify(report.mock.calls[0]?.[0]?.run)).not.toContain(reporterSecret);
     expect(response.agentRun.status).toBe('failed');
     expect(response.agentRun.summary).toContain('Reporter 判断失败集中在图表刷新未完成。');
+    expect(response.agentRun.summary).toContain('[REDACTED_MODEL_SECRET]');
     expect(response.agentRun.reporter).toEqual(expect.objectContaining({
-      summary: 'Reporter 判断失败集中在图表刷新未完成。',
-      evidenceSummary: '断言失败证据：页面仍显示加载中。',
-      failureAnalysis: '图表接口或前端渲染可能未在等待窗口内完成。',
-      suggestedFixes: ['增加图表稳定等待', '检查 /api/chart 响应耗时'],
-      recoveryPlan: expect.objectContaining({ strategy: 'observe', reason: '图表未刷新完成。' }),
+      summary: expect.stringContaining('[REDACTED_MODEL_SECRET]'),
+      evidenceSummary: expect.stringContaining('[REDACTED_MODEL_SECRET]'),
+      failureAnalysis: expect.stringContaining('[REDACTED_MODEL_SECRET]'),
+      suggestedFixes: [expect.stringContaining('[REDACTED_MODEL_SECRET]'), '检查 /api/chart 响应耗时'],
+      recoveryPlan: expect.objectContaining({ strategy: 'observe', reason: expect.stringContaining('[REDACTED_MODEL_SECRET]') }),
       modelName: 'reporter-large',
     }));
     expect(response.agentRun.artifacts).toEqual(
@@ -1265,8 +1363,11 @@ describe('StudioRuntime agent observation', () => {
         markdown: expect.stringContaining('## 失败归因'),
       }),
     );
+    const reporterMarkdown = writeReporterReport.mock.calls[0]?.[0]?.markdown ?? '';
+    expect(reporterMarkdown).toContain('[REDACTED_MODEL_SECRET]');
+    expect(JSON.stringify({ response, reporterMarkdown })).not.toContain(reporterSecret);
     expect(response.agentRun.metrics).toEqual(expect.objectContaining({ calls: 2, totalTokens: 56 }));
-    expect(JSON.stringify(response.agentRun)).not.toContain('reporter-secret');
+    expect(JSON.stringify(response.agentRun)).not.toContain(reporterSecret);
   });
 
   it('replans once after a failed Planner browser step and continues with the revised step', async () => {
@@ -1376,10 +1477,10 @@ describe('StudioRuntime agent observation', () => {
       undefined,
       { createPlan },
     );
-    const agentModelConfig: AgentModelConfig = {
-      ...defaultAgentModelConfig,
+    const agentModelConfig: ResolvedAgentModelConfig = {
+      ...defaultResolvedAgentModelConfig,
       planner: {
-        ...defaultAgentModelConfig.planner,
+        ...defaultResolvedAgentModelConfig.planner,
         provider: 'openaiCompatible',
         modelBaseUrl: 'https://planner.example.test/v1',
         modelApiKey: 'planner-secret',
@@ -1539,10 +1640,10 @@ describe('StudioRuntime agent observation', () => {
       undefined,
       { createPlan },
     );
-    const agentModelConfig: AgentModelConfig = {
-      ...defaultAgentModelConfig,
+    const agentModelConfig: ResolvedAgentModelConfig = {
+      ...defaultResolvedAgentModelConfig,
       planner: {
-        ...defaultAgentModelConfig.planner,
+        ...defaultResolvedAgentModelConfig.planner,
         provider: 'openaiCompatible',
         modelBaseUrl: 'https://planner.example.test/v1',
         modelApiKey: 'planner-secret',
@@ -1696,10 +1797,10 @@ describe('StudioRuntime agent observation', () => {
       undefined,
       { createPlan },
     );
-    const agentModelConfig: AgentModelConfig = {
-      ...defaultAgentModelConfig,
+    const agentModelConfig: ResolvedAgentModelConfig = {
+      ...defaultResolvedAgentModelConfig,
       planner: {
-        ...defaultAgentModelConfig.planner,
+        ...defaultResolvedAgentModelConfig.planner,
         provider: 'openaiCompatible',
         modelBaseUrl: 'https://planner.example.test/v1',
         modelApiKey: 'planner-secret',
@@ -1885,10 +1986,10 @@ describe('StudioRuntime agent observation', () => {
       undefined,
       { createPlan },
     );
-    const agentModelConfig: AgentModelConfig = {
-      ...defaultAgentModelConfig,
+    const agentModelConfig: ResolvedAgentModelConfig = {
+      ...defaultResolvedAgentModelConfig,
       planner: {
-        ...defaultAgentModelConfig.planner,
+        ...defaultResolvedAgentModelConfig.planner,
         provider: 'openaiCompatible',
         modelBaseUrl: 'https://planner.example.test/v1',
         modelApiKey: 'planner-secret',
@@ -2013,10 +2114,10 @@ describe('StudioRuntime agent observation', () => {
       undefined,
       { createPlan },
     );
-    const agentModelConfig: AgentModelConfig = {
-      ...defaultAgentModelConfig,
+    const agentModelConfig: ResolvedAgentModelConfig = {
+      ...defaultResolvedAgentModelConfig,
       planner: {
-        ...defaultAgentModelConfig.planner,
+        ...defaultResolvedAgentModelConfig.planner,
         provider: 'openaiCompatible',
         modelBaseUrl: 'https://planner.example.test/v1',
         modelApiKey: 'planner-secret',
@@ -2129,10 +2230,10 @@ describe('StudioRuntime agent observation', () => {
       undefined,
       { createPlan },
     );
-    const agentModelConfig: AgentModelConfig = {
-      ...defaultAgentModelConfig,
+    const agentModelConfig: ResolvedAgentModelConfig = {
+      ...defaultResolvedAgentModelConfig,
       planner: {
-        ...defaultAgentModelConfig.planner,
+        ...defaultResolvedAgentModelConfig.planner,
         provider: 'openaiCompatible',
         modelBaseUrl: 'https://planner.example.test/v1',
         modelApiKey: 'planner-secret',
@@ -2251,10 +2352,10 @@ describe('StudioRuntime agent observation', () => {
       undefined,
       { createPlan },
     );
-    const agentModelConfig: AgentModelConfig = {
-      ...defaultAgentModelConfig,
+    const agentModelConfig: ResolvedAgentModelConfig = {
+      ...defaultResolvedAgentModelConfig,
       planner: {
-        ...defaultAgentModelConfig.planner,
+        ...defaultResolvedAgentModelConfig.planner,
         provider: 'openaiCompatible',
         modelBaseUrl: 'https://planner.example.test/v1',
         modelApiKey: 'planner-secret',
@@ -2365,10 +2466,10 @@ describe('StudioRuntime agent observation', () => {
       undefined,
       { createPlan },
     );
-    const agentModelConfig: AgentModelConfig = {
-      ...defaultAgentModelConfig,
+    const agentModelConfig: ResolvedAgentModelConfig = {
+      ...defaultResolvedAgentModelConfig,
       planner: {
-        ...defaultAgentModelConfig.planner,
+        ...defaultResolvedAgentModelConfig.planner,
         provider: 'openaiCompatible',
         modelBaseUrl: 'https://planner.example.test/v1',
         modelApiKey: 'planner-secret',
@@ -2485,10 +2586,10 @@ describe('StudioRuntime agent observation', () => {
       undefined,
       { createPlan },
     );
-    const agentModelConfig: AgentModelConfig = {
-      ...defaultAgentModelConfig,
+    const agentModelConfig: ResolvedAgentModelConfig = {
+      ...defaultResolvedAgentModelConfig,
       planner: {
-        ...defaultAgentModelConfig.planner,
+        ...defaultResolvedAgentModelConfig.planner,
         provider: 'openaiCompatible',
         modelBaseUrl: 'https://planner.example.test/v1',
         modelApiKey: 'planner-secret',
@@ -2609,10 +2710,10 @@ describe('StudioRuntime agent observation', () => {
       undefined,
       { createPlan },
     );
-    const agentModelConfig: AgentModelConfig = {
-      ...defaultAgentModelConfig,
+    const agentModelConfig: ResolvedAgentModelConfig = {
+      ...defaultResolvedAgentModelConfig,
       planner: {
-        ...defaultAgentModelConfig.planner,
+        ...defaultResolvedAgentModelConfig.planner,
         provider: 'openaiCompatible',
         modelBaseUrl: 'https://planner.example.test/v1',
         modelApiKey: 'planner-secret',
@@ -2726,10 +2827,10 @@ describe('StudioRuntime agent observation', () => {
       undefined,
       { createPlan },
     );
-    const agentModelConfig: AgentModelConfig = {
-      ...defaultAgentModelConfig,
+    const agentModelConfig: ResolvedAgentModelConfig = {
+      ...defaultResolvedAgentModelConfig,
       planner: {
-        ...defaultAgentModelConfig.planner,
+        ...defaultResolvedAgentModelConfig.planner,
         provider: 'openaiCompatible',
         modelBaseUrl: 'https://planner.example.test/v1',
         modelApiKey: 'planner-secret',
@@ -2859,10 +2960,10 @@ describe('StudioRuntime agent observation', () => {
       undefined,
       { createPlan },
     );
-    const agentModelConfig: AgentModelConfig = {
-      ...defaultAgentModelConfig,
+    const agentModelConfig: ResolvedAgentModelConfig = {
+      ...defaultResolvedAgentModelConfig,
       planner: {
-        ...defaultAgentModelConfig.planner,
+        ...defaultResolvedAgentModelConfig.planner,
         provider: 'openaiCompatible',
         modelBaseUrl: 'https://planner.example.test/v1',
         modelApiKey: 'planner-secret',
@@ -2978,10 +3079,10 @@ describe('StudioRuntime agent observation', () => {
       undefined,
       { createPlan },
     );
-    const agentModelConfig: AgentModelConfig = {
-      ...defaultAgentModelConfig,
+    const agentModelConfig: ResolvedAgentModelConfig = {
+      ...defaultResolvedAgentModelConfig,
       planner: {
-        ...defaultAgentModelConfig.planner,
+        ...defaultResolvedAgentModelConfig.planner,
         provider: 'openaiCompatible',
         modelBaseUrl: 'https://planner.example.test/v1',
         modelApiKey: 'planner-secret',
@@ -3077,10 +3178,10 @@ describe('StudioRuntime agent observation', () => {
       undefined,
       { createPlan },
     );
-    const agentModelConfig: AgentModelConfig = {
-      ...defaultAgentModelConfig,
+    const agentModelConfig: ResolvedAgentModelConfig = {
+      ...defaultResolvedAgentModelConfig,
       planner: {
-        ...defaultAgentModelConfig.planner,
+        ...defaultResolvedAgentModelConfig.planner,
         provider: 'openaiCompatible',
         modelBaseUrl: 'https://planner.example.test/v1',
         modelApiKey: 'planner-secret',
@@ -3187,10 +3288,10 @@ describe('StudioRuntime agent observation', () => {
       undefined,
       { createPlan },
     );
-    const agentModelConfig: AgentModelConfig = {
-      ...defaultAgentModelConfig,
+    const agentModelConfig: ResolvedAgentModelConfig = {
+      ...defaultResolvedAgentModelConfig,
       planner: {
-        ...defaultAgentModelConfig.planner,
+        ...defaultResolvedAgentModelConfig.planner,
         provider: 'openaiCompatible',
         modelBaseUrl: 'https://planner.example.test/v1',
         modelApiKey: 'planner-secret',
@@ -3292,10 +3393,10 @@ describe('StudioRuntime agent observation', () => {
       getState: () => currentState,
     };
     const runtime = new StudioRuntime(vi.fn(), browserObserver, undefined, { createPlan });
-    const agentModelConfig: AgentModelConfig = {
-      ...defaultAgentModelConfig,
+    const agentModelConfig: ResolvedAgentModelConfig = {
+      ...defaultResolvedAgentModelConfig,
       planner: {
-        ...defaultAgentModelConfig.planner,
+        ...defaultResolvedAgentModelConfig.planner,
         provider: 'openaiCompatible',
         modelBaseUrl: 'https://planner.example.test/v1',
         modelApiKey: 'planner-secret',
@@ -3390,10 +3491,10 @@ describe('StudioRuntime agent observation', () => {
       getState: () => currentState,
     };
     const runtime = new StudioRuntime(vi.fn(), browserObserver, undefined, { createPlan });
-    const agentModelConfig: AgentModelConfig = {
-      ...defaultAgentModelConfig,
+    const agentModelConfig: ResolvedAgentModelConfig = {
+      ...defaultResolvedAgentModelConfig,
       planner: {
-        ...defaultAgentModelConfig.planner,
+        ...defaultResolvedAgentModelConfig.planner,
         provider: 'openaiCompatible',
         modelBaseUrl: 'https://planner.example.test/v1',
         modelApiKey: 'planner-secret',
@@ -3487,10 +3588,10 @@ describe('StudioRuntime agent observation', () => {
       getState: () => currentState,
     };
     const runtime = new StudioRuntime(vi.fn(), browserObserver, undefined, { createPlan });
-    const agentModelConfig: AgentModelConfig = {
-      ...defaultAgentModelConfig,
+    const agentModelConfig: ResolvedAgentModelConfig = {
+      ...defaultResolvedAgentModelConfig,
       planner: {
-        ...defaultAgentModelConfig.planner,
+        ...defaultResolvedAgentModelConfig.planner,
         provider: 'openaiCompatible',
         modelBaseUrl: 'https://planner.example.test/v1',
         modelApiKey: 'planner-secret',
@@ -3603,10 +3704,10 @@ describe('StudioRuntime agent observation', () => {
       undefined,
       { createPlan },
     );
-    const agentModelConfig: AgentModelConfig = {
-      ...defaultAgentModelConfig,
+    const agentModelConfig: ResolvedAgentModelConfig = {
+      ...defaultResolvedAgentModelConfig,
       planner: {
-        ...defaultAgentModelConfig.planner,
+        ...defaultResolvedAgentModelConfig.planner,
         provider: 'openaiCompatible',
         modelBaseUrl: 'https://planner.example.test/v1',
         modelApiKey: 'planner-secret',
@@ -4099,7 +4200,7 @@ describe('StudioRuntime agent observation', () => {
         getState: () => currentState,
       },
       {
-        click: vi.fn().mockRejectedValue(new Error('模型服务不可用')),
+        click: vi.fn().mockRejectedValue(new Error('模型服务不可用: test-key')),
         input: vi.fn(),
         assert: vi.fn(),
       },
@@ -4126,6 +4227,372 @@ describe('StudioRuntime agent observation', () => {
     expect(response.agentRun?.events.find((event) => event.type === 'agent:browser-action')?.message).toContain(
       '语义动作执行失败',
     );
+    expect(JSON.stringify(response)).not.toContain('test-key');
+    expect(JSON.stringify(response)).toContain('[REDACTED_MODEL_SECRET]');
+  });
+
+  it('redacts lazily resolved Midscene secrets from semantic runtime errors', async () => {
+    const currentState: BrowserSessionState = {
+      id: 'session-lazy-midscene-error',
+      status: 'ready',
+      currentUrl: 'https://example.test/login',
+      pageTitle: 'Login',
+      screenshotPath: '/tmp/login.png',
+      message: 'ready',
+      updatedAt: '2026-08-20T00:00:00.000Z',
+    };
+    const lazySecret = 'lazy-midscene-secret';
+    const runtime = new StudioRuntime(
+      vi.fn(),
+      {
+        start: vi.fn(),
+        navigate: vi.fn(),
+        click: vi.fn(),
+        input: vi.fn(),
+        capture: vi.fn<() => Promise<BrowserSessionState>>().mockResolvedValue(currentState),
+        getState: () => currentState,
+      },
+      {
+        click: vi.fn().mockRejectedValue(new Error(`模型服务不可用: ${lazySecret}`)),
+        input: vi.fn(),
+        assert: vi.fn(),
+      },
+    );
+
+    const response = await runtime.sendChatCommand({
+      mode: 'ai',
+      prompt: '点击登录按钮',
+      targetEnvironment: 'staging',
+      deepThink: true,
+      deepLocate: true,
+      runtimeProfile: {
+        browser: 'chromium',
+        baseUrl: 'https://example.test',
+        viewport: 'desktop',
+        locale: 'zh-CN',
+        headless: false,
+      },
+      modelConfigResolver: {
+        resolveMidsceneConfig: vi.fn().mockResolvedValue({ ...midsceneConfig, modelApiKey: lazySecret }),
+        resolveAgentProviderConfig: vi.fn().mockResolvedValue({}),
+      },
+    });
+
+    expect(JSON.stringify(response)).not.toContain(lazySecret);
+    expect(JSON.stringify(response)).toContain('[REDACTED_MODEL_SECRET]');
+  });
+
+  it('cancels lazy Midscene resolution before semantic execution begins', async () => {
+    const currentState: BrowserSessionState = {
+      id: 'session-lazy-midscene-cancelled',
+      status: 'ready',
+      currentUrl: 'https://example.test/login',
+      pageTitle: 'Login',
+      screenshotPath: '/tmp/login.png',
+      message: 'ready',
+      updatedAt: '2026-08-20T00:00:00.000Z',
+    };
+    let resolveConfig: (config: typeof midsceneConfig) => void = () => undefined;
+    let signalResolverStarted: () => void = () => undefined;
+    const resolverStarted = new Promise<void>((resolve) => {
+      signalResolverStarted = resolve;
+    });
+    const resolveMidsceneConfig = vi.fn(() => new Promise<typeof midsceneConfig>((resolve) => {
+      resolveConfig = resolve;
+      signalResolverStarted();
+    }));
+    const semanticClick = vi.fn().mockResolvedValue({ status: 'passed', message: '不应执行。' });
+    const runtime = new StudioRuntime(
+      vi.fn(),
+      {
+        start: vi.fn(),
+        navigate: vi.fn(),
+        click: vi.fn(),
+        input: vi.fn(),
+        capture: vi.fn<() => Promise<BrowserSessionState>>().mockResolvedValue(currentState),
+        getState: () => currentState,
+      },
+      { click: semanticClick, input: vi.fn(), assert: vi.fn() },
+    );
+    const controller = new AbortController();
+    const pending = runtime.sendChatCommand({
+      mode: 'ai',
+      prompt: '点击登录按钮',
+      targetEnvironment: 'staging',
+      deepThink: true,
+      deepLocate: true,
+      cancellationSignal: controller.signal,
+      runtimeProfile: {
+        browser: 'chromium',
+        baseUrl: 'https://example.test',
+        viewport: 'desktop',
+        locale: 'zh-CN',
+        headless: false,
+      },
+      modelConfigResolver: {
+        resolveMidsceneConfig,
+        resolveAgentProviderConfig: vi.fn().mockResolvedValue({}),
+      },
+    });
+
+    await resolverStarted;
+    controller.abort();
+    resolveConfig(midsceneConfig);
+
+    await expect(pending).rejects.toThrow('用户已取消运行。');
+    expect(semanticClick).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['click', 'ai', '点击登录按钮'],
+    ['input', 'ai', '在用户名输入 chris'],
+    ['select', 'ai', '在报表周期中选择近 30 天'],
+    ['extract', 'aiQuery', '提取当前订单总额'],
+    ['assert', 'aiAssert', '验证页面已经显示登录成功提示'],
+  ] as const)('cancels lazy Midscene resolution before %s semantic execution begins', async (path, mode, prompt) => {
+    const currentState: BrowserSessionState = {
+      id: `session-lazy-midscene-${path}-cancelled`,
+      status: 'ready',
+      currentUrl: 'https://example.test/login',
+      pageTitle: 'Login',
+      screenshotPath: '/tmp/login.png',
+      message: 'ready',
+      updatedAt: '2026-08-20T00:00:00.000Z',
+    };
+    let resolveConfig: (config: typeof midsceneConfig) => void = () => undefined;
+    let signalResolverStarted: () => void = () => undefined;
+    const resolverStarted = new Promise<void>((resolve) => {
+      signalResolverStarted = resolve;
+    });
+    const resolveMidsceneConfig = vi.fn(() => new Promise<typeof midsceneConfig>((resolve) => {
+      resolveConfig = resolve;
+      signalResolverStarted();
+    }));
+    const semanticAction = vi.fn().mockResolvedValue({ status: 'passed', message: '不应执行。' });
+    const runtime = new StudioRuntime(
+      vi.fn(),
+      {
+        start: vi.fn(),
+        navigate: vi.fn(),
+        click: vi.fn(),
+        input: vi.fn(),
+        capture: vi.fn<() => Promise<BrowserSessionState>>().mockResolvedValue(currentState),
+        getState: () => currentState,
+      },
+      {
+        click: path === 'click' ? semanticAction : vi.fn(),
+        input: path === 'input' ? semanticAction : vi.fn(),
+        select: path === 'select' ? semanticAction : vi.fn(),
+        extract: path === 'extract' ? semanticAction : vi.fn(),
+        assert: path === 'assert' ? semanticAction : vi.fn(),
+      },
+    );
+    const controller = new AbortController();
+    const pending = runtime.sendChatCommand({
+      mode,
+      prompt,
+      targetEnvironment: 'staging',
+      deepThink: true,
+      deepLocate: true,
+      cancellationSignal: controller.signal,
+      runtimeProfile: {
+        browser: 'chromium',
+        baseUrl: 'https://example.test',
+        viewport: 'desktop',
+        locale: 'zh-CN',
+        headless: false,
+      },
+      modelConfigResolver: {
+        resolveMidsceneConfig,
+        resolveAgentProviderConfig: vi.fn().mockResolvedValue({}),
+      },
+    });
+
+    await resolverStarted;
+    controller.abort();
+    resolveConfig(midsceneConfig);
+
+    await expect(pending).rejects.toThrow('用户已取消运行。');
+    expect(semanticAction).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['click', 'ai', '点击登录按钮'],
+    ['input', 'ai', '在用户名输入 chris'],
+    ['select', 'ai', '在报表周期中选择近 30 天'],
+    ['extract', 'aiQuery', '提取当前订单总额'],
+    ['assert', 'aiAssert', '验证页面已经显示登录成功提示'],
+  ] as const)('redacts lazily resolved Midscene secrets from %s semantic action errors', async (path, mode, prompt) => {
+    const currentState: BrowserSessionState = {
+      id: `session-lazy-midscene-${path}-error`,
+      status: 'ready',
+      currentUrl: 'https://example.test/login',
+      pageTitle: 'Login',
+      screenshotPath: '/tmp/login.png',
+      message: 'ready',
+      updatedAt: '2026-08-20T00:00:00.000Z',
+    };
+    const lazySecret = `lazy-midscene-${path}-secret`;
+    const semanticAction = vi.fn().mockRejectedValue(new Error(`模型服务不可用: ${lazySecret}`));
+    const runtime = new StudioRuntime(
+      vi.fn(),
+      {
+        start: vi.fn(),
+        navigate: vi.fn(),
+        click: vi.fn(),
+        input: vi.fn(),
+        capture: vi.fn<() => Promise<BrowserSessionState>>().mockResolvedValue(currentState),
+        getState: () => currentState,
+      },
+      {
+        click: path === 'click' ? semanticAction : vi.fn(),
+        input: path === 'input' ? semanticAction : vi.fn(),
+        select: path === 'select' ? semanticAction : vi.fn(),
+        extract: path === 'extract' ? semanticAction : vi.fn(),
+        assert: path === 'assert' ? semanticAction : vi.fn(),
+      },
+    );
+
+    const response = await runtime.sendChatCommand({
+      mode,
+      prompt,
+      targetEnvironment: 'staging',
+      deepThink: true,
+      deepLocate: true,
+      runtimeProfile: {
+        browser: 'chromium',
+        baseUrl: 'https://example.test',
+        viewport: 'desktop',
+        locale: 'zh-CN',
+        headless: false,
+      },
+      modelConfigResolver: {
+        resolveMidsceneConfig: vi.fn().mockResolvedValue({ ...midsceneConfig, modelApiKey: lazySecret }),
+        resolveAgentProviderConfig: vi.fn().mockResolvedValue({}),
+      },
+    });
+
+    expect(JSON.stringify(response)).not.toContain(lazySecret);
+    expect(JSON.stringify(response)).toContain('[REDACTED_MODEL_SECRET]');
+  });
+
+  it.each([
+    ['click', 'ai', '点击登录按钮', '等待 Midscene 语义定位执行'],
+    ['input', 'ai', '在用户名输入 chris', '等待 Midscene 语义定位执行'],
+    ['select', 'ai', '在报表周期中选择近 30 天', '等待 Midscene 语义选择执行'],
+    ['extract', 'aiQuery', '提取当前订单总额', '等待 Midscene 语义提取执行'],
+    ['assert', 'aiAssert', '验证页面已经显示登录成功提示', '等待 Verifier 或 Midscene 根据页面上下文执行判断'],
+  ] as const)('keeps %s semantic actions pending without resolving Midscene config when runtime is absent', async (
+    _path,
+    mode,
+    prompt,
+    pendingMessage,
+  ) => {
+    const currentState: BrowserSessionState = {
+      id: `session-no-runtime-${mode}`,
+      status: 'ready',
+      currentUrl: 'https://example.test/login',
+      pageTitle: 'Login',
+      screenshotPath: '/tmp/login.png',
+      message: 'ready',
+      updatedAt: '2026-08-20T00:00:00.000Z',
+    };
+    const resolveMidsceneConfig = vi.fn().mockRejectedValue(new Error('Midscene config must not be resolved'));
+    const resolveAgentProviderConfig = vi.fn().mockRejectedValue(new Error('Agent provider must not be resolved'));
+    const runtime = new StudioRuntime(vi.fn(), {
+      start: vi.fn(),
+      navigate: vi.fn(),
+      click: vi.fn(),
+      input: vi.fn(),
+      select: vi.fn(),
+      capture: vi.fn<() => Promise<BrowserSessionState>>().mockResolvedValue(currentState),
+      getState: () => currentState,
+    });
+
+    const response = await runtime.sendChatCommand({
+      mode,
+      prompt,
+      targetEnvironment: 'staging',
+      deepThink: true,
+      deepLocate: true,
+      runtimeProfile: {
+        browser: 'chromium',
+        baseUrl: 'https://example.test',
+        viewport: 'desktop',
+        locale: 'zh-CN',
+        headless: false,
+      },
+      modelConfigResolver: {
+        resolveMidsceneConfig,
+        resolveAgentProviderConfig,
+      },
+    });
+
+    expect(resolveMidsceneConfig).not.toHaveBeenCalled();
+    expect(resolveAgentProviderConfig).not.toHaveBeenCalled();
+    expect(response.agentRun?.status).toBe('neutral');
+    expect(response.agentRun?.events.find((event) => event.type === 'agent:browser-action')?.message).toContain(
+      pendingMessage,
+    );
+  });
+
+  it('cancels a semantic select while capturing its post-action browser state', async () => {
+    const currentState: BrowserSessionState = {
+      id: 'session-semantic-select-capture-cancelled',
+      status: 'ready',
+      currentUrl: 'https://example.test/reports',
+      pageTitle: 'Reports',
+      screenshotPath: '/tmp/reports.png',
+      message: 'ready',
+      updatedAt: '2026-08-20T00:00:00.000Z',
+    };
+    let notifyCaptureStarted: () => void = () => undefined;
+    const captureStarted = new Promise<void>((resolve) => {
+      notifyCaptureStarted = resolve;
+    });
+    const capture = vi.fn<() => Promise<BrowserSessionState>>()
+      .mockResolvedValueOnce(currentState)
+      .mockImplementationOnce(() => {
+        notifyCaptureStarted();
+        return new Promise<BrowserSessionState>(() => undefined);
+      });
+    const semanticSelect = vi.fn().mockResolvedValue({ status: 'passed', message: '已选择近 30 天。' });
+    const runtime = new StudioRuntime(
+      vi.fn(),
+      {
+        start: vi.fn(),
+        navigate: vi.fn(),
+        click: vi.fn(),
+        input: vi.fn(),
+        capture,
+        getState: () => currentState,
+      },
+      { click: vi.fn(), input: vi.fn(), select: semanticSelect, assert: vi.fn() },
+    );
+    const controller = new AbortController();
+    const pending = runtime.sendChatCommand({
+      mode: 'ai',
+      prompt: '在报表周期中选择近 30 天',
+      targetEnvironment: 'staging',
+      deepThink: true,
+      deepLocate: true,
+      cancellationSignal: controller.signal,
+      midsceneConfig,
+      runtimeProfile: {
+        browser: 'chromium',
+        baseUrl: 'https://example.test',
+        viewport: 'desktop',
+        locale: 'zh-CN',
+        headless: false,
+      },
+    });
+
+    await captureStarted;
+    controller.abort();
+
+    await expect(pending).rejects.toThrow('用户已取消运行。');
+    expect(semanticSelect).toHaveBeenCalledOnce();
+    expect(capture).toHaveBeenCalledTimes(2);
   });
 
   it('passes an explicit URL contains assertion against the current browser state', async () => {
@@ -5862,6 +6329,80 @@ describe('StudioRuntime agent observation', () => {
     );
   });
 
+  it('resolves Midscene config lazily for semantic workflow actions', async () => {
+    const currentState: BrowserSessionState = {
+      id: 'session-workflow-lazy-midscene',
+      status: 'ready',
+      currentUrl: 'https://example.test/login',
+      pageTitle: 'Login',
+      screenshotPath: '/tmp/login.png',
+      message: 'ready',
+      updatedAt: '2026-08-20T00:00:00.000Z',
+    };
+    const lazyMidsceneConfig = { ...midsceneConfig, modelApiKey: 'workflow-lazy-secret' };
+    const resolveMidsceneConfig = vi.fn().mockResolvedValue(lazyMidsceneConfig);
+    const semanticClick = vi.fn().mockResolvedValue({
+      status: 'passed',
+      message: 'Midscene 已点击登录按钮。',
+    });
+    const semanticInput = vi.fn().mockResolvedValue({
+      status: 'passed',
+      message: 'Midscene 已填写用户名。',
+    });
+    const runtime = new StudioRuntime(
+      vi.fn(),
+      {
+        start: vi.fn(),
+        navigate: vi.fn(),
+        click: vi.fn(),
+        input: vi.fn(),
+        capture: vi.fn<() => Promise<BrowserSessionState>>().mockResolvedValue(currentState),
+        getState: () => currentState,
+      },
+      { click: semanticClick, input: semanticInput, assert: vi.fn() },
+    );
+
+    const response = await runtime.runWorkflow({
+      workflow: {
+        id: 'workflow-lazy-midscene',
+        kind: 'scenario',
+        name: '懒加载登录流程',
+        category: '核心链路',
+        lastEdited: '刚刚',
+        url: currentState.currentUrl,
+        notes: '',
+        steps: [
+          { id: 'step-lazy-click', type: 'ai', title: '点击登录', body: '点击登录按钮' },
+          { id: 'step-lazy-input', type: 'ai', title: '填写用户名', body: '在用户名输入 chris' },
+        ],
+      },
+      targetEnvironment: 'staging',
+      runtimeProfile: {
+        browser: 'chromium',
+        baseUrl: 'https://example.test',
+        viewport: 'desktop',
+        locale: 'zh-CN',
+        headless: true,
+      },
+      modelConfigResolver: {
+        resolveMidsceneConfig,
+        resolveAgentProviderConfig: vi.fn().mockResolvedValue({}),
+      },
+    });
+
+    expect(resolveMidsceneConfig).toHaveBeenCalledTimes(2);
+    expect(semanticClick).toHaveBeenCalledWith(expect.objectContaining({
+      target: '登录按钮',
+      config: lazyMidsceneConfig,
+    }));
+    expect(semanticInput).toHaveBeenCalledWith(expect.objectContaining({
+      target: '用户名',
+      value: 'chris',
+      config: lazyMidsceneConfig,
+    }));
+    expect(response.agentRun.status).toBe('passed');
+  });
+
   it('projects unsupported workflow actions to a blocked persisted result', async () => {
     const currentState: BrowserSessionState = {
       id: 'session-ready',
@@ -6032,10 +6573,10 @@ describe('StudioRuntime agent observation', () => {
       undefined,
       { createPlan },
     );
-    const agentModelConfig: AgentModelConfig = {
-      ...defaultAgentModelConfig,
+    const agentModelConfig: ResolvedAgentModelConfig = {
+      ...defaultResolvedAgentModelConfig,
       planner: {
-        ...defaultAgentModelConfig.planner,
+        ...defaultResolvedAgentModelConfig.planner,
         provider: 'openaiCompatible',
         modelBaseUrl: 'https://planner.example.test/v1',
         modelApiKey: 'planner-secret',
@@ -6123,10 +6664,10 @@ describe('StudioRuntime agent observation', () => {
       undefined,
       { verify },
     );
-    const agentModelConfig: AgentModelConfig = {
-      ...defaultAgentModelConfig,
+    const agentModelConfig: ResolvedAgentModelConfig = {
+      ...defaultResolvedAgentModelConfig,
       verifier: {
-        ...defaultAgentModelConfig.verifier,
+        ...defaultResolvedAgentModelConfig.verifier,
         provider: 'openaiCompatible',
         modelBaseUrl: 'https://verifier.example.test/v1',
         modelApiKey: 'verifier-secret',
@@ -6213,10 +6754,10 @@ describe('StudioRuntime agent observation', () => {
       { report },
       { writeReporterReport },
     );
-    const agentModelConfig: AgentModelConfig = {
-      ...defaultAgentModelConfig,
+    const agentModelConfig: ResolvedAgentModelConfig = {
+      ...defaultResolvedAgentModelConfig,
       reporter: {
-        ...defaultAgentModelConfig.reporter,
+        ...defaultResolvedAgentModelConfig.reporter,
         provider: 'openaiCompatible',
         modelBaseUrl: 'https://reporter.example.test/v1',
         modelApiKey: 'reporter-secret',
@@ -6318,10 +6859,10 @@ describe('StudioRuntime agent observation', () => {
       { click: semanticClick, input: vi.fn(), assert: vi.fn() },
       { createPlan },
     );
-    const agentModelConfig: AgentModelConfig = {
-      ...defaultAgentModelConfig,
+    const agentModelConfig: ResolvedAgentModelConfig = {
+      ...defaultResolvedAgentModelConfig,
       planner: {
-        ...defaultAgentModelConfig.planner,
+        ...defaultResolvedAgentModelConfig.planner,
         provider: 'openaiCompatible',
         modelBaseUrl: 'https://planner.example.test/v1',
         modelApiKey: 'planner-secret',

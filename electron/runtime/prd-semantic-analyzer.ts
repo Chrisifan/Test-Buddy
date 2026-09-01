@@ -11,8 +11,17 @@ import {
   updatePrdDocumentAnalysis,
 } from '../../shared/studio.js';
 import type { AgentPlannerModelConfig } from './agent-planner.js';
+import type { ResolvedAgentModelConfig, ResolvedMidsceneConfig } from './model-config-resolver.js';
 
 type SemanticStepType = TestStepDraft['type'];
+
+export type ResolvedPrdSemanticAnalysisRequest = Omit<PrdSemanticAnalysisRequest, 'midsceneConfig' | 'agentModelConfig'> & {
+  /** Private resolved configuration supplied immediately before the Planner provider call. */
+  plannerConfig?: AgentPlannerModelConfig;
+  /** Compatibility path for static internally-resolved test configurations. */
+  midsceneConfig?: ResolvedMidsceneConfig;
+  agentModelConfig?: ResolvedAgentModelConfig;
+};
 
 interface PrdSemanticPathRefinement {
   pathId: string;
@@ -210,12 +219,20 @@ export class OpenAICompatiblePrdSemanticAnalyzer implements PrdSemanticAnalyzer 
 }
 
 function resolveSemanticModelConfig({
+  plannerConfig,
   midsceneConfig,
   agentModelConfig,
-}: Pick<PrdSemanticAnalysisRequest, 'midsceneConfig' | 'agentModelConfig'>): {
+}: ResolvedPrdSemanticAnalysisRequest): {
   config?: AgentPlannerModelConfig;
   fallbackReason?: PrdAnalysisFallbackReason;
 } {
+  if (plannerConfig) {
+    return { config: plannerConfig };
+  }
+  if (!midsceneConfig || !agentModelConfig) {
+    return { fallbackReason: 'modelNotConfigured' as const };
+  }
+
   const planner = {
     ...defaultAgentModelConfig.planner,
     ...(agentModelConfig.planner ?? {}),
@@ -311,7 +328,7 @@ function fallbackResponse(
 export class PrdSemanticAnalysisRuntime {
   constructor(private readonly analyzer: PrdSemanticAnalyzer = new OpenAICompatiblePrdSemanticAnalyzer()) {}
 
-  async analyze(request: PrdSemanticAnalysisRequest): Promise<PrdSemanticAnalysisResponse> {
+  async analyze(request: ResolvedPrdSemanticAnalysisRequest): Promise<PrdSemanticAnalysisResponse> {
     const baseline = updatePrdDocumentAnalysis(request.document);
     if (!baseline.generatedPaths.length) {
       return fallbackResponse(baseline, 'noRulePaths');

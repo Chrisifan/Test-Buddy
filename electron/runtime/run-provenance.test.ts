@@ -195,7 +195,7 @@ describe('run provenance', () => {
     expect(load).not.toHaveBeenCalled();
   });
 
-  it('blocks recorded Flow and Baseline references even when ad hoc snapshot properties contain matches', async () => {
+  it('resolves recorded Flow references exactly and keeps unsupported Baseline references blocked', async () => {
     const project = createVersionedProject();
     project.testCases[0]!.assetReferences = assetReferences();
     const provenance = createRunProvenance(
@@ -206,7 +206,7 @@ describe('run provenance', () => {
     );
     const injectedSnapshotProject = structuredClone(project);
     Object.assign(injectedSnapshotProject, {
-      reusableFlows: [{ id: 'flow-login', version: 2 }],
+      reusableFlows: [reusableFlow()],
       baselines: [{ id: 'baseline-dashboard', version: 3 }],
     });
 
@@ -218,7 +218,6 @@ describe('run provenance', () => {
       status: 'blocked',
       reason: { code: 'missingAssetVersion' },
       missingReferences: [
-        { id: 'flow-login', version: 2 },
         { id: 'baseline-dashboard', version: 3 },
       ],
     });
@@ -345,6 +344,32 @@ function fixture(): FixtureAsset {
   };
 }
 
+function reusableFlow() {
+  return {
+    schemaVersion: 1 as const,
+    id: 'flow-login',
+    version: 2,
+    name: 'Login setup',
+    description: '',
+    tags: [],
+    steps: [{
+      id: 'flow-open-login',
+      type: 'ai' as const,
+      title: 'Open login',
+      body: 'Open login',
+      execution: {
+        schemaVersion: 2 as const,
+        intent: 'Open login',
+        reviewStatus: 'confirmed' as const,
+        actionRisk: 'low' as const,
+        action: { kind: 'navigate' as const, url: 'https://example.test/login' },
+      },
+    }],
+    createdAt: '2026-08-16T00:00:00.000Z',
+    updatedAt: '2026-08-16T00:00:00.000Z',
+  };
+}
+
 function assetReferences(): TestCaseAssetReferences {
   return {
     fixtures: [{ id: 'fixture-account', version: 1 }],
@@ -361,7 +386,7 @@ function runtimeMetadata(endpoint = 'https://api-user:api-password@models.exampl
       provider: 'openaiCompatible',
       name: 'gpt-provenance',
       endpoint,
-      apiKey: 'api-key-not-persisted',
+      hasKey: true,
     },
     createdAt: '2026-08-16T00:00:00.000Z',
   };

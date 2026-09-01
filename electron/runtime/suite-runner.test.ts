@@ -1,9 +1,72 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { createEmptyProject, createEmptyTestCase, type SuiteAsset } from '../../shared/studio.js';
+import { BrowserPool } from './browser-pool.js';
 import { deriveSuiteCaseResourceLocks, SuiteRunner, type SuiteCaseExecutor } from './suite-runner.js';
 
 describe('SuiteRunner', () => {
+  it('acquires a fresh pool worker for every Suite Case and returns it after execution', async () => {
+    const { project, suite } = createSuiteProject({ concurrency: 1 });
+    const contexts = Array.from({ length: 3 }, () => ({ close: vi.fn().mockResolvedValue(undefined) }));
+    const newContext = vi.fn(async () => contexts.shift()!);
+    const browserPool = new BrowserPool({ createBrowser: async () => ({ newContext }) });
+    const receivedPools: BrowserPool[] = [];
+    const runner = new SuiteRunner({
+      execute: async ({ browserPool: receivedPool }) => {
+        if (receivedPool) {
+          receivedPools.push(receivedPool);
+        }
+        return { status: 'passed', summary: 'passed' };
+      },
+    }, { browserPool });
+
+    const result = await runner.run(project, suite);
+
+    expect(result.effectiveConcurrency).toBe(1);
+    expect(receivedPools).toEqual([browserPool, browserPool, browserPool]);
+    expect(newContext).toHaveBeenCalledTimes(3);
+    expect(browserPool.activeLeaseCount).toBe(0);
+    await browserPool.close();
+  });
+
+  it('caps qualified pool execution at capacity and returns every worker lease once', async () => {
+    const { project, suite } = createSuiteProject({ concurrency: 8 });
+    const contexts = Array.from({ length: 3 }, () => ({ close: vi.fn().mockResolvedValue(undefined) }));
+    const availableContexts = [...contexts];
+    const newContext = vi.fn(async () => availableContexts.shift()!);
+    const browserPool = new BrowserPool({
+      capacity: 2,
+      createBrowser: async () => ({ newContext }),
+    });
+    const firstTwoStarted = createDeferred<void>();
+    const releaseExecutions = createDeferred<void>();
+    let started = 0;
+    const runner = new SuiteRunner({
+      execute: async () => {
+        started += 1;
+        if (started === 2) firstTwoStarted.resolve();
+        await releaseExecutions.promise;
+        return { status: 'passed', summary: 'passed' };
+      },
+    }, { maxConcurrency: 10, browserPool });
+
+    const running = runner.run(project, suite);
+
+    await firstTwoStarted.promise;
+    expect(started).toBe(2);
+    expect(newContext).toHaveBeenCalledTimes(2);
+    expect(browserPool.activeLeaseCount).toBe(2);
+
+    releaseExecutions.resolve();
+    const result = await running;
+
+    expect(result.effectiveConcurrency).toBe(2);
+    expect(newContext).toHaveBeenCalledTimes(3);
+    expect(browserPool.activeLeaseCount).toBe(0);
+    contexts.forEach((context) => expect(context.close).toHaveBeenCalledOnce());
+    await browserPool.close();
+  });
+
   it('keeps declared order as a tie-breaker while waiting for exact Case dependencies', async () => {
     const { project, suite } = createSuiteProject({ concurrency: 2 });
     const checkout = project.testCases[0]!;
@@ -118,6 +181,79 @@ describe('SuiteRunner', () => {
     ]));
   });
 
+  it('lets already-started parallel fail-fast members finish while skipping pending locked and dependent members', async () => {
+    const { project, suite } = createSuiteProject({ concurrency: 2, failurePolicy: 'failFast' });
+    const [failing, allowed, locked] = project.testCases;
+    const dependent = { ...createEmptyTestCase(4, project.groups[0]!.id, suite.environmentId), id: 'case-dependent', version: 1 };
+    const later = { ...createEmptyTestCase(5, project.groups[0]!.id, suite.environmentId), id: 'case-later', version: 1 };
+    const fixture = {
+      schemaVersion: 1 as const,
+      id: 'fixture-shared-lock',
+      version: 1,
+      name: 'Shared lock',
+      description: '',
+      inputs: [],
+      outputs: [],
+      credentialIds: [],
+      environmentIds: [suite.environmentId],
+      setup: { mode: 'http' as const, summary: 'Set up.' },
+      concurrency: 'parallel' as const,
+      resourceLocks: ['account:shared'],
+      createdAt: '2026-08-11T00:00:00.000Z',
+      updatedAt: '2026-08-11T00:00:00.000Z',
+    };
+    project.fixtures = [fixture];
+    project.testCases = [
+      failing!,
+      { ...allowed!, assetReferences: { fixtures: [{ id: fixture.id, version: fixture.version }], reusableFlows: [] } },
+      { ...locked!, assetReferences: { fixtures: [{ id: fixture.id, version: fixture.version }], reusableFlows: [] } },
+      dependent!,
+      later!,
+    ];
+    suite.caseReferences = [
+      { id: failing!.id, version: failing!.version!, dependsOn: [] },
+      { id: allowed!.id, version: allowed!.version!, dependsOn: [] },
+      { id: locked!.id, version: locked!.version!, dependsOn: [] },
+      { id: dependent!.id, version: dependent!.version!, dependsOn: [{ id: failing!.id, version: failing!.version! }] },
+      { id: later!.id, version: later!.version!, dependsOn: [] },
+    ];
+    const failureGate = createDeferred<void>();
+    const allowedStarted = createDeferred<void>();
+    const finishAllowed = createDeferred<void>();
+    const calls: string[] = [];
+    const runner = new SuiteRunner({
+      execute: async ({ testCase }) => {
+        calls.push(testCase.id);
+        if (testCase.id === failing!.id) {
+          await failureGate.promise;
+          return { status: 'failed', summary: 'First parallel Case failed.' };
+        }
+        if (testCase.id === allowed!.id) {
+          allowedStarted.resolve();
+          await finishAllowed.promise;
+          return { status: 'passed', summary: 'Already-started Case completed.' };
+        }
+        throw new Error(`Unexpected dispatch: ${testCase.id}`);
+      },
+    }, { maxConcurrency: 2 });
+
+    const running = runner.run(project, suite);
+    await allowedStarted.promise;
+    failureGate.resolve();
+    await Promise.resolve();
+    finishAllowed.resolve();
+    const result = await running;
+
+    expect(calls).toEqual([failing!.id, allowed!.id]);
+    expect(result.results).toMatchObject([
+      { testCaseId: failing!.id, status: 'failed', attempts: 1 },
+      { testCaseId: allowed!.id, status: 'passed', attempts: 1 },
+      { testCaseId: locked!.id, status: 'skipped', attempts: 0, reason: { code: 'dependencyFailed', message: 'Suite stopped after a prior Case did not pass.' } },
+      { testCaseId: dependent!.id, status: 'skipped', attempts: 0, reason: { code: 'dependencyFailed', message: 'Suite stopped after a prior Case did not pass.' } },
+      { testCaseId: later!.id, status: 'skipped', attempts: 0, reason: { code: 'dependencyFailed', message: 'Suite stopped after a prior Case did not pass.' } },
+    ]);
+  });
+
   it('does not dispatch Cases after a cancellation request', async () => {
     const { project, suite } = createSuiteProject({ concurrency: 2 });
     const controller = new AbortController();
@@ -162,6 +298,45 @@ describe('SuiteRunner', () => {
       expect.objectContaining({ testCaseId: project.testCases[0]!.id, status: 'cancelled', runId: `run-${project.testCases[0]!.id}`, reason: expect.objectContaining({ code: 'userCancelled' }) }),
       expect.objectContaining({ testCaseId: project.testCases[1]!.id, status: 'cancelled', attempts: 0, reason: expect.objectContaining({ code: 'userCancelled' }) }),
     ]));
+  });
+
+  it('cancels unstarted pooled Cases with stable reasons and releases in-flight leases once', async () => {
+    const { project, suite } = createSuiteProject({ concurrency: 3 });
+    const contexts = Array.from({ length: 2 }, () => ({ close: vi.fn().mockResolvedValue(undefined) }));
+    const availableContexts = [...contexts];
+    const browserPool = new BrowserPool({
+      capacity: 2,
+      createBrowser: async () => ({ newContext: vi.fn(async () => availableContexts.shift()!) }),
+    });
+    const controller = new AbortController();
+    const firstTwoStarted = createDeferred<void>();
+    const finish = createDeferred<void>();
+    let starts = 0;
+    const runner = new SuiteRunner({
+      execute: async () => {
+        starts += 1;
+        if (starts === 2) firstTwoStarted.resolve();
+        await finish.promise;
+        return { status: 'passed', summary: 'late pass' };
+      },
+    }, { maxConcurrency: 3, browserPool });
+
+    const running = runner.run(project, suite, controller.signal);
+    await firstTwoStarted.promise;
+    controller.abort();
+    finish.resolve();
+    const result = await running;
+
+    expect(starts).toBe(2);
+    expect(result).toMatchObject({ status: 'cancelled', reason: { code: 'userCancelled' } });
+    expect(result.results).toMatchObject([
+      { testCaseId: project.testCases[0]!.id, status: 'cancelled', reason: { code: 'userCancelled' } },
+      { testCaseId: project.testCases[1]!.id, status: 'cancelled', reason: { code: 'userCancelled' } },
+      { testCaseId: project.testCases[2]!.id, status: 'cancelled', attempts: 0, reason: { code: 'userCancelled' } },
+    ]);
+    contexts.forEach((context) => expect(context.close).toHaveBeenCalledOnce());
+    expect(browserPool.activeLeaseCount).toBe(0);
+    await browserPool.close();
   });
 
   it('adds action-failed evidence to an external failed Case result without a reason', async () => {

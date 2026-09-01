@@ -6,6 +6,7 @@ import type {
   HistoricalRerunMissingReference,
   ProjectDraft,
   ProjectEnvironment,
+  ReusableFlowAsset,
   RunProvenance,
   RunReason,
   SuiteAsset,
@@ -30,7 +31,7 @@ export interface RunProvenanceRuntimeMetadata {
     provider?: string;
     name?: string;
     endpoint?: string;
-    apiKey?: string;
+    hasKey: boolean;
   };
   createdAt: string;
 }
@@ -43,6 +44,7 @@ export type RerunPlan =
     snapshot: ProjectSnapshot;
     testCase: TestCaseDraft;
     fixtures: FixtureAsset[];
+    reusableFlows: ReusableFlowAsset[];
     environment: ProjectEnvironment;
   }
   | {
@@ -127,7 +129,7 @@ function createRunProvenanceBase(
       ...(modelProvider ? { provider: modelProvider } : {}),
       ...(modelName ? { model: modelName } : {}),
       ...(fingerprint ? { endpointFingerprint: fingerprint } : {}),
-      hasKey: Boolean(nonEmpty(runtimeMetadata.model.apiKey)),
+      hasKey: runtimeMetadata.model.hasKey,
     },
     createdAt: runtimeMetadata.createdAt,
   };
@@ -158,11 +160,12 @@ export async function resolveRerunPlan(
 
   const testCase = findTestCaseVersion(snapshot.project, provenance.testCase);
   const fixtures = provenance.fixtures.map((reference) => findFixture(snapshot.project, reference));
+  const reusableFlows = provenance.reusableFlows.map((reference) => findReusableFlow(snapshot.project, reference));
   const environment = snapshot.project.environments.find((candidate) => candidate.id === provenance.environment.id);
   const missingReferences: RerunMissingReference[] = [
     ...(testCase ? [] : [copyReference(provenance.testCase)]),
     ...provenance.fixtures.flatMap((reference, index) => fixtures[index] ? [] : [copyReference(reference)]),
-    ...provenance.reusableFlows.map(copyReference),
+    ...provenance.reusableFlows.flatMap((reference, index) => reusableFlows[index] ? [] : [copyReference(reference)]),
     ...provenance.baselines.map(copyReference),
     ...(environment ? [] : [{ id: provenance.environment.id }]),
   ];
@@ -175,6 +178,7 @@ export async function resolveRerunPlan(
     snapshot,
     testCase: testCase!,
     fixtures: fixtures as FixtureAsset[],
+    reusableFlows: reusableFlows as ReusableFlowAsset[],
     environment: environment!,
   };
 }
@@ -243,6 +247,13 @@ function findFixture(
   reference: VersionedTestAssetReference,
 ): FixtureAsset | undefined {
   return project.fixtures.find((fixture) => fixture.id === reference.id && fixture.version === reference.version);
+}
+
+function findReusableFlow(
+  project: Pick<ProjectDraft, 'reusableFlows'>,
+  reference: VersionedTestAssetReference,
+): ReusableFlowAsset | undefined {
+  return project.reusableFlows.find((flow) => flow.id === reference.id && flow.version === reference.version);
 }
 
 function repositoryRerunReason(error: unknown): RunReason | undefined {

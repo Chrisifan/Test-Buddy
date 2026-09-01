@@ -1,4 +1,5 @@
-import type { MidsceneConfig, MidsceneConnectionTestResult } from '../../shared/studio.js';
+import type { MidsceneConnectionTestResult } from '../../shared/studio.js';
+import type { ResolvedMidsceneConfig } from './model-config-resolver.js';
 
 const connectionTimeoutMs = 15_000;
 
@@ -19,7 +20,7 @@ function completionEndpoint(baseUrl: string): string | undefined {
   }
 }
 
-function isConfigComplete(config: MidsceneConfig): boolean {
+function isConfigComplete(config: ResolvedMidsceneConfig): boolean {
   return Boolean(
     config.modelBaseUrl.trim() &&
       config.modelApiKey.trim() &&
@@ -29,7 +30,7 @@ function isConfigComplete(config: MidsceneConfig): boolean {
 }
 
 export async function testMidsceneConnection(
-  config: MidsceneConfig,
+  config: ResolvedMidsceneConfig,
   fetchImpl: typeof fetch = fetch,
 ): Promise<MidsceneConnectionTestResult> {
   const startedAt = Date.now();
