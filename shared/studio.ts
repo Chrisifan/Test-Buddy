@@ -1,4 +1,5 @@
 import type { AgentModelAssignment, AgentPlanStepDraft, AgentRecoveryPlan, AgentReporterSummary, AgentRunResult, AgentStep } from './agent.js';
+import { normalizeMaintenanceDrafts, type MaintenanceDraft } from './maintenance.js';
 
 export type RunStatus = 'running' | 'passed' | 'failed' | 'blocked' | 'skipped' | 'cancelled' | 'error';
 /**
@@ -90,6 +91,7 @@ export interface WorkflowDraft {
 export type TestStepReviewStatus = 'needsReview' | 'confirmed';
 export type TestStepActionRisk = 'low' | 'medium' | 'high' | 'unknown';
 export type TestStepModelRequirement = 'none' | 'required' | 'notApplicable';
+export type TestStepPreflightBlockReason = 'malformedAction';
 export type TestLocatorQuality = 'strong' | 'acceptable' | 'weak' | 'unresolved';
 
 export interface TestLocatorFingerprint {
@@ -121,6 +123,27 @@ export interface FixtureOutputTestInputBinding {
 
 export type TestInputValueBinding = CredentialTestInputBinding | FixtureOutputTestInputBinding;
 
+export type DeterministicNetworkMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
+
+export interface DeterministicCoordinate {
+  x: number;
+  y: number;
+}
+
+/** An opaque selection resolved by the main process; it is never a local path. */
+export type DeterministicFileReference =
+  | { kind: 'attachment'; id: string }
+  | { kind: 'fixture'; id: string; version: number };
+
+/** JSON-only route response data prevents executable payloads from entering persisted steps. */
+export type DeterministicJsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | DeterministicJsonValue[]
+  | { [key: string]: DeterministicJsonValue };
+
 /**
  * A structured input target captured from a passed Agent Run. The Agent value
  * is intentionally absent; an editor must attach an approved value binding.
@@ -137,7 +160,27 @@ export type DeterministicTestAction =
   | { kind: 'select'; locator: TestLocatorFingerprint; binding: TestInputValueBinding }
   | { kind: 'waitForSelector'; locator: TestLocatorFingerprint; timeoutMs?: number }
   | { kind: 'waitForTimeout'; timeoutMs: number }
-  | { kind: 'scrollTo'; locator: TestLocatorFingerprint };
+  | { kind: 'scrollTo'; locator: TestLocatorFingerprint }
+  | { kind: 'iframe'; frame: { locator: TestLocatorFingerprint; url: string }; locator: TestLocatorFingerprint }
+  | { kind: 'tab'; url: string }
+  | { kind: 'upload'; locator: TestLocatorFingerprint; fileRef: DeterministicFileReference }
+  | { kind: 'download'; locator: TestLocatorFingerprint; url: string }
+  | { kind: 'hover'; locator: TestLocatorFingerprint }
+  | {
+      kind: 'drag';
+      source: TestLocatorFingerprint;
+      target: TestLocatorFingerprint;
+      sourcePosition?: DeterministicCoordinate;
+      targetPosition?: DeterministicCoordinate;
+    }
+  | { kind: 'clipboard'; locator?: TestLocatorFingerprint; value: string }
+  | { kind: 'networkObserve'; url: string; method?: DeterministicNetworkMethod }
+  | {
+      kind: 'networkMock';
+      url: string;
+      method: DeterministicNetworkMethod;
+      response: { status: number; contentType?: string; body: DeterministicJsonValue };
+    };
 
 export type ExplicitTestAssertion =
   | { id: string; version: 1; kind: 'urlContains' | 'titleContains' | 'pageContains'; expected: string }
@@ -166,6 +209,8 @@ export interface TestStepDraft {
   body: string;
   recordingId?: string;
   execution?: TestStepExecutionDraft;
+  /** Hydration-only safe marker for an action payload that was discarded. */
+  preflightBlockReason?: TestStepPreflightBlockReason;
 }
 
 export interface VersionedTestAssetReference {
@@ -220,6 +265,12 @@ export interface SuiteRunProvenance extends Omit<RunProvenance, 'testCase' | 'su
   };
 }
 
+/** Durable terminal identity for a Case scheduled by a Suite. */
+export interface SuiteRunMemberRecord extends SuiteCaseRunResult {
+  /** Exact Case and Flow identity remains available even without a child run. */
+  provenance: RunProvenance;
+}
+
 export interface SuiteRunRecord {
   id: string;
   provenance: SuiteRunProvenance;
@@ -227,7 +278,10 @@ export interface SuiteRunRecord {
   finishedAt?: string;
   status: RunStatus;
   reasonCode?: RunReasonCode;
+  /** IDs for the child Case records actually persisted, including retries. */
   memberRunIds: string[];
+  /** Absent only on legacy parent records written before member history existed. */
+  members?: SuiteRunMemberRecord[];
   summary: Record<Exclude<RunStatus, 'running'>, number>;
 }
 
@@ -419,6 +473,339 @@ export interface FixtureAsset {
   resourceLocks: string[];
   createdAt: string;
   updatedAt: string;
+}
+
+/**
+ * A version-pinned, deterministic browser sequence that Cases may reuse.
+ * Published versions are immutable; edits always create a next version.
+ */
+export interface ReusableFlowAsset {
+  schemaVersion: 1;
+  id: string;
+  version: number;
+  name: string;
+  description: string;
+  tags: string[];
+  steps: TestStepDraft[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type ReusableFlowValidationIssueKind =
+  | 'invalidMetadata'
+  | 'emptySteps'
+  | 'duplicateStepId'
+  | 'unsupportedStep';
+
+export interface ReusableFlowValidationIssue {
+  kind: ReusableFlowValidationIssueKind;
+  message: string;
+  stepId?: string;
+}
+
+export type ReusableFlowReferenceIssueKind =
+  | 'missingFlow'
+  | 'invalidFlow'
+  | 'duplicateReference'
+  | 'invalidUpgradeTarget'
+  | 'duplicateCaseSelection';
+
+export interface ReusableFlowReferenceIssue {
+  kind: ReusableFlowReferenceIssueKind;
+  reference: VersionedTestAssetReference;
+  message: string;
+}
+
+export interface ReusableFlowResolution {
+  flows: ReusableFlowAsset[];
+  issues: ReusableFlowReferenceIssue[];
+}
+
+/** Creates an unpublished V1 Flow draft. It is invalid until it contains supported steps. */
+export function createEmptyReusableFlowAsset(seed: number): ReusableFlowAsset {
+  const now = new Date().toISOString();
+  return {
+    schemaVersion: 1,
+    id: `flow-${Date.now()}-${seed}`,
+    version: 1,
+    name: `新的可复用流程 ${seed}`,
+    description: '',
+    tags: [],
+    steps: [],
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+/** Finds exactly one published Flow version; duplicate versions remain unavailable. */
+export function findReusableFlowAsset(
+  project: Pick<ProjectDraft, 'reusableFlows'>,
+  reference: VersionedTestAssetReference,
+): ReusableFlowAsset | undefined {
+  const matches = project.reusableFlows.filter((flow) => (
+    flow.id === reference.id && flow.version === reference.version
+  ));
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
+/** Returns one latest immutable Flow version per Flow ID. */
+export function listLatestReusableFlowVersions(
+  project: Pick<ProjectDraft, 'reusableFlows'>,
+): ReusableFlowAsset[] {
+  const latest = new Map<string, ReusableFlowAsset>();
+  const seenVersions = new Set<string>();
+  project.reusableFlows.forEach((flow) => {
+    const key = versionedReferenceKey(flow);
+    if (seenVersions.has(key)) {
+      throw new Error(`Duplicate reusable Flow version ${key}.`);
+    }
+    seenVersions.add(key);
+    const previous = latest.get(flow.id);
+    if (!previous || flow.version > previous.version) {
+      latest.set(flow.id, flow);
+    }
+  });
+  return [...latest.values()];
+}
+
+/** Clones an exact published Flow and assigns the next version for its ID. */
+export function createNextReusableFlowVersion(
+  project: Pick<ProjectDraft, 'reusableFlows'>,
+  source: ReusableFlowAsset,
+  patch: Omit<Partial<ReusableFlowAsset>, 'id' | 'version' | 'schemaVersion' | 'createdAt'>,
+): ReusableFlowAsset {
+  const reference = { id: source.id, version: source.version };
+  const canonicalSource = findReusableFlowAsset(project, reference);
+  if (!canonicalSource) {
+    throw new Error(`Reusable Flow source ${versionedReferenceKey(reference)} must match exactly one published version.`);
+  }
+  const highestVersion = project.reusableFlows
+    .filter((flow) => flow.id === canonicalSource.id)
+    .reduce((highest, flow) => Math.max(highest, flow.version), 0);
+  return {
+    ...structuredClone(canonicalSource),
+    ...structuredClone(patch),
+    schemaVersion: 1,
+    id: canonicalSource.id,
+    version: highestVersion + 1,
+    createdAt: canonicalSource.createdAt,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+/** Lists every reason a Flow cannot be published or executed. */
+export function validateReusableFlow(flow: ReusableFlowAsset): ReusableFlowValidationIssue[] {
+  const issues: ReusableFlowValidationIssue[] = [];
+  if (
+    flow.schemaVersion !== 1 ||
+    !flow.id.trim() ||
+    !Number.isSafeInteger(flow.version) ||
+    flow.version < 1 ||
+    !flow.name.trim() ||
+    !Array.isArray(flow.tags) ||
+    flow.tags.some((tag) => !tag.trim()) ||
+    new Set(flow.tags).size !== flow.tags.length ||
+    Number.isNaN(Date.parse(flow.createdAt)) ||
+    Number.isNaN(Date.parse(flow.updatedAt))
+  ) {
+    issues.push({ kind: 'invalidMetadata', message: '可复用流程的元数据无效。' });
+  }
+  if (!flow.steps.length) {
+    issues.push({ kind: 'emptySteps', message: '可复用流程至少需要一个已确认的确定性步骤。' });
+  }
+
+  const seenStepIds = new Set<string>();
+  flow.steps.forEach((step) => {
+    if (seenStepIds.has(step.id)) {
+      issues.push({ kind: 'duplicateStepId', stepId: step.id, message: `可复用流程重复包含步骤 ${step.id}。` });
+      return;
+    }
+    seenStepIds.add(step.id);
+    const inputBinding = getConfirmedDeterministicTestInputBinding(step);
+    const isSupportedAction = isConfirmedDeterministicTestStep(step) && inputBinding?.kind !== 'fixtureOutput';
+    const isSupportedAssertion = Boolean(getConfirmedExplicitTestAssertion(step));
+    if (!isSupportedAction && !isSupportedAssertion) {
+      issues.push({
+        kind: 'unsupportedStep',
+        stepId: step.id,
+        message: `可复用流程步骤 ${step.title || step.id} 必须是已确认的确定性动作或显式断言。`,
+      });
+    }
+  });
+  return issues;
+}
+
+/** Resolves ordered, exact Flow references and refuses every ambiguous Case binding. */
+export function resolveTestCaseReusableFlows(
+  project: Pick<ProjectDraft, 'reusableFlows'>,
+  testCase: Pick<TestCaseDraft, 'assetReferences'>,
+): ReusableFlowResolution {
+  const references = testCase.assetReferences?.reusableFlows ?? [];
+  const seenFlowIds = new Set<string>();
+  const issues: ReusableFlowReferenceIssue[] = [];
+  const flows: ReusableFlowAsset[] = [];
+  references.forEach((reference) => {
+    if (seenFlowIds.has(reference.id)) {
+      issues.push({
+        kind: 'duplicateReference',
+        reference,
+        message: `用例重复绑定了可复用流程 ${reference.id} 的多个版本。`,
+      });
+      return;
+    }
+    seenFlowIds.add(reference.id);
+    const flow = findReusableFlowAsset(project, reference);
+    if (!flow) {
+      issues.push({
+        kind: 'missingFlow',
+        reference,
+        message: `未找到可复用流程 ${reference.id}@${reference.version}。`,
+      });
+      return;
+    }
+    if (validateReusableFlow(flow).length) {
+      issues.push({
+        kind: 'invalidFlow',
+        reference,
+        message: `可复用流程 ${flow.name}@${flow.version} 不能执行。`,
+      });
+      return;
+    }
+    flows.push(flow);
+  });
+  return { flows: issues.length ? [] : flows, issues };
+}
+
+export interface ReusableFlowImpactCase {
+  reference: VersionedTestAssetReference;
+  testCase: TestCaseDraft;
+  fixtures: VersionedTestAssetReference[];
+  baseline?: VersionedTestAssetReference;
+  suites: VersionedTestAssetReference[];
+}
+
+export interface ReusableFlowImpact {
+  source: VersionedTestAssetReference;
+  target: VersionedTestAssetReference;
+  directCases: ReusableFlowImpactCase[];
+  suites: VersionedTestAssetReference[];
+  issues: ReusableFlowReferenceIssue[];
+}
+
+export interface ReusableFlowCaseUpgradePlan {
+  updatedCases: TestCaseDraft[];
+  suiteProposals: Array<{
+    suite: VersionedTestAssetReference;
+    caseReference: VersionedTestAssetReference;
+  }>;
+  issues: ReusableFlowReferenceIssue[];
+}
+
+/** Computes reverse impact from one exact Flow version without a persisted index. */
+export function analyzeReusableFlowImpact(
+  project: Pick<ProjectDraft, 'reusableFlows' | 'testCases' | 'suites'>,
+  source: VersionedTestAssetReference,
+  target: VersionedTestAssetReference,
+): ReusableFlowImpact {
+  if (source.id !== target.id || target.version <= source.version) {
+    return {
+      source,
+      target,
+      directCases: [],
+      suites: [],
+      issues: [{
+        kind: 'invalidUpgradeTarget',
+        reference: target,
+        message: `升级目标必须是同一 Flow 的更高版本（${source.id}@${source.version} -> ${target.id}@${target.version}）。`,
+      }],
+    };
+  }
+
+  const issues: ReusableFlowReferenceIssue[] = [];
+  if (!findReusableFlowAsset(project, source)) {
+    issues.push({ kind: 'missingFlow', reference: source, message: `未找到可复用流程 ${source.id}@${source.version}。` });
+  }
+  if (!findReusableFlowAsset(project, target)) {
+    issues.push({ kind: 'missingFlow', reference: target, message: `未找到可复用流程 ${target.id}@${target.version}。` });
+  }
+  if (issues.length) {
+    return { source, target, directCases: [], suites: [], issues };
+  }
+
+  const directCases = project.testCases
+    .filter((testCase) => testCase.assetReferences?.reusableFlows.some((reference) => (
+      reference.id === source.id && reference.version === source.version
+    )))
+    .sort((left, right) => left.id.localeCompare(right.id) || (left.version ?? 1) - (right.version ?? 1))
+    .map((testCase) => {
+      const reference = { id: testCase.id, version: normalizeTestCaseVersion(testCase.version) };
+      const suites = project.suites
+        .filter((suite) => suite.caseReferences.some((candidate) => candidate.id === reference.id && candidate.version === reference.version))
+        .map((suite) => ({ id: suite.id, version: suite.version }))
+        .sort((left, right) => left.id.localeCompare(right.id) || left.version - right.version);
+      return {
+        reference,
+        testCase,
+        fixtures: testCase.assetReferences?.fixtures ?? [],
+        ...(testCase.assetReferences?.baseline ? { baseline: testCase.assetReferences.baseline } : {}),
+        suites,
+      };
+    });
+  const suites = directCases.flatMap((item) => item.suites)
+    .filter((reference, index, all) => all.findIndex((candidate) => versionedReferenceKey(candidate) === versionedReferenceKey(reference)) === index)
+    .sort((left, right) => left.id.localeCompare(right.id) || left.version - right.version);
+  return { source, target, directCases, suites, issues };
+}
+
+/** Plans selected Case next versions and explicit Suite proposals; it never mutates the project. */
+export function planReusableFlowCaseUpgrade(
+  project: Pick<ProjectDraft, 'reusableFlows' | 'testCases' | 'suites'>,
+  source: VersionedTestAssetReference,
+  target: VersionedTestAssetReference,
+  selected: VersionedTestAssetReference[],
+): ReusableFlowCaseUpgradePlan {
+  const impact = analyzeReusableFlowImpact(project, source, target);
+  if (impact.issues.length) {
+    return { updatedCases: [], suiteProposals: [], issues: impact.issues };
+  }
+
+  const selectedByCaseId = new Map<string, VersionedTestAssetReference>();
+  const selectionIssues: ReusableFlowReferenceIssue[] = [];
+  selected.forEach((reference) => {
+    const previous = selectedByCaseId.get(reference.id);
+    if (previous) {
+      selectionIssues.push({
+        kind: 'duplicateCaseSelection',
+        reference,
+        message: `不能同时升级 Case ${reference.id} 的多个历史版本（v${previous.version} 和 v${reference.version}）。`,
+      });
+      return;
+    }
+    selectedByCaseId.set(reference.id, reference);
+  });
+  if (selectionIssues.length) {
+    return { updatedCases: [], suiteProposals: [], issues: selectionIssues };
+  }
+
+  const selectedKeys = new Set(selected.map(versionedReferenceKey));
+  const updatedCases: TestCaseDraft[] = [];
+  const suiteProposals: ReusableFlowCaseUpgradePlan['suiteProposals'] = [];
+  impact.directCases.forEach((item) => {
+    if (!selectedKeys.has(versionedReferenceKey(item.reference))) return;
+    const references = item.testCase.assetReferences ?? createEmptyTestCaseAssetReferences();
+    const nextReferences = references.reusableFlows.map((reference) => (
+      reference.id === source.id && reference.version === source.version ? { id: target.id, version: target.version } : reference
+    ));
+    const nextCase = createNextTestCaseVersion(project, item.testCase, {
+      assetReferences: { ...structuredClone(references), reusableFlows: nextReferences },
+    });
+    updatedCases.push(nextCase);
+    item.suites.forEach((suite) => suiteProposals.push({
+      suite,
+      caseReference: { id: nextCase.id, version: nextCase.version ?? 1 },
+    }));
+  });
+  return { updatedCases, suiteProposals, issues: [] };
 }
 
 export type FixtureReferenceIssueKind = 'missing' | 'environmentMismatch';
@@ -981,6 +1368,7 @@ export interface ProjectDraft {
   recordings: RecordingAsset[];
   documents: PrdDocumentAsset[];
   fixtures: FixtureAsset[];
+  reusableFlows: ReusableFlowAsset[];
   suites: SuiteAsset[];
   prdCoverageTriage: PrdCoverageTriageDecision[];
   credentialRefs: CredentialRef[];
@@ -1201,11 +1589,94 @@ export interface ProjectAssetUpdatePlan {
   issues: ProjectAssetDiagnostic[];
 }
 
+export type ArtifactEvidenceKind =
+  | 'pageScreenshot'
+  | 'trace'
+  | 'report'
+  | 'attachment'
+  | 'syntheticDiagnostic';
+
+export type ArtifactRetentionClass = 'temporary' | 'standard' | 'protected';
+
+/**
+ * Durable, content-addressed evidence metadata. `path` is always relative
+ * to `studio-data/artifacts`, so reports can expose it without leaking a
+ * workstation-specific absolute path.
+ */
+export interface ArtifactManifestEntry {
+  id: string;
+  path: string;
+  contentHash: string;
+  byteCount: number;
+  createdAt: string;
+  ownerRunId?: string;
+  ownerSuiteRunId?: string;
+  evidenceKind: ArtifactEvidenceKind;
+  retentionClass: ArtifactRetentionClass;
+  protectedBy: string[];
+}
+
+export interface ArtifactManifest {
+  schemaVersion: 1;
+  entries: ArtifactManifestEntry[];
+}
+
+/** Renderer-safe manifest metadata shown during a retention review. */
+export interface ArtifactRetentionPreviewEntry {
+  id: string;
+  contentHash: string;
+  retentionClass: ArtifactRetentionClass;
+  evidenceKind: ArtifactEvidenceKind;
+  byteCount: number;
+  createdAt: string;
+  timestamps: { createdAt: string };
+  deletionCandidate: boolean;
+  reason: 'overByteBudgetAfterKeepDays' | 'protected';
+  protectedReasons: string[];
+}
+
+/** An opaque main-process plan identifier plus redacted, reviewable metadata. */
+export interface ArtifactRetentionPlan {
+  id: string;
+  plannedAt: string;
+  maxBytes: number;
+  keepDays: number;
+  totalByteCount: number;
+  projectedByteCount: number;
+  protectedCount: number;
+  candidateCount: number;
+  entries: ArtifactRetentionPreviewEntry[];
+}
+
+export interface ArtifactRetentionAuditEntry {
+  id: string;
+  contentHash: string;
+  byteCount: number;
+  deletedAt: string;
+}
+
+/** Immutable evidence of an explicit retention confirmation. */
+export interface ArtifactRetentionAudit {
+  planId: string;
+  confirmedAt: string;
+  deleted: readonly ArtifactRetentionAuditEntry[];
+}
+
+export type ArtifactRetentionErrorCode =
+  | 'retentionPlanNotFound'
+  | 'retentionPlanAlreadyConfirmed'
+  | 'plannedArtifactMissing'
+  | 'plannedArtifactChanged'
+  | 'plannedArtifactProtected';
+
 export interface RunArtifact {
   id: string;
+  /** Legacy app-local path for the open/export IPC actions; reports omit it. */
   type: 'screenshot' | 'trace' | 'report' | 'snapshot' | 'attachment';
   label: string;
   path: string;
+  /** Present for evidence registered in the durable artifact manifest. */
+  manifest?: ArtifactManifestEntry;
 }
 
 export interface RunStepLog {
@@ -1215,6 +1686,8 @@ export interface RunStepLog {
   status: RunStatus;
   message: string;
   screenshotPath?: string;
+  /** Exact reusable Flow source for steps flattened into a Case run. */
+  reusableFlow?: VersionedTestAssetReference;
 }
 
 /** Safe, value-free evidence for one Fixture lifecycle. */
@@ -1353,6 +1826,11 @@ export interface ProjectRunReport {
   nonExecutedRuns: ProjectRunReportNonExecutedRun[];
 }
 
+/** Main-process-only values used to redact the generated report before it is written or returned. */
+export interface ProjectRunReportRedactionContext {
+  knownSecrets?: readonly string[];
+}
+
 export interface BrowserSessionState {
   id: string;
   status: BrowserSessionStatus;
@@ -1384,6 +1862,17 @@ export interface ModelSecretRef {
   id: string;
   hasKey: boolean;
   updatedAt: string;
+}
+
+export type ModelSecretScope = 'midscene' | `agent:${AgentModelRole}`;
+
+export interface SaveModelSecretRequest {
+  scope: ModelSecretScope;
+  value: string;
+}
+
+export interface ClearModelSecretRequest {
+  scope: ModelSecretScope;
 }
 
 export interface MidsceneConfig {
@@ -1442,6 +1931,8 @@ export interface StudioState {
   projectAssetBindings: ProjectAssetBinding[];
   runDetails: RunDetail[];
   suiteRunRecords: SuiteRunRecord[];
+  /** Review-only maintenance proposals; malformed persisted entries are discarded on hydration. */
+  maintenanceDrafts: MaintenanceDraft[];
   recentRuns: RunSummary[];
   chatEntries: ChatEntry[];
   runtimeProfile: RuntimeProfile;
@@ -1637,6 +2128,8 @@ export interface RunSuiteResponse {
   runId: string;
   title: string;
   detail: SuiteRunDetail;
+  /** Present when the desktop main process has persisted the Suite parent. */
+  suiteRunRecord?: SuiteRunRecord;
 }
 
 export interface RunRecordingResponse {
@@ -1760,6 +2253,8 @@ export interface RunEventPayload {
 export interface DesktopApi {
   loadStudioState: () => Promise<StudioState | null>;
   saveStudioState: (state: StudioState) => Promise<void>;
+  saveModelSecret: (request: SaveModelSecretRequest) => Promise<ModelSecretRef>;
+  clearModelSecret: (request: ClearModelSecretRequest) => Promise<ModelSecretRef>;
   getRuntimeInfo: () => Promise<RuntimeInfo>;
   testMidsceneConnection: (config: MidsceneConfig) => Promise<MidsceneConnectionTestResult>;
   createProject: (project: ProjectDraft) => Promise<ProjectDraft>;
@@ -1788,6 +2283,14 @@ export interface DesktopApi {
   cancelRun: (runId: string) => Promise<boolean>;
   exportProjectReport: (request: ProjectReportExportRequest) => Promise<boolean>;
   loadRunDetail: (runId: string) => Promise<RunDetail | null>;
+  loadSuiteRunRecord: (runId: string) => Promise<SuiteRunRecord | null>;
+  listMaintenanceDrafts: () => Promise<MaintenanceDraft[]>;
+  createMaintenanceDraft: (request: MaintenanceDraftCreationRequest) => Promise<MaintenanceDraft>;
+  acceptMaintenanceDraft: (request: MaintenanceDraftAcceptanceRequest) => Promise<MaintenanceDraftAcceptanceResult>;
+  rejectMaintenanceDraft: (request: MaintenanceDraftRejectionRequest) => Promise<MaintenanceDraft>;
+  openMaintenanceEvidence: (request: MaintenanceEvidenceOpenRequest) => Promise<void>;
+  planArtifactRetention: () => Promise<ArtifactRetentionPlan>;
+  confirmArtifactRetention: (planId: string) => Promise<ArtifactRetentionAudit>;
   planHistoricalRerun: (runId: string) => Promise<HistoricalRerunPlan>;
   runHistoricalRerun: (runId: string) => Promise<HistoricalRerunExecutionResult>;
   openArtifact: (artifactPath: string) => Promise<void>;
@@ -1800,6 +2303,53 @@ export interface DesktopApi {
   onRunEvent: (listener: (event: RunEventPayload) => void) => () => void;
   onRecordingEvent: (listener: (event: RecordingCapturedEvent) => void) => () => void;
 }
+
+/** Renderer-safe intent for proposing a review-only Case maintenance draft. */
+export interface MaintenanceDraftCreationRequest {
+  runId: string;
+  target: {
+    kind: 'case';
+    id: string;
+    version: number;
+  };
+  proposedCase: TestCaseDraft;
+  citations: Array<{
+    artifactId: string;
+    contentHash: string;
+  }>;
+}
+
+export interface MaintenanceDraftAcceptanceRequest {
+  draftId: string;
+  expectedRevision: string;
+}
+
+/** Renderer-safe, authorless rejection intent retained only as reviewed audit prose. */
+export interface MaintenanceDraftRejectionRequest {
+  draftId: string;
+  rationale: string;
+}
+
+/** Opaque evidence identity; the main process resolves its managed artifact path. */
+export interface MaintenanceEvidenceOpenRequest {
+  draftId: string;
+  citation: {
+    runId: string;
+    artifactId: string;
+    contentHash: string;
+  };
+}
+
+export type MaintenanceDraftAcceptanceResult =
+  | {
+    status: 'accepted';
+    draft: MaintenanceDraft;
+    published: VersionedTestAssetReference;
+  }
+  | {
+    status: 'stale';
+    draft: MaintenanceDraft;
+  };
 
 export const defaultRuntimeProfile: RuntimeProfile = {
   browser: 'chromium',
@@ -2180,8 +2730,19 @@ export function isAgentRunnableTestCase(testCase: TestCaseDraft): boolean {
     testCase.steps.every(
         (step) =>
         (step.type === 'ai' || step.type === 'aiAssert' || step.type === 'aiQuery') &&
+        !step.preflightBlockReason &&
+        !isUnconfirmedControlledDeterministicInteraction(step) &&
         !((step.type === 'ai' || step.type === 'aiAssert') && step.execution?.reviewStatus === 'confirmed'),
     )
+  );
+}
+
+function isUnconfirmedControlledDeterministicInteraction(step: TestStepDraft): boolean {
+  const action = step.execution?.action;
+  return step.execution?.reviewStatus === 'needsReview' && Boolean(
+    action && [
+      'iframe', 'tab', 'upload', 'download', 'hover', 'drag', 'clipboard', 'networkObserve', 'networkMock',
+    ].includes(action.kind),
   );
 }
 
@@ -2293,6 +2854,7 @@ export function createDemoProject(): ProjectDraft {
     ],
     documents: [],
     fixtures: [],
+    reusableFlows: [],
     suites: [],
     prdCoverageTriage: [],
     testCases: initialWorkflows.map((workflow) => workflowToTestCase(workflow)),
@@ -2309,6 +2871,7 @@ export function createInitialStudioState(): StudioState {
     projectAssetBindings: [],
     runDetails: [],
     suiteRunRecords: [],
+    maintenanceDrafts: [],
     recentRuns: [],
     chatEntries: [],
     runtimeProfile: structuredClone(defaultRuntimeProfile),
@@ -2420,7 +2983,10 @@ export function hydrateStudioState(
       .map(migrateLegacyRunDetail)
     : initialState.runDetails;
   const suiteRunRecords = Array.isArray(rawState.suiteRunRecords)
-    ? structuredClone(rawState.suiteRunRecords)
+    ? rawState.suiteRunRecords.map((record) => ({
+      ...structuredClone(record),
+      members: Array.isArray(record.members) ? structuredClone(record.members) : [],
+    }))
     : initialState.suiteRunRecords;
   const recentRuns = Array.isArray(rawState.recentRuns)
     ? rawState.recentRuns
@@ -2437,6 +3003,7 @@ export function hydrateStudioState(
     projectAssetBindings,
     runDetails,
     suiteRunRecords,
+    maintenanceDrafts: normalizeMaintenanceDrafts(rawState.maintenanceDrafts),
     recentRuns,
     chatEntries: Array.isArray(rawState.chatEntries)
       ? rawState.chatEntries.filter((entry) => !builtInMockChatEntryIds.has(entry.id))
@@ -3225,6 +3792,52 @@ function normalizeFixtureAsset(
   };
 }
 
+function normalizeReusableFlowAsset(value: unknown): ReusableFlowAsset | undefined {
+  const rawFlow = asRecord(value);
+  const id = normalizedNonEmptyString(rawFlow?.id);
+  const name = normalizedNonEmptyString(rawFlow?.name);
+  const createdAt = normalizedNonEmptyString(rawFlow?.createdAt);
+  const updatedAt = normalizedNonEmptyString(rawFlow?.updatedAt);
+  if (
+    !rawFlow ||
+    rawFlow.schemaVersion !== 1 ||
+    !id ||
+    !name ||
+    rawFlow.version === undefined ||
+    !createdAt ||
+    !updatedAt ||
+    Number.isNaN(Date.parse(createdAt)) ||
+    Number.isNaN(Date.parse(updatedAt)) ||
+    !Array.isArray(rawFlow.tags) ||
+    !Array.isArray(rawFlow.steps)
+  ) {
+    return undefined;
+  }
+  const version = normalizeTestCaseVersion(rawFlow.version);
+  const tags = rawFlow.tags.map(normalizedNonEmptyString);
+  const steps = rawFlow.steps.map(normalizeTestStepDraft);
+  if (
+    version !== rawFlow.version ||
+    tags.some((tag) => !tag) ||
+    new Set(tags).size !== tags.length ||
+    steps.some((step) => !step)
+  ) {
+    return undefined;
+  }
+  const flow: ReusableFlowAsset = {
+    schemaVersion: 1,
+    id,
+    version,
+    name,
+    description: typeof rawFlow.description === 'string' ? rawFlow.description.trim() : '',
+    tags: tags as string[],
+    steps: steps as TestStepDraft[],
+    createdAt,
+    updatedAt,
+  };
+  return validateReusableFlow(flow).length ? undefined : flow;
+}
+
 function normalizeSuiteCaseReference(value: unknown): SuiteCaseReference | undefined {
   const rawReference = asRecord(value);
   const reference = normalizeVersionedTestAssetReference(rawReference);
@@ -3397,6 +4010,112 @@ function normalizeOptionalTimeout(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined;
 }
 
+function normalizeDeterministicNetworkMethod(value: unknown): DeterministicNetworkMethod | undefined {
+  return value === 'GET' || value === 'POST' || value === 'PUT' || value === 'PATCH' || value === 'DELETE'
+    ? value
+    : undefined;
+}
+
+function normalizeDeterministicCoordinate(value: unknown): DeterministicCoordinate | undefined {
+  const rawPoint = asRecord(value);
+  return rawPoint && typeof rawPoint.x === 'number' && Number.isFinite(rawPoint.x) &&
+    typeof rawPoint.y === 'number' && Number.isFinite(rawPoint.y)
+    ? { x: rawPoint.x, y: rawPoint.y }
+    : undefined;
+}
+
+function normalizeDeterministicFileReference(value: unknown): DeterministicFileReference | undefined {
+  const rawReference = asRecord(value);
+  const id = normalizedNonEmptyString(rawReference?.id);
+  if (!rawReference || !id || /[\\/\0]/.test(id) || id === '.' || id === '..' || /^file:/i.test(id)) {
+    return undefined;
+  }
+  if (rawReference.kind === 'attachment') {
+    return { kind: 'attachment', id };
+  }
+  if (rawReference.kind === 'fixture' && Number.isSafeInteger(rawReference.version) && (rawReference.version as number) > 0) {
+    return { kind: 'fixture', id, version: rawReference.version as number };
+  }
+  return undefined;
+}
+
+function normalizeDeterministicJsonValue(value: unknown, depth = 0): DeterministicJsonValue | undefined {
+  if (depth > 16) {
+    return undefined;
+  }
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') {
+    return value;
+  }
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : undefined;
+  }
+  if (Array.isArray(value)) {
+    if (!isStrictDeterministicJsonArray(value)) {
+      return undefined;
+    }
+    const entries: DeterministicJsonValue[] = [];
+    for (let index = 0; index < value.length; index += 1) {
+      const entry = normalizeDeterministicJsonValue(value[index], depth + 1);
+      if (entry === undefined) {
+        return undefined;
+      }
+      entries.push(entry);
+    }
+    return entries;
+  }
+  if (!isStrictDeterministicJsonObject(value)) {
+    return undefined;
+  }
+  const entries: Array<[string, DeterministicJsonValue]> = [];
+  for (const key of Object.keys(value)) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    const entry = descriptor && 'value' in descriptor
+      ? normalizeDeterministicJsonValue(descriptor.value, depth + 1)
+      : undefined;
+    if (entry === undefined) {
+      return undefined;
+    }
+    entries.push([key, entry]);
+  }
+  return Object.fromEntries(entries) as { [key: string]: DeterministicJsonValue };
+}
+
+/** Arrays in persisted JSON must be plain, dense, and free of hidden own properties. */
+function isStrictDeterministicJsonArray(value: unknown): value is unknown[] {
+  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype || Object.getOwnPropertySymbols(value).length) {
+    return false;
+  }
+  const ownNames = Object.getOwnPropertyNames(value);
+  if (ownNames.length !== value.length + 1 || !ownNames.includes('length')) {
+    return false;
+  }
+  for (let index = 0; index < value.length; index += 1) {
+    if (!Object.prototype.hasOwnProperty.call(value, index)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/** Objects in persisted JSON must have plain data properties with no hidden descriptors. */
+function isStrictDeterministicJsonObject(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype) {
+    return false;
+  }
+  if (Object.getOwnPropertySymbols(value).length) {
+    return false;
+  }
+  const ownNames = Object.getOwnPropertyNames(value);
+  const enumerableNames = Object.keys(value);
+  if (ownNames.length !== enumerableNames.length || ownNames.some((name) => !enumerableNames.includes(name))) {
+    return false;
+  }
+  return ownNames.every((name) => {
+    const descriptor = Object.getOwnPropertyDescriptor(value, name);
+    return Boolean(descriptor?.enumerable && 'value' in (descriptor ?? {}));
+  });
+}
+
 function normalizeDeterministicTestAction(value: unknown): DeterministicTestAction | undefined {
   const rawAction = asRecord(value);
   if (!rawAction || typeof rawAction.kind !== 'string') {
@@ -3429,7 +4148,142 @@ function normalizeDeterministicTestAction(value: unknown): DeterministicTestActi
   if (rawAction.kind === 'scrollTo') {
     return locator ? { kind: 'scrollTo', locator } : undefined;
   }
+  if (rawAction.kind === 'iframe') {
+    const frame = asRecord(rawAction.frame);
+    const frameLocator = normalizeTestLocatorFingerprint(frame?.locator);
+    const frameUrl = normalizedNonEmptyString(frame?.url);
+    return frameLocator && frameUrl && locator
+      ? { kind: 'iframe', frame: { locator: frameLocator, url: frameUrl }, locator }
+      : undefined;
+  }
+  if (rawAction.kind === 'tab') {
+    const url = normalizedNonEmptyString(rawAction.url);
+    return url ? { kind: 'tab', url } : undefined;
+  }
+  if (rawAction.kind === 'upload') {
+    const fileRef = normalizeDeterministicFileReference(rawAction.fileRef);
+    return locator && fileRef ? { kind: 'upload', locator, fileRef } : undefined;
+  }
+  if (rawAction.kind === 'download') {
+    const url = normalizedNonEmptyString(rawAction.url);
+    return locator && url ? { kind: 'download', locator, url } : undefined;
+  }
+  if (rawAction.kind === 'hover') {
+    return locator ? { kind: 'hover', locator } : undefined;
+  }
+  if (rawAction.kind === 'drag') {
+    const source = normalizeTestLocatorFingerprint(rawAction.source);
+    const target = normalizeTestLocatorFingerprint(rawAction.target);
+    const hasSourcePosition = Object.prototype.hasOwnProperty.call(rawAction, 'sourcePosition');
+    const hasTargetPosition = Object.prototype.hasOwnProperty.call(rawAction, 'targetPosition');
+    const sourcePosition = hasSourcePosition ? normalizeDeterministicCoordinate(rawAction.sourcePosition) : undefined;
+    const targetPosition = hasTargetPosition ? normalizeDeterministicCoordinate(rawAction.targetPosition) : undefined;
+    return source && target && (!hasSourcePosition || sourcePosition) && (!hasTargetPosition || targetPosition)
+      ? {
+          kind: 'drag',
+          source,
+          target,
+          ...(sourcePosition ? { sourcePosition } : {}),
+          ...(targetPosition ? { targetPosition } : {}),
+        }
+      : undefined;
+  }
+  if (rawAction.kind === 'clipboard') {
+    const value = normalizedNonEmptyString(rawAction.value);
+    const hasLocator = Object.prototype.hasOwnProperty.call(rawAction, 'locator');
+    return value && (!hasLocator || locator)
+      ? { kind: 'clipboard', ...(locator ? { locator } : {}), value }
+      : undefined;
+  }
+  if (rawAction.kind === 'networkObserve') {
+    const url = normalizedNonEmptyString(rawAction.url);
+    const hasMethod = Object.prototype.hasOwnProperty.call(rawAction, 'method');
+    const method = hasMethod ? normalizeDeterministicNetworkMethod(rawAction.method) : undefined;
+    return url && (!hasMethod || method)
+      ? { kind: 'networkObserve', url, ...(method ? { method } : {}) }
+      : undefined;
+  }
+  if (rawAction.kind === 'networkMock') {
+    const url = normalizedNonEmptyString(rawAction.url);
+    const method = normalizeDeterministicNetworkMethod(rawAction.method);
+    const response = asRecord(rawAction.response);
+    const hasContentType = Object.prototype.hasOwnProperty.call(response ?? {}, 'contentType');
+    const contentType = normalizedNonEmptyString(response?.contentType);
+    const body = normalizeDeterministicJsonValue(response?.body);
+    const status = response?.status;
+    return url && method && response && (!hasContentType || contentType) && typeof status === 'number' && Number.isSafeInteger(status) && status >= 100 && status <= 599 && body !== undefined
+      ? {
+          kind: 'networkMock',
+          url,
+          method,
+          response: { status, ...(contentType ? { contentType } : {}), body },
+        }
+      : undefined;
+  }
   return undefined;
+}
+
+/** Pure structural guard for persisted deterministic actions. */
+export function hasValidDeterministicTestActionShape(value: unknown): value is DeterministicTestAction {
+  const normalized = normalizeDeterministicTestAction(value);
+  return normalized !== undefined && isLosslesslyCanonicalJsonValue(value, normalized);
+}
+
+/** Hydration may canonicalize only the two legacy locator-quality aliases. */
+function hasHydratableDeterministicTestActionShape(value: unknown): boolean {
+  const normalized = normalizeDeterministicTestAction(value);
+  return normalized !== undefined && isLosslesslyCanonicalJsonValue(value, normalized, true);
+}
+
+/** Compares against the normalized action without accepting stripped fields or non-JSON values. */
+function isLosslesslyCanonicalJsonValue(
+  value: unknown,
+  canonical: unknown,
+  allowLegacyLocatorQuality = false,
+  propertyName?: string,
+): boolean {
+  if (value === null || canonical === null) {
+    return value === canonical;
+  }
+  if (typeof canonical === 'string' || typeof canonical === 'boolean') {
+    return typeof value === typeof canonical && (
+      value === canonical ||
+      (allowLegacyLocatorQuality && propertyName === 'quality' &&
+        ((value === 'fragile' && canonical === 'weak') || (value === 'unknown' && canonical === 'unresolved')))
+    );
+  }
+  if (typeof canonical === 'number') {
+    return typeof value === 'number' && Number.isFinite(value) && value === canonical;
+  }
+  if (Array.isArray(canonical)) {
+    if (!isStrictDeterministicJsonArray(value) || !isStrictDeterministicJsonArray(canonical) || value.length !== canonical.length) {
+      return false;
+    }
+    for (let index = 0; index < value.length; index += 1) {
+      if (!isLosslesslyCanonicalJsonValue(value[index], canonical[index], allowLegacyLocatorQuality)) {
+        return false;
+      }
+    }
+    return true;
+  }
+  if (!isStrictDeterministicJsonObject(value) || !isStrictDeterministicJsonObject(canonical)) {
+    return false;
+  }
+  const rawKeys = Object.keys(value).sort();
+  const normalizedKeys = Object.keys(canonical).sort();
+  return rawKeys.length === normalizedKeys.length && rawKeys.every((key, index) => (
+    key === normalizedKeys[index] && (() => {
+      const rawDescriptor = Object.getOwnPropertyDescriptor(value, key);
+      const normalizedDescriptor = Object.getOwnPropertyDescriptor(canonical, key);
+      return rawDescriptor && normalizedDescriptor && 'value' in rawDescriptor && 'value' in normalizedDescriptor &&
+        isLosslesslyCanonicalJsonValue(
+          rawDescriptor.value,
+          normalizedDescriptor.value,
+          allowLegacyLocatorQuality,
+          key,
+        );
+    })()
+  ));
 }
 
 function normalizeExplicitTestAssertion(value: unknown): ExplicitTestAssertion | undefined {
@@ -3491,16 +4345,45 @@ function normalizeTestStepExecution(value: unknown): TestStepExecutionDraft | un
   };
 }
 
+/** Rejects malformed execution metadata instead of silently accepting it in durable drafts. */
+export function hasValidTestStepExecution(value: unknown): value is TestStepExecutionDraft {
+  const rawExecution = asRecord(value);
+  if (!rawExecution || Object.keys(rawExecution).some((key) => ![
+    'schemaVersion', 'intent', 'reviewStatus', 'actionRisk', 'action', 'inputBindingTarget', 'assertion', 'provenance',
+  ].includes(key))) {
+    return false;
+  }
+  if (Object.prototype.hasOwnProperty.call(rawExecution, 'inputBindingTarget') && !normalizeTestInputBindingTarget(rawExecution.inputBindingTarget)) {
+    return false;
+  }
+  if (Object.prototype.hasOwnProperty.call(rawExecution, 'action') && !hasValidDeterministicTestActionShape(rawExecution.action)) {
+    return false;
+  }
+  const rawProvenance = asRecord(rawExecution.provenance);
+  if (Object.prototype.hasOwnProperty.call(rawExecution, 'provenance') && (!rawProvenance ||
+    rawProvenance.source !== 'agentRun' || !normalizedNonEmptyString(rawProvenance.runId) || !normalizedNonEmptyString(rawProvenance.stepId))) {
+    return false;
+  }
+  return normalizeTestStepExecution(value) !== undefined;
+}
+
 function normalizeTestStepDraft(step: unknown): TestStepDraft | undefined {
   const rawStep = asRecord(step);
   if (!rawStep) {
     return undefined;
   }
-  const execution = normalizeTestStepExecution(rawStep.execution);
-  const { execution: _execution, ...legacyStep } = rawStep;
+  const rawExecution = asRecord(rawStep.execution);
+  const hasMalformedAction = Boolean(
+    rawExecution &&
+    Object.prototype.hasOwnProperty.call(rawExecution, 'action') &&
+    !hasHydratableDeterministicTestActionShape(rawExecution.action),
+  );
+  const execution = hasMalformedAction ? undefined : normalizeTestStepExecution(rawStep.execution);
+  const { execution: _execution, preflightBlockReason: _preflightBlockReason, ...legacyStep } = rawStep;
   return {
     ...legacyStep,
     ...(execution ? { execution } : {}),
+    ...(hasMalformedAction ? { preflightBlockReason: 'malformedAction' as const } : {}),
   } as TestStepDraft;
 }
 
@@ -3601,6 +4484,11 @@ function normalizeProjectDraft(rawProject: ProjectDraft): ProjectDraft {
         ))
         .filter((fixture): fixture is FixtureAsset => Boolean(fixture))
     : [];
+  const reusableFlows = Array.isArray(rawProject.reusableFlows)
+    ? rawProject.reusableFlows
+        .map(normalizeReusableFlowAsset)
+        .filter((flow): flow is ReusableFlowAsset => Boolean(flow))
+    : [];
   const suites = Array.isArray(rawProject.suites)
     ? rawProject.suites
         .map(normalizeSuiteAsset)
@@ -3619,6 +4507,7 @@ function normalizeProjectDraft(rawProject: ProjectDraft): ProjectDraft {
     recordings,
     documents,
     fixtures,
+    reusableFlows,
     suites,
     prdCoverageTriage: prunePrdCoverageTriage(documents, rawProject.prdCoverageTriage),
     testCases: Array.isArray(rawProject.testCases)
@@ -3739,6 +4628,7 @@ export function deriveProjectRunReport(
   runHistory: RunSummary[],
   runDetails: RunDetail[],
   generatedAt = new Date().toISOString(),
+  redaction: ProjectRunReportRedactionContext = {},
 ): ProjectRunReport {
   const projectRuns = runHistory
     .map((run, index) => ({ run, index }))
@@ -3836,7 +4726,7 @@ export function deriveProjectRunReport(
   });
   const coverageRisk = deriveRunCoverageRisk(project, runHistory);
 
-  return {
+  return redactProjectRunReport({
     generatedAt,
     projectName: project.name,
     runStats,
@@ -3859,7 +4749,23 @@ export function deriveProjectRunReport(
     },
     problemRuns,
     nonExecutedRuns,
+  }, redaction.knownSecrets);
+}
+
+function redactProjectRunReport(report: ProjectRunReport, knownSecrets: readonly string[] | undefined): ProjectRunReport {
+  const secrets = [...new Set((knownSecrets ?? []).filter((secret) => typeof secret === 'string' && secret.length > 0))]
+    .sort((left, right) => right.length - left.length);
+  if (!secrets.length) {
+    return report;
+  }
+  const redact = (value: string) => secrets.reduce((result, secret) => result.split(secret).join('[REDACTED_SECRET]'), value);
+  const visit = (value: unknown): unknown => {
+    if (typeof value === 'string') return redact(value);
+    if (Array.isArray(value)) return value.map(visit);
+    if (!value || typeof value !== 'object') return value;
+    return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, visit(entry)]));
   };
+  return visit(report) as ProjectRunReport;
 }
 
 function isRunStatus(value: unknown): value is RunStatus {
@@ -3977,6 +4883,7 @@ export function createEmptyProject(nextId: number): ProjectDraft {
     recordings: [],
     documents: [],
     fixtures: [],
+    reusableFlows: [],
     suites: [],
     prdCoverageTriage: [],
     environments: [
@@ -4364,16 +5271,37 @@ function createTestStepFromAgentStep({
 }
 
 export function getTestStepModelRequirement(step: TestStepDraft): TestStepModelRequirement {
+  if (step.preflightBlockReason) {
+    return 'none';
+  }
   if (step.type === 'manual' || step.type === 'recordingReplay') {
     return 'notApplicable';
   }
   if (getConfirmedDeterministicTestStep(step)) {
     return 'none';
   }
+  if (isConfirmedControlledDeterministicInteraction(step)) {
+    return 'none';
+  }
   if (getConfirmedExplicitTestAssertion(step)) {
     return 'none';
   }
   return 'required';
+}
+
+/**
+ * Task 4 interactions remain deterministic even before Task 5 provides their
+ * BrowserRuntime executor. This keeps them behind TestRunner preflight and
+ * prevents an unreviewed model fallback.
+ */
+function isConfirmedControlledDeterministicInteraction(step: TestStepDraft): boolean {
+  const action = step.execution?.action as unknown;
+  if (step.type !== 'ai' || step.execution?.reviewStatus !== 'confirmed' || !action || typeof action !== 'object') {
+    return false;
+  }
+  const kind = (action as { kind?: unknown }).kind;
+  return kind === 'iframe' || kind === 'tab' || kind === 'upload' || kind === 'download' || kind === 'hover' ||
+    kind === 'drag' || kind === 'clipboard' || kind === 'networkObserve' || kind === 'networkMock';
 }
 
 /**

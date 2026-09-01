@@ -49,6 +49,7 @@ import {
   updatePrdDocumentAnalysis,
   workflowToTestCase,
   type ProjectDraft,
+  type ReusableFlowAsset,
   type TestCaseDraft,
 } from './studio.js';
 import { createStubAgentRun } from './agentStub.js';
@@ -333,6 +334,82 @@ describe('suite asset contract', () => {
   });
 });
 
+type MalformedNetworkMockBodyVariant = 'sparse' | 'ownProperty' | 'symbol' | 'nonStandardPrototype';
+
+function malformedNetworkMockAction(variant: MalformedNetworkMockBodyVariant) {
+  const body: unknown[] = ['approved'];
+  let hiddenValue: string | undefined;
+  if (variant === 'sparse') {
+    body.length = 2;
+  } else if (variant === 'ownProperty') {
+    hiddenValue = '/private/network-mock-array-filePath';
+    Object.defineProperty(body, 'filePath', { value: hiddenValue, enumerable: true });
+  } else if (variant === 'symbol') {
+    hiddenValue = 'network-mock-array-symbol-value';
+    Object.defineProperty(body, Symbol('network-mock-body'), { value: hiddenValue, enumerable: true });
+  } else {
+    class NonStandardArray extends Array<unknown> {}
+    return {
+      action: {
+        kind: 'networkMock' as const,
+        url: 'https://demo-shop.local/api/orders',
+        method: 'GET' as const,
+        response: { status: 200, body: new NonStandardArray('approved') },
+      },
+      hiddenValue,
+    };
+  }
+  return {
+    action: {
+      kind: 'networkMock' as const,
+      url: 'https://demo-shop.local/api/orders',
+      method: 'GET' as const,
+      response: { status: 200, body },
+    },
+    hiddenValue,
+  };
+}
+
+type MalformedNetworkMockObjectVariant = 'nonEnumerable' | 'accessor' | 'nullPrototype' | 'nonStandardPrototype';
+
+function malformedNetworkMockObjectAction(variant: MalformedNetworkMockObjectVariant) {
+  let getterRead = false;
+  let hiddenValue: string | undefined;
+  let body: object;
+  if (variant === 'nullPrototype') {
+    const nullPrototypeBody = Object.create(null) as Record<string, unknown>;
+    nullPrototypeBody.approved = true;
+    body = nullPrototypeBody;
+  } else if (variant === 'nonStandardPrototype') {
+    class NonStandardBody { approved = true; }
+    body = new NonStandardBody();
+  } else {
+    body = { approved: true };
+    if (variant === 'nonEnumerable') {
+      hiddenValue = '/private/network-mock-object-filePath';
+      Object.defineProperty(body, 'filePath', { value: hiddenValue, enumerable: false });
+    } else {
+      Object.defineProperty(body, 'filePath', {
+        enumerable: true,
+        get() {
+          getterRead = true;
+          throw new Error('network mock accessor must not be evaluated');
+        },
+      });
+    }
+  }
+  return {
+    action: {
+      kind: 'networkMock' as const,
+      url: 'https://demo-shop.local/api/orders',
+      method: 'GET' as const,
+      response: { status: 200, body },
+    },
+    hiddenValue,
+    getterWasRead: () => getterRead,
+  };
+}
+
 describe('fixture asset contract', () => {
   it('resolves fixed fixture versions and blocks missing, mismatched, and script fixtures', () => {
     const project = createEmptyProject(1);
@@ -603,6 +680,227 @@ describe('fixture asset contract', () => {
       hydrated.projects[0]!.testCases[0]!,
       environment.id,
     )).toMatchObject({ kind: 'executionUnavailable' });
+  });
+});
+
+describe('reusable Flow asset contract', () => {
+  it('keeps immutable Flow versions and resolves only the exact Case references in order', () => {
+    const flowApi = studio as typeof studio & {
+      createEmptyReusableFlowAsset: (seed: number) => {
+        schemaVersion: 1;
+        id: string;
+        version: number;
+        name: string;
+        description: string;
+        tags: string[];
+        steps: TestCaseDraft['steps'];
+        createdAt: string;
+        updatedAt: string;
+      };
+      findReusableFlowAsset: (
+        project: { reusableFlows: Array<{ id: string; version: number }> },
+        reference: { id: string; version: number },
+      ) => unknown;
+      createNextReusableFlowVersion: (
+        project: { reusableFlows: Array<{ id: string; version: number }> },
+        source: { id: string; version: number },
+        patch: { name?: string },
+      ) => { id: string; version: number; name: string };
+      resolveTestCaseReusableFlows: (
+        project: { reusableFlows: unknown[] },
+        testCase: Pick<TestCaseDraft, 'assetReferences'>,
+      ) => { flows: Array<{ id: string; version: number }>; issues: unknown[] };
+    };
+    const project = createEmptyProject(1);
+    const actionStep: TestCaseDraft['steps'][number] = {
+      id: 'flow-open-dashboard',
+      type: 'ai',
+      title: '打开仪表盘',
+      body: '访问仪表盘。',
+      execution: {
+        schemaVersion: 2,
+        intent: '打开仪表盘。',
+        reviewStatus: 'confirmed',
+        actionRisk: 'low',
+        action: { kind: 'navigate', url: 'https://example.test/dashboard' },
+      },
+    };
+    const flowV1 = {
+      ...flowApi.createEmptyReusableFlowAsset(1),
+      id: 'flow-login',
+      name: '登录准备',
+      steps: [actionStep],
+    };
+    const flowV2 = flowApi.createNextReusableFlowVersion(
+      { reusableFlows: [flowV1] },
+      flowV1,
+      { name: '登录准备 v2' },
+    );
+    const navigationFlow = { ...flowV1, id: 'flow-dashboard', name: '仪表盘准备' };
+    const projectWithFlows = { ...project, reusableFlows: [flowV1, flowV2, navigationFlow] };
+    const testCase = {
+      ...createEmptyTestCase(1, project.groups[0]!.id, project.environments[0]!.id),
+      assetReferences: {
+        fixtures: [],
+        reusableFlows: [
+          { id: flowV1.id, version: flowV1.version },
+          { id: navigationFlow.id, version: navigationFlow.version },
+        ],
+      },
+    };
+
+    expect(flowApi.findReusableFlowAsset(projectWithFlows, { id: flowV1.id, version: 1 })).toBe(flowV1);
+    expect(flowApi.findReusableFlowAsset(projectWithFlows, { id: flowV1.id, version: 3 })).toBeUndefined();
+    expect(flowV2).toMatchObject({ id: flowV1.id, version: 2, name: '登录准备 v2' });
+    expect(flowV1).toMatchObject({ version: 1, name: '登录准备' });
+    expect(flowApi.resolveTestCaseReusableFlows(projectWithFlows, testCase)).toMatchObject({
+      flows: [
+        { id: flowV1.id, version: 1 },
+        { id: navigationFlow.id, version: 1 },
+      ],
+      issues: [],
+    });
+    expect(flowApi.resolveTestCaseReusableFlows(projectWithFlows, {
+      assetReferences: {
+        fixtures: [],
+        reusableFlows: [
+          { id: flowV1.id, version: 1 },
+          { id: flowV1.id, version: 2 },
+        ],
+      },
+    })).toMatchObject({
+      flows: [],
+      issues: [expect.objectContaining({ kind: 'duplicateReference' })],
+    });
+  });
+
+  it('rejects unconfirmed, unsupported, and Fixture-output Flow steps without resolving a latest substitute', () => {
+    const flowApi = studio as typeof studio & {
+      createEmptyReusableFlowAsset: (seed: number) => {
+        schemaVersion: 1;
+        id: string;
+        version: number;
+        name: string;
+        description: string;
+        tags: string[];
+        steps: TestCaseDraft['steps'];
+        createdAt: string;
+        updatedAt: string;
+      };
+      validateReusableFlow: (flow: unknown) => Array<{ kind: string }>;
+      resolveTestCaseReusableFlows: (
+        project: { reusableFlows: unknown[] },
+        testCase: Pick<TestCaseDraft, 'assetReferences'>,
+      ) => { flows: unknown[]; issues: Array<{ kind: string }> };
+    };
+    const project = createEmptyProject(1);
+    const invalidFlow = {
+      ...flowApi.createEmptyReusableFlowAsset(1),
+      id: 'flow-invalid',
+      steps: [
+        {
+          id: 'flow-output-binding',
+          type: 'ai' as const,
+          title: '填入订单号',
+          body: '输入 Fixture 输出。',
+          execution: {
+            schemaVersion: 2 as const,
+            intent: '填入订单号。',
+            reviewStatus: 'confirmed' as const,
+            actionRisk: 'low' as const,
+            action: {
+              kind: 'input' as const,
+              locator: { selector: '#order-id', quality: 'strong' as const },
+              binding: { kind: 'fixtureOutput' as const, fixtureId: 'fixture-order', fixtureVersion: 1, outputName: 'orderId' },
+            },
+          },
+        },
+        { id: 'flow-manual', type: 'manual' as const, title: '人工确认', body: '不可复用。' },
+      ],
+    };
+    const testCase = {
+      ...createEmptyTestCase(1, project.groups[0]!.id, project.environments[0]!.id),
+      assetReferences: { fixtures: [], reusableFlows: [{ id: invalidFlow.id, version: invalidFlow.version }] },
+    };
+
+    expect(flowApi.validateReusableFlow(invalidFlow)).toEqual([
+      expect.objectContaining({ kind: 'unsupportedStep' }),
+      expect.objectContaining({ kind: 'unsupportedStep' }),
+    ]);
+    expect(flowApi.resolveTestCaseReusableFlows(
+      { ...project, reusableFlows: [invalidFlow, { ...invalidFlow, version: 2, steps: [] }] },
+      testCase,
+    )).toMatchObject({
+      flows: [],
+      issues: [expect.objectContaining({ kind: 'invalidFlow' })],
+    });
+  });
+
+  it('computes exact Flow impact and creates selected Case upgrade proposals without mutating Suites', () => {
+    const flowApi = studio as typeof studio & {
+      createEmptyReusableFlowAsset: (seed: number) => ReusableFlowAsset;
+      createNextReusableFlowVersion: (project: { reusableFlows: ReusableFlowAsset[] }, source: ReusableFlowAsset, patch: Partial<ReusableFlowAsset>) => ReusableFlowAsset;
+      analyzeReusableFlowImpact: (project: ProjectDraft, source: { id: string; version: number }, target: { id: string; version: number }) => {
+        directCases: Array<{ testCase: TestCaseDraft; suites: Array<{ id: string; version: number }> }>;
+        issues: unknown[];
+      };
+      planReusableFlowCaseUpgrade: (project: ProjectDraft, source: { id: string; version: number }, target: { id: string; version: number }, selected: Array<{ id: string; version: number }>) => {
+        updatedCases: TestCaseDraft[];
+        suiteProposals: Array<{ suite: { id: string; version: number }; caseReference: { id: string; version: number } }>;
+        issues: unknown[];
+      };
+    };
+    const project = createEmptyProject(1);
+    const flowV1 = {
+      ...flowApi.createEmptyReusableFlowAsset(1),
+      id: 'flow-login',
+      steps: [{
+        id: 'flow-step', type: 'ai' as const, title: 'Open', body: 'Open',
+        execution: { schemaVersion: 2 as const, intent: 'Open', reviewStatus: 'confirmed' as const, actionRisk: 'low' as const, action: { kind: 'navigate' as const, url: project.defaultUrl } },
+      }],
+    };
+    const flowV2 = flowApi.createNextReusableFlowVersion({ reusableFlows: [flowV1] }, flowV1, { name: 'Login v2' });
+    const caseV1 = { ...createEmptyTestCase(1, project.groups[0]!.id, project.environments[0]!.id), id: 'case-login', assetReferences: { fixtures: [], reusableFlows: [{ id: flowV1.id, version: 1 }] } };
+    const unrelated = { ...caseV1, id: 'case-other', assetReferences: { fixtures: [], reusableFlows: [] } };
+    const suite = { ...createEmptySuiteAsset(project, 1), id: 'suite-release', caseReferences: [{ id: caseV1.id, version: 1, dependsOn: [] }] };
+    const graph = { ...project, reusableFlows: [flowV1, flowV2], testCases: [caseV1, unrelated], suites: [suite] };
+
+    const impact = flowApi.analyzeReusableFlowImpact(graph, { id: flowV1.id, version: 1 }, { id: flowV2.id, version: 2 });
+    expect(impact.issues).toEqual([]);
+    expect(impact.directCases.map(({ testCase }) => testCase.id)).toEqual(['case-login']);
+    expect(impact.directCases[0]?.suites).toEqual([{ id: suite.id, version: suite.version }]);
+
+    const proposal = flowApi.planReusableFlowCaseUpgrade(graph, { id: flowV1.id, version: 1 }, { id: flowV2.id, version: 2 }, [{ id: caseV1.id, version: 1 }]);
+    expect(proposal.issues).toEqual([]);
+    expect(proposal.updatedCases[0]).toMatchObject({ id: caseV1.id, version: 2, assetReferences: { reusableFlows: [{ id: flowV2.id, version: flowV2.version }] } });
+    expect(proposal.suiteProposals).toEqual([{ suite: { id: suite.id, version: suite.version }, caseReference: { id: caseV1.id, version: 2 } }]);
+    expect(graph.suites[0]?.caseReferences[0]?.version).toBe(1);
+
+    const unrelatedFlow = { ...flowV1, id: 'flow-search', name: 'Search' };
+    expect(flowApi.analyzeReusableFlowImpact(
+      { ...graph, reusableFlows: [...graph.reusableFlows, unrelatedFlow] },
+      { id: flowV1.id, version: 1 },
+      { id: unrelatedFlow.id, version: unrelatedFlow.version },
+    )).toMatchObject({
+      directCases: [],
+      issues: [expect.objectContaining({ kind: 'invalidUpgradeTarget', reference: { id: unrelatedFlow.id, version: unrelatedFlow.version } })],
+    });
+    expect(flowApi.analyzeReusableFlowImpact(graph, { id: flowV2.id, version: 2 }, { id: flowV1.id, version: 1 })).toMatchObject({
+      directCases: [],
+      issues: [expect.objectContaining({ kind: 'invalidUpgradeTarget', reference: { id: flowV1.id, version: 1 } })],
+    });
+
+    const caseV2 = { ...caseV1, version: 2 };
+    expect(flowApi.planReusableFlowCaseUpgrade(
+      { ...graph, testCases: [caseV1, caseV2] },
+      { id: flowV1.id, version: 1 },
+      { id: flowV2.id, version: 2 },
+      [{ id: caseV1.id, version: 1 }, { id: caseV2.id, version: 2 }],
+    )).toMatchObject({
+      updatedCases: [],
+      suiteProposals: [],
+      issues: [expect.objectContaining({ kind: 'duplicateCaseSelection', reference: { id: caseV2.id, version: 2 } })],
+    });
   });
 });
 
@@ -2199,6 +2497,94 @@ describe('studio state hydration', () => {
     expect(steps?.[3]?.execution).toBeUndefined();
   });
 
+  it('hydrates reviewed controlled interaction actions without moving their payload into prose', () => {
+    const project = createEmptyProject(9);
+    const hydrated = hydrateStudioState({
+      ...createInitialStudioState(),
+      projects: [{
+        ...project,
+        testCases: [{
+          ...project.testCases[0]!,
+          steps: [{
+            id: 'step-network-mock',
+            type: 'ai' as const,
+            title: '模拟订单响应',
+            body: '使用受控网络模拟。',
+            execution: {
+              schemaVersion: 2,
+              intent: '模拟订单响应。',
+              reviewStatus: 'confirmed',
+              actionRisk: 'low',
+              action: {
+                kind: 'networkMock',
+                url: 'https://api.example.test/orders',
+                method: 'POST',
+                response: { status: 201, contentType: 'application/json', body: { id: 'order-1', accepted: true } },
+              },
+            },
+          }],
+        }],
+      }],
+      selectedProjectId: project.id,
+    });
+
+    expect(hydrated.projects[0]!.testCases[0]!.steps[0]!.execution?.action).toEqual({
+      kind: 'networkMock',
+      url: 'https://api.example.test/orders',
+      method: 'POST',
+      response: { status: 201, contentType: 'application/json', body: { id: 'order-1', accepted: true } },
+    });
+  });
+
+  it('treats a confirmed controlled interaction as deterministic rather than routing it to a model', () => {
+    expect(studio.getTestStepModelRequirement({
+      id: 'step-network-observe',
+      type: 'ai',
+      title: 'Observe orders',
+      body: 'Observe the approved response.',
+      execution: {
+        schemaVersion: 2,
+        intent: 'Observe the approved response.',
+        reviewStatus: 'confirmed',
+        actionRisk: 'low',
+        action: { kind: 'networkObserve', url: 'https://api.example.test/orders', method: 'GET' },
+      },
+    })).toBe('none');
+  });
+
+  it('drops a persisted upload action that smuggles an arbitrary local path as a file reference', () => {
+    const project = createEmptyProject(9);
+    const hydrated = hydrateStudioState({
+      ...createInitialStudioState(),
+      projects: [{
+        ...project,
+        testCases: [{
+          ...project.testCases[0]!,
+          steps: [{
+            id: 'step-upload-path',
+            type: 'ai' as const,
+            title: '上传头像',
+            body: '上传已选择的附件。',
+            execution: {
+              schemaVersion: 2,
+              intent: '上传已选择的附件。',
+              reviewStatus: 'confirmed',
+              actionRisk: 'low',
+              action: {
+                kind: 'upload',
+                locator: { selector: '#avatar', quality: 'acceptable' },
+                fileRef: { kind: 'attachment', id: '/private/avatar.png' },
+              },
+            },
+          }],
+        }],
+      }],
+      selectedProjectId: project.id,
+    });
+
+    expect(hydrated.projects[0]!.testCases[0]!.steps[0]!.execution).toBeUndefined();
+  });
+
   it('discards non-object persisted test steps while keeping adjacent legacy and V2 steps', () => {
     const project = createEmptyProject(9);
     const legacyStep = {
@@ -2900,6 +3286,25 @@ describe('studio state hydration', () => {
     expect(JSON.stringify(report)).not.toContain('credentialRefs');
   });
 
+  it('redacts main-known secrets from generated project-report summaries and artifact labels', () => {
+    const secret = 'resolved-report-secret';
+    const project = createEmptyProject(1);
+    const environment = project.environments[0]!;
+    const testCase = createEmptyTestCase(1, project.groups[0]!.id, environment.id);
+    const report = deriveProjectRunReport({ ...project, testCases: [testCase] }, [{
+      id: 'run-secret-report', name: `Case ${secret}`, status: 'failed', duration: '00:00:01', summary: `summary ${secret}`,
+      projectId: project.id, testCaseId: testCase.id, environmentId: environment.id,
+    }], [{
+      id: 'run-secret-report', projectId: project.id, testCaseId: testCase.id, environmentId: environment.id,
+      title: `title ${secret}`, status: 'failed', startedAt: new Date(0).toISOString(), duration: '00:00:01',
+      summary: `summary ${secret}`, failureReason: `failure ${secret}`, logs: [], steps: [],
+      artifacts: [{ id: 'artifact-secret', type: 'report', label: `artifact ${secret}`, path: '/managed/report.html' }],
+    }], new Date(0).toISOString(), { knownSecrets: [secret] });
+
+    expect(JSON.stringify(report)).not.toContain(secret);
+    expect(JSON.stringify(report)).toContain('[REDACTED_SECRET]');
+  });
+
   it('keeps project report run labels frozen after current Case and environment assets change', () => {
     const project = createEmptyProject(1);
     const environment = { ...project.environments[0]!, name: 'Current renamed environment' };
@@ -3045,6 +3450,168 @@ describe('studio state hydration', () => {
     expect(JSON.stringify(hydrated)).not.toContain('legacy-value@example.test');
   });
 
+  it.each([
+    ['a path-shaped upload file ID', {
+      kind: 'upload',
+      locator: { selector: '#avatar', quality: 'acceptable' },
+      fileRef: { kind: 'attachment', id: '/private/malformed-upload-must-not-persist' },
+    }, '/private/malformed-upload-must-not-persist'],
+    ['a non-string network mock content type', {
+      kind: 'networkMock',
+      url: 'https://demo-shop.local/api/orders',
+      method: 'GET',
+      response: {
+        status: 200,
+        contentType: { raw: 'malformed-content-type-must-not-persist' },
+        body: { orderId: 'order-1' },
+      },
+    }, 'malformed-content-type-must-not-persist'],
+    ['undeclared upload fields', {
+      kind: 'upload',
+      filePath: '/private/malformed-action-field-must-not-persist',
+      locator: {
+        selector: '#avatar',
+        quality: 'acceptable',
+        filePath: '/private/malformed-locator-field-must-not-persist',
+      },
+      fileRef: {
+        kind: 'attachment',
+        id: 'attachment-approved',
+        filePath: '/private/malformed-file-ref-field-must-not-persist',
+      },
+    }, '/private/malformed-action-field-must-not-persist'],
+    ['an undeclared network mock response field', {
+      kind: 'networkMock',
+      url: 'https://demo-shop.local/api/orders',
+      method: 'GET',
+      response: {
+        status: 200,
+        body: { orderId: 'order-1' },
+        filePath: '/private/malformed-response-field-must-not-persist',
+      },
+    }, '/private/malformed-response-field-must-not-persist'],
+    ['a malformed base navigate URL', {
+      kind: 'navigate',
+      url: ' ',
+    }, undefined],
+  ] as const)('hydrates %s into a sanitized malformed-action block', (_label, action, discardedPayload) => {
+    const project = createEmptyProject(1);
+    const sourceCase = {
+      ...createEmptyTestCase(1, project.groups[0]!.id, project.environments[0]!.id),
+      id: 'case-hydrated-malformed-action',
+      steps: [{
+        id: 'step-hydrated-malformed-action',
+        type: 'ai' as const,
+        title: 'Malformed action',
+        body: 'Do not execute this action.',
+        execution: {
+          schemaVersion: 2 as const,
+          intent: 'Do not execute this action.',
+          reviewStatus: 'confirmed' as const,
+          actionRisk: 'low' as const,
+          action,
+        },
+      }],
+    };
+    const hydrated = hydrateStudioState({
+      ...createInitialStudioState(),
+      selectedProjectId: project.id,
+      projects: [{ ...project, testCases: [sourceCase] }],
+    } as unknown as studio.StudioState);
+    const testCase = hydrated.projects[0]!.testCases[0]!;
+    const step = testCase.steps[0]!;
+
+    expect(step).toMatchObject({
+      id: sourceCase.steps[0]!.id,
+      preflightBlockReason: 'malformedAction',
+    });
+    expect(step.execution).toBeUndefined();
+    expect(JSON.stringify(step)).not.toContain(discardedPayload);
+    expect(studio.getTestStepModelRequirement(step)).toBe('none');
+    expect(isAgentRunnableTestCase(testCase)).toBe(false);
+  });
+
+  it.each([
+    ['a sparse array body', 'sparse'],
+    ['an array body with an own filePath', 'ownProperty'],
+    ['an array body with a symbol property', 'symbol'],
+    ['an array body with a non-standard prototype', 'nonStandardPrototype'],
+  ] as const)('hydrates a network mock with %s into a sanitized malformed-action block', (_label, bodyVariant) => {
+    const project = createEmptyProject(1);
+    const { action, hiddenValue } = malformedNetworkMockAction(bodyVariant);
+    const sourceCase = {
+      ...createEmptyTestCase(1, project.groups[0]!.id, project.environments[0]!.id),
+      id: 'case-hydrated-malformed-network-mock-array',
+      steps: [{
+        id: 'step-hydrated-malformed-network-mock-array',
+        type: 'ai' as const,
+        title: 'Malformed network mock',
+        body: 'Do not execute this action.',
+        execution: {
+          schemaVersion: 2 as const,
+          intent: 'Do not execute this action.',
+          reviewStatus: 'confirmed' as const,
+          actionRisk: 'low' as const,
+          action,
+        },
+      }],
+    };
+
+    const hydrated = hydrateStudioState({
+      ...createInitialStudioState(),
+      selectedProjectId: project.id,
+      projects: [{ ...project, testCases: [sourceCase] }],
+    } as unknown as studio.StudioState);
+    const step = hydrated.projects[0]!.testCases[0]!.steps[0]!;
+
+    expect(step).toMatchObject({ preflightBlockReason: 'malformedAction' });
+    expect(step.execution).toBeUndefined();
+    if (hiddenValue) {
+      expect(JSON.stringify(step)).not.toContain(hiddenValue);
+    }
+  });
+
+  it.each([
+    ['a non-enumerable filePath', 'nonEnumerable'],
+    ['an accessor getter', 'accessor'],
+    ['an Object.create(null) prototype', 'nullPrototype'],
+    ['a non-standard prototype', 'nonStandardPrototype'],
+  ] as const)('hydrates a network mock body with %s into a sanitized malformed-action block without reading it', (_label, bodyVariant) => {
+    const project = createEmptyProject(1);
+    const { action, hiddenValue, getterWasRead } = malformedNetworkMockObjectAction(bodyVariant);
+    const sourceCase = {
+      ...createEmptyTestCase(1, project.groups[0]!.id, project.environments[0]!.id),
+      id: 'case-hydrated-malformed-network-mock-object',
+      steps: [{
+        id: 'step-hydrated-malformed-network-mock-object',
+        type: 'ai' as const,
+        title: 'Malformed network mock',
+        body: 'Do not execute this action.',
+        execution: {
+          schemaVersion: 2 as const,
+          intent: 'Do not execute this action.',
+          reviewStatus: 'confirmed' as const,
+          actionRisk: 'low' as const,
+          action,
+        },
+      }],
+    };
+
+    const hydrated = hydrateStudioState({
+      ...createInitialStudioState(),
+      selectedProjectId: project.id,
+      projects: [{ ...project, testCases: [sourceCase] }],
+    } as unknown as studio.StudioState);
+    const step = hydrated.projects[0]!.testCases[0]!.steps[0]!;
+
+    expect(step).toMatchObject({ preflightBlockReason: 'malformedAction' });
+    expect(step.execution).toBeUndefined();
+    expect(getterWasRead()).toBe(false);
+    if (hiddenValue) {
+      expect(JSON.stringify(step)).not.toContain(hiddenValue);
+    }
+  });
+
   it('identifies test cases that can run through the Agent workflow runtime', () => {
     const project = createEmptyProject(1);
     const baseCase = {
@@ -3186,6 +3753,24 @@ describe('studio state hydration', () => {
             },
           },
         ],
+      }),
+    ).toBe(true);
+    expect(
+      isAgentRunnableTestCase({
+        ...baseCase,
+        steps: [{
+          id: 'step-needs-review-navigate',
+          type: 'ai',
+          title: 'Navigate after review',
+          body: 'Navigate to the page.',
+          execution: {
+            schemaVersion: 2,
+            intent: 'Navigate to the page.',
+            reviewStatus: 'needsReview',
+            actionRisk: 'low',
+            action: { kind: 'navigate', url: project.defaultUrl },
+          },
+        }],
       }),
     ).toBe(true);
     [{ kind: 'unknown' }, 'unknown'].forEach((action) => {

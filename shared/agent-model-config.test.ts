@@ -13,7 +13,10 @@ describe('agent model assignment resolver', () => {
       midsceneConfig: {
         ...defaultMidsceneConfig,
         modelBaseUrl: 'https://models.example.test/v1',
-        modelApiKey: 'secret-key',
+        modelSecret: {
+          ...defaultMidsceneConfig.modelSecret,
+          hasKey: true,
+        },
         modelName: 'ui-vlm',
         modelFamily: 'openai',
       },
@@ -47,7 +50,10 @@ describe('agent model assignment resolver', () => {
         ...defaultAgentModelConfig.planner,
         provider: 'openaiCompatible',
         modelBaseUrl: 'https://planner.example.test/v1',
-        modelApiKey: 'planner-secret',
+        modelSecret: {
+          ...defaultAgentModelConfig.planner.modelSecret,
+          hasKey: true,
+        },
         modelName: 'planner-large',
         modelFamily: 'openai',
         temperature: '0.1',
