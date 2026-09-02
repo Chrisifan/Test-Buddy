@@ -6,15 +6,28 @@ import { createMaintenanceDraft } from '../../../shared/maintenance.js';
 import { I18nProvider } from '../../i18n/index.js';
 import { MaintenanceQueuePage, type MaintenanceQueuePageProps } from './MaintenanceQueuePage.js';
 
-const renderQueue = (props: unknown) => {
+const renderQueue = ({ onOpenRuns = vi.fn(), ...props }: Partial<MaintenanceQueuePageProps>) => {
   return render(
     <I18nProvider locale="en-US">
-      <MaintenanceQueuePage {...(props as MaintenanceQueuePageProps)} />
+      <MaintenanceQueuePage {...(props as Omit<MaintenanceQueuePageProps, 'onOpenRuns'>)} onOpenRuns={onOpenRuns} />
     </I18nProvider>,
   );
 };
 
 describe('MaintenanceQueuePage', () => {
+  it('shows one compact route to run records when there are no maintenance drafts', () => {
+    const onOpenRuns = vi.fn();
+
+    renderQueue({ drafts: [], onOpenRuns });
+
+    expect(screen.getByRole('heading', { level: 2, name: 'No Drafts to Review' })).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: 'Open Run Records' })).toHaveLength(1);
+    expect(screen.queryByText('0 drafts')).not.toBeInTheDocument();
+    expect(screen.queryByText('Source')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Open Run Records' }));
+    expect(onOpenRuns).toHaveBeenCalledOnce();
+  });
+
   it('labels source and candidate diffs, opens exact cited evidence, and requires confirmation before approval', async () => {
     const project = createEmptyProject(1);
     const source = {

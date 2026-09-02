@@ -22,6 +22,7 @@ const selectedTestCase = project.testCases[0]!;
 
 const renderPage = ({
   locale = 'zh-CN',
+  currentProject = project,
   testCase = selectedTestCase,
   runBlocker,
   saveStatus = 'idle',
@@ -29,6 +30,7 @@ const renderPage = ({
   onCreateTestCase = vi.fn(),
 }: {
   locale?: 'zh-CN' | 'en-US';
+  currentProject?: typeof project;
   testCase?: typeof selectedTestCase | null;
   runBlocker?: 'emptySteps' | 'emptyTitle' | 'emptyInstruction' | 'missingRecording';
   saveStatus?: 'idle' | 'saving' | 'saved' | 'error';
@@ -57,7 +59,7 @@ const renderPage = ({
           onRunTestCase={vi.fn()}
           onSelectTestCase={vi.fn()}
           onUpdateTestCase={onUpdateTestCase}
-          project={project}
+          project={currentProject}
           runBlocker={runBlocker}
           runStatus="neutral"
           saveStatus={saveStatus}
@@ -386,6 +388,25 @@ describe('TestCaseManagementPage', () => {
     expect(screen.queryByLabelText('步骤属性')).not.toBeInTheDocument();
   });
 
+  it('renders one compact create action when the project has no test cases', () => {
+    const onCreateTestCase = vi.fn();
+
+    renderPage({
+      currentProject: { ...project, testCases: [] },
+      locale: 'en-US',
+      onCreateTestCase,
+      testCase: null,
+    });
+
+    expect(screen.getByRole('heading', { level: 2, name: 'Select or Create a Test Case' })).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: 'New Case' })).toHaveLength(1);
+    expect(screen.queryByRole('region', { name: 'Case Editing Workbench' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Add Step' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Run Test' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'New Case' }));
+    expect(onCreateTestCase).toHaveBeenCalledOnce();
+  });
+
   it('keeps save state as a tag and exposes a separate retry action', () => {
     const onRetrySave = vi.fn();
     renderPage({ saveStatus: 'error', onRetrySave });
@@ -398,7 +419,7 @@ describe('TestCaseManagementPage', () => {
   it('disables execution and presents the localized blocker when a step is invalid', () => {
     renderPage({ runBlocker: 'missingRecording' });
 
-    expect(screen.getByRole('button', { name: '运行用例' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '运行用例' })).toHaveAttribute('aria-describedby', 'case-run-blocker');
     expect(screen.getByText('录制回放步骤需要绑定有效的录制资产。')).toBeInTheDocument();
   });
 

@@ -88,36 +88,18 @@
 }
 
 .project-card-copy h2,
-.project-create-card-title,
-.project-config-heading h2,
-.project-config-section-heading h3 {
+.project-create-card-title {
   color: var(--foreground);
   letter-spacing: 0;
 }
 
 .project-card-copy p,
-.project-create-card-description,
-.project-config-section-heading p,
-.project-credential-row span {
+.project-create-card-description {
   color: var(--muted-foreground);
 }
 
-.project-card-footer,
-.project-config-section + .project-config-section {
+.project-card-footer {
   border-color: var(--outline-variant);
-}
-
-.project-config-dialog,
-.project-config-content,
-.project-config-section,
-.project-credential-row,
-.project-environment-row {
-  border-color: var(--outline-variant);
-  background: var(--card);
-}
-
-.project-group-row {
-  border-radius: var(--control-radius);
 }
 
 /* Documents and requirement analysis */
@@ -192,4 +174,3 @@
 .document-path-steps > div + div {
   border-color: var(--outline-variant);
 }
-

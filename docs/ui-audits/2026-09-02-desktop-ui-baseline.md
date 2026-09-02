@@ -28,4 +28,26 @@
 - `pnpm lint`: passed before implementation.
 - Initial `pnpm test`: failed because Vitest discovered `.worktrees/optimize-codebase` and mixed its React installation with the root renderer. This was reproduced with explicit Natural Language and Settings test paths.
 - A dedicated regression test now requires `vitest.config.ts` to exclude `.worktrees/**`; after that change, the regression test plus Natural Language and Settings focused suites passed.
-- A second full `pnpm test` run remained active beyond the bounded baseline window without emitting a terminal result. Its two verified Node workers were terminated so the UI repair work could proceed. Full-suite status remains **not verified** and is a required final acceptance gate.
+- A second full `pnpm test` run remained active beyond the bounded baseline window without emitting a terminal result. Its two verified Node workers were terminated so the UI repair work could proceed.
+
+## Repair verification
+
+| Area | Evidence | Result |
+| --- | --- | --- |
+| Natural Language and Settings geometry | Focused DOM assertions locate the composer actions and the last Settings control; live Computer Use inspection covered the repaired states before the desktop surface reloaded. | Passed |
+| Zero-data quality states | Home, Run Records, and Recording tests assert neutral/no-evidence states. Run Records additionally asserts that a zero-test-case project cannot render a cross-run passing conclusion. | Passed |
+| Empty workbenches and disabled actions | Documents, Cases, Flows, Suites, Workflow, and Maintenance focused tests cover the single next action and adjacent run blockers. | Passed |
+| Project configuration | Project feature suite and Computer Use inspection cover the four task tabs, one active tabpanel, and native-disabled credential actions. | Passed |
+| Renderer and Electron typing | `pnpm typecheck` | Passed |
+| Lint | `pnpm lint` | Passed |
+| Renderer and Electron build | `pnpm build` | Passed; Vite reports the existing 544.70 kB initial JavaScript chunk warning. |
+| Browser smoke | `pnpm test:browser-smoke` | Passed, 3/3 tests. |
+| Main test suite | First Vitest stage of `pnpm test` | Passed, 94 files and 1031 tests. |
+| 100-Case runtime benchmark | The unchanged `main` baseline and this repair branch both exceed the 128 MiB heap-growth limit. Baseline: 135,046,024 B. Repair branch: 275,230,400 B. | Existing runtime release risk; excluded from this renderer-only repair scope. |
+| Duplicate scan | `pnpm quality:duplicates` reports 139 clones: 2.51% duplicated lines and 2.72% duplicated tokens. The configured 0% threshold returns non-zero. | Existing quality baseline, primarily in untouched Electron/runtime boundaries; no high-risk runtime extraction was included in this UI repair. |
+
+## Remaining visual verification
+
+The local preview does not contain a desktop-only model secret, so gated destinations correctly open Settings instead of exposing their pages. During the final Electron Computer Use pass, the desktop renderer reloaded and stopped publishing an accessibility tree. Continuing to send UI input after that state change would not be reliable evidence.
+
+The final visual matrix remains partially complete. A manually started desktop session with its normal model configuration should re-check Workflow and Recording at `1200 x 760`, `1280 x 800`, `1440 x 900`, and `1024 x 768`, in light and dark themes, before a release claim is made. No secret, project asset, storage state, or runtime execution was changed during this audit.

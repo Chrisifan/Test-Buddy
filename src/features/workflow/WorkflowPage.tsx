@@ -7,7 +7,7 @@ import type {
 
 import { PlayCircle, Plus, Settings2, Trash2 } from 'lucide-react';
 
-import { EvidenceCard, MetricTile, PageHeader, ProjectRequiredState, Surface, PageBody, PageShell } from '../../components/workbench.js';
+import { EvidenceCard, MetricTile, OperationalEmptyState, PageHeader, ProjectRequiredState, Surface, PageBody, PageShell } from '../../components/workbench.js';
 import { StatusPill } from '../../components/StatusPill.js';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -104,6 +104,17 @@ export const WorkflowPage = ({
     }
     return latest;
   }, new Map<string, WorkflowDraft & { version?: number }>()).values()];
+  const hasRuntimeBaseUrl = Boolean(runtimeProfile.baseUrl.trim());
+  const flowTargetUrl = selectedWorkflow?.url.trim();
+  const runBlocker = isRunning
+    ? t('workflow.run.blocked.running')
+    : !selectedWorkflow
+      ? t('workflow.run.blocked.select')
+      : isEditable
+        ? t('workflow.run.blocked.draft')
+        : !hasRuntimeBaseUrl
+          ? t('workflow.run.blocked.baseUrl')
+          : undefined;
 
   if (!hasProject) {
     return (
@@ -121,24 +132,48 @@ export const WorkflowPage = ({
     );
   }
 
+  if (!workflows.length) {
+    return (
+      <PageShell>
+        <PageHeader title={t('workflow.header.title')} />
+        <PageBody>
+          <OperationalEmptyState
+            description={t('workflow.empty.description')}
+            primaryAction={(
+              <Button onClick={onCreateWorkflow} type="button">
+                <Plus className="h-4 w-4" />
+                {t('workflow.action.create')}
+              </Button>
+            )}
+            title={t('workflow.empty.title')}
+          />
+        </PageBody>
+      </PageShell>
+    );
+  }
+
   return (
     <PageShell>
       <PageHeader
         action={
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap items-start gap-2">
             <Button className="rounded-[4px]" onClick={onCreateWorkflow} type="button" variant="outline">
               <Plus className="h-4 w-4" />
               {t('workflow.action.create')}
             </Button>
-            <Button
-              className="rounded-[4px]"
-              disabled={isRunning || !selectedWorkflow || isEditable}
-              onClick={onRunWorkflow}
-              type="button"
-            >
-              <PlayCircle className="h-4 w-4" />
-              {isRunning ? t('workflow.action.running') : t('workflow.action.run')}
-            </Button>
+            <div className="grid max-w-64 gap-1">
+              <Button
+                aria-describedby={runBlocker ? 'workflow-header-run-blocker' : undefined}
+                className="rounded-[4px]"
+                disabled={Boolean(runBlocker)}
+                onClick={onRunWorkflow}
+                type="button"
+              >
+                <PlayCircle className="h-4 w-4" />
+                {isRunning ? t('workflow.action.running') : t('workflow.action.run')}
+              </Button>
+              {runBlocker ? <p className="text-xs leading-5 text-muted-foreground" id="workflow-header-run-blocker">{runBlocker}</p> : null}
+            </div>
           </div>
         }
         title={t('workflow.header.title')}
@@ -181,10 +216,19 @@ export const WorkflowPage = ({
                       <Plus className="h-4 w-4" />
                       {t('workflow.action.addStep')}
                     </Button>
-                    <Button disabled={isRunning || isEditable} onClick={onRunWorkflow} size="sm" type="button">
-                      <PlayCircle className="h-4 w-4" />
-                      {isRunning ? t('workflow.action.running') : t('workflow.action.run')}
-                    </Button>
+                    <div className="grid max-w-56 gap-1">
+                      <Button
+                        aria-describedby={runBlocker ? 'workflow-editor-run-blocker' : undefined}
+                        disabled={Boolean(runBlocker)}
+                        onClick={onRunWorkflow}
+                        size="sm"
+                        type="button"
+                      >
+                        <PlayCircle className="h-4 w-4" />
+                        {isRunning ? t('workflow.action.running') : t('workflow.action.run')}
+                      </Button>
+                      {runBlocker ? <p className="text-xs leading-5 text-muted-foreground" id="workflow-editor-run-blocker">{runBlocker}</p> : null}
+                    </div>
                   </div>
                 </header>
 
@@ -352,8 +396,8 @@ export const WorkflowPage = ({
               </div>
               <div className="workflow-runtime-grid">
                 <div className="form-field">
-                  <Label>Base URL</Label>
-                  <Input onChange={(event) => onUpdateRuntimeProfile({ baseUrl: event.target.value })} value={runtimeProfile.baseUrl} />
+                  <Label htmlFor="workflow-runtime-base-url">{t('workflow.runtime.baseUrl')}</Label>
+                  <Input id="workflow-runtime-base-url" onChange={(event) => onUpdateRuntimeProfile({ baseUrl: event.target.value })} value={runtimeProfile.baseUrl} />
                 </div>
                 <div className="form-field">
                   <Label>{t('workflow.runtime.browser')}</Label>
@@ -367,6 +411,13 @@ export const WorkflowPage = ({
                   </Select>
                 </div>
               </div>
+              {!hasRuntimeBaseUrl && flowTargetUrl ? (
+                <section aria-label={t('workflow.runtime.flowTarget')} className="grid gap-1 border-t border-border pt-3">
+                  <p className="text-xs font-semibold text-foreground">{t('workflow.runtime.flowTarget')}</p>
+                  <p className="break-all font-mono text-xs text-muted-foreground">{flowTargetUrl}</p>
+                  <p className="text-xs leading-5 text-muted-foreground">{t('workflow.runtime.flowTargetDescription')}</p>
+                </section>
+              ) : null}
               {runTitle || runLogs.length ? (
                 <div className="workflow-log-panel">
                   <p>{runTitle || t('workflow.observer.title')}</p>

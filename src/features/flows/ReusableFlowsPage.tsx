@@ -20,7 +20,7 @@ import { Checkbox } from '../../components/ui/checkbox.js';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../../components/ui/dialog.js';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../components/ui/select.js';
 import { Textarea } from '../../components/ui/textarea.js';
-import { EvidenceCard, PageBody, PageHeader, PageShell, ProjectRequiredState, Surface } from '../../components/workbench.js';
+import { EvidenceCard, OperationalEmptyState, PageBody, PageHeader, PageShell, ProjectRequiredState, Surface } from '../../components/workbench.js';
 import { useI18n } from '../../i18n/index.js';
 
 const referenceKey = (reference: VersionedTestAssetReference): string => {
@@ -70,6 +70,29 @@ export const ReusableFlowsPage = ({
     return <PageShell><PageHeader title={t('flows.header.title')} /><PageBody><ProjectRequiredState actionLabel={t('flows.empty.openProjects')} description={t('flows.empty.description')} onOpenProjects={onOpenProjects} title={t('flows.empty.title')} /></PageBody></PageShell>;
   }
   const currentProject = project;
+  const createDraft = () => {
+    setDraft(createEmptyReusableFlowAsset(currentProject.reusableFlows.length + 1));
+  };
+
+  if (!currentProject.reusableFlows.length && !draft) {
+    return (
+      <PageShell>
+        <PageHeader title={t('flows.header.title')} />
+        <PageBody>
+          <OperationalEmptyState
+            description={t('flows.emptyState.description')}
+            primaryAction={(
+              <Button onClick={createDraft} type="button">
+                <Plus className="size-4" />
+                {t('flows.action.create')}
+              </Button>
+            )}
+            title={t('flows.emptyState.title')}
+          />
+        </PageBody>
+      </PageShell>
+    );
+  }
   const targetFlows = selected
     ? currentProject.reusableFlows
       .filter((flow) => flow.id === selected.id && flow.version > selected.version)
@@ -86,10 +109,6 @@ export const ReusableFlowsPage = ({
       .filter((flow) => flow.id === selected.id)
       .reduce((highestVersion, flow) => Math.max(highestVersion, flow.version), selected.version) + 1
     : editor?.version;
-
-  const createDraft = () => {
-    setDraft(createEmptyReusableFlowAsset(currentProject.reusableFlows.length + 1));
-  };
 
   const editAsNewVersion = () => {
     if (!selected) return;

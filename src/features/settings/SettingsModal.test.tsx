@@ -127,13 +127,17 @@ describe('SettingsModal', () => {
   it('renders the application settings as a modal with independent categories', () => {
     renderSettingsModal();
 
-    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    const dialog = screen.getByRole('dialog');
+    const settingsShell = dialog.querySelector('.settings-dialog-shell');
+
+    expect(dialog).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: '应用设置' })).toBeInTheDocument();
     expect(screen.getAllByRole('button', { name: /通用/ }).length).toBeGreaterThan(0);
     expect(screen.queryByRole('heading', { name: 'MidScene 配置' })).not.toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Appearance' })).not.toBeInTheDocument();
     expect(screen.queryByText('MidScene optional')).not.toBeInTheDocument();
     expect(screen.getByText('界面语言')).toBeInTheDocument();
+    expect(settingsShell).toHaveClass('grid-rows-[auto_minmax(0,1fr)_auto]');
   });
 
   it('keeps MidScene field guidance in label tooltips', () => {

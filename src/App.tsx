@@ -3182,6 +3182,7 @@ export const App = () => {
               onAccept={maintenanceReviewAvailable ? handleAcceptMaintenanceDraft : undefined}
               onReject={maintenanceReviewAvailable ? handleRejectMaintenanceDraft : undefined}
               onOpenEvidence={maintenanceReviewAvailable ? handleOpenMaintenanceEvidence : undefined}
+              onOpenRuns={() => switchPage('runs')}
             />
           ) : null}
 

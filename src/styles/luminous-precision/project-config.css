@@ -1,0 +1,190 @@
+/* Project configuration */
+
+.project-config-dialog {
+  grid-template-rows: auto minmax(0, 1fr);
+  width: min(920px, calc(100vw - 40px));
+  border-radius: var(--panel-radius);
+}
+
+.project-config-heading {
+  border-color: var(--outline-variant);
+}
+
+.project-config-heading h2 {
+  color: var(--foreground);
+  font-family: var(--font-serif);
+  font-size: 1.25rem;
+  letter-spacing: 0;
+}
+
+.project-config-content {
+  min-height: 0;
+  gap: 0;
+  overflow: hidden;
+  background: var(--card);
+}
+
+.project-config-tabs-list {
+  display: flex;
+  width: 100%;
+  height: auto;
+  min-height: 48px;
+  justify-content: flex-start;
+  gap: 2px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--outline-variant);
+  border-radius: 0;
+  background: var(--surface-container-low);
+  padding: 6px 20px;
+}
+
+.project-config-tabs-list [role='tab'] {
+  min-height: 34px;
+  flex: 0 0 auto;
+  border: 1px solid transparent;
+  border-radius: var(--control-radius);
+  color: var(--muted-foreground);
+  font-size: var(--font-size-meta);
+  font-weight: 600;
+}
+
+.project-config-tabs-list [role='tab'][data-state='active'] {
+  border-color: color-mix(in srgb, var(--primary) 26%, var(--outline-variant));
+  background: var(--card);
+  color: var(--foreground);
+  box-shadow: none;
+}
+
+.project-config-tab-panel {
+  min-height: 0;
+  overflow-y: auto;
+  padding: 20px 24px 28px;
+}
+
+.project-config-panel-stack {
+  display: grid;
+  width: min(100%, 720px);
+  gap: 20px;
+  margin-inline: auto;
+}
+
+.project-config-tab-panel > .project-config-section {
+  width: min(100%, 720px);
+  margin-inline: auto;
+}
+
+.project-config-section {
+  display: grid;
+  gap: 1rem;
+  border-color: var(--outline-variant);
+  background: var(--card);
+}
+
+.project-config-section-heading {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.project-config-section-heading h3 {
+  color: var(--foreground);
+  font-size: 0.9375rem;
+  font-weight: 700;
+  letter-spacing: 0;
+  line-height: 1.25rem;
+}
+
+.project-config-section-heading p {
+  margin-top: 0.1875rem;
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+  line-height: 1.125rem;
+}
+
+.project-config-panel-stack > .project-config-section + .project-config-section {
+  border-top: 1px solid var(--outline-variant);
+  border-color: var(--outline-variant);
+  padding-top: 20px;
+}
+
+.project-config-form-grid {
+  display: grid;
+  gap: 1.25rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.project-credential-list {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.project-credential-row {
+  border: 1px solid var(--outline-variant);
+  border-left: 2px solid color-mix(in oklch, var(--primary) 58%, var(--border));
+  background: color-mix(in oklch, var(--muted) 42%, var(--card));
+  padding: 0.625rem 0.75rem;
+}
+
+.project-credential-row p {
+  font-size: 0.8125rem;
+  font-weight: 700;
+  line-height: 1.125rem;
+}
+
+.project-credential-row span {
+  display: block;
+  margin-top: 0.125rem;
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  line-height: 1rem;
+}
+
+.project-group-row {
+  border-left: 2px solid transparent;
+  border-radius: var(--control-radius);
+  padding: 0.75rem;
+}
+
+.project-group-row.tech-active {
+  border-left-color: var(--primary);
+  background: color-mix(in oklch, var(--primary) 7%, var(--card));
+  color: var(--foreground);
+}
+
+.project-group-row .inline-edit,
+.project-group-row .inline-edit:hover {
+  border-color: color-mix(in oklch, var(--border) 82%, transparent);
+  background: var(--card);
+}
+
+.project-environment-row {
+  border: 1px solid var(--outline-variant);
+  border-left: 2px solid color-mix(in oklch, var(--primary) 36%, var(--border));
+  border-radius: 0;
+  background: color-mix(in oklch, var(--muted) 34%, var(--card));
+  padding: 0.875rem;
+}
+
+@media (max-width: 720px) {
+  .project-config-heading {
+    padding: 1rem 3.75rem 1rem 1rem;
+  }
+
+  .project-config-dialog {
+    width: min(100vw - 24px, 920px);
+  }
+
+  .project-config-tabs-list {
+    padding-inline: 12px;
+  }
+
+  .project-config-tab-panel {
+    padding: 16px 12px 20px;
+  }
+
+  .project-config-form-grid {
+    grid-template-columns: 1fr;
+  }
+}

@@ -38,6 +38,12 @@ describe('NaturalLanguagePage', () => {
     expect(screen.getByText('测试会话')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '保存为步骤' })).toBeInTheDocument();
     expect(screen.queryByText('Testing Session')).not.toBeInTheDocument();
+
+    const commandPanel = screen.getByRole('heading', { level: 2, name: '测试会话' }).closest('aside');
+    const composer = screen.getByPlaceholderText('输入命令，例如：提取所有图表图例').closest('.nl-command-composer');
+
+    expect(commandPanel).toHaveClass('grid-rows-[auto_minmax(0,1fr)_auto]');
+    expect(composer).toHaveClass('shrink-0');
   });
 
   it('offers the current passed run as an editable test case', () => {

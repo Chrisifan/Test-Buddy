@@ -1,6 +1,7 @@
 @import './luminous-precision/base.css';
 @import './luminous-precision/workspace.css';
 @import './luminous-precision/assets.css';
+@import './luminous-precision/project-config.css';
 @import './luminous-precision/test-design.css';
 @import './luminous-precision/settings-responsive.css';
 @import './luminous-precision/workbench-views.css';

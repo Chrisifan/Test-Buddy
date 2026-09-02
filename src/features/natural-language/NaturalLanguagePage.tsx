@@ -132,7 +132,7 @@ export const NaturalLanguagePage = ({
         <MetricTile label={t('workflow.runtime.browser')} value={runtimeProfile.browser} />
       </section>
       <section className="designer-split nl-workbench nl-studio" aria-label={t('nl.aria.workbench')}>
-        <aside className="designer-panel nl-command-panel flex flex-col">
+        <aside className="designer-panel nl-command-panel grid min-h-0 grid-rows-[auto_minmax(0,1fr)_auto]">
           <div className="designer-panel-header grid gap-4">
             <div className="flex items-center justify-between">
               <h2 className="text-sm font-semibold text-primary">{t('nl.session.title')}</h2>
@@ -199,7 +199,7 @@ export const NaturalLanguagePage = ({
             ) : null}
           </div>
 
-          <div className="nl-command-composer border-t border-border bg-card p-4">
+          <div className="nl-command-composer shrink-0 border-t border-border bg-card p-4">
             <div className="relative">
               <Textarea
                 className="min-h-[96px] pr-12 font-mono text-sm leading-6"

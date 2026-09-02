@@ -55,6 +55,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { useI18n } from '../../i18n/index.js';
 import {
@@ -377,7 +378,15 @@ const ProjectConfigurationDialog = ({
           <DialogTitle>{project.name}</DialogTitle>
           <DialogDescription>{t('project.detail.description')}</DialogDescription>
         </DialogHeader>
-        <div className="project-config-content">
+        <Tabs className="project-config-content" defaultValue="details" key={project.id}>
+          <TabsList aria-label={t('project.config.tabs.aria')} className="project-config-tabs-list">
+            <TabsTrigger value="details">{t('project.config.tabs.details')}</TabsTrigger>
+            <TabsTrigger value="environments">{t('project.config.tabs.environments')}</TabsTrigger>
+            <TabsTrigger value="credentials">{t('project.config.tabs.credentials')}</TabsTrigger>
+            <TabsTrigger value="groups">{t('project.config.tabs.groups')}</TabsTrigger>
+          </TabsList>
+          <TabsContent className="project-config-tab-panel" value="details">
+            <div className="project-config-panel-stack">
           <section className="project-config-section project-config-basic">
             <div className="project-config-section-heading">
               <div>
@@ -411,7 +420,35 @@ const ProjectConfigurationDialog = ({
             </div>
           </section>
 
-          <div className="project-config-columns">
+              <FixtureSection
+                onUpdateProject={onUpdateProject}
+                project={project}
+                projectAssetBinding={projectAssetBinding}
+              />
+
+              <ProjectAssetSnapshotSection
+                binding={projectAssetBinding}
+                onProjectAssetBound={onProjectAssetBound}
+                onProjectAssetReloaded={onProjectAssetReloaded}
+                project={project}
+              />
+
+              <Button
+                className="justify-start"
+                onClick={() => {
+                  onDeleteProject(project.id);
+                  onClose();
+                }}
+                type="button"
+                variant="destructive"
+              >
+                <Trash2 className="h-4 w-4" />
+                {t('project.delete')}
+              </Button>
+            </div>
+          </TabsContent>
+
+          <TabsContent className="project-config-tab-panel" value="environments">
             <section className="project-config-section">
               <div className="project-config-section-heading">
                 <div>
@@ -431,9 +468,10 @@ const ProjectConfigurationDialog = ({
                 ))}
               </div>
             </section>
+          </TabsContent>
 
-            <div className="grid content-start gap-5">
-              <section className="project-config-section">
+          <TabsContent className="project-config-tab-panel" value="groups">
+            <section className="project-config-section">
                 <div className="project-config-section-heading">
                   <div>
                     <h3>{t('project.detail.groups')}</h3>
@@ -457,8 +495,11 @@ const ProjectConfigurationDialog = ({
                     />
                   ))}
                 </div>
-              </section>
+            </section>
+          </TabsContent>
 
+          <TabsContent className="project-config-tab-panel" value="credentials">
+            <div className="project-config-panel-stack">
               <section className="project-config-section">
                 <div className="project-config-section-heading">
                   <div className="flex items-center gap-2">
@@ -686,35 +727,9 @@ const ProjectConfigurationDialog = ({
                   </div>
                 ) : null}
               </section>
-
-              <FixtureSection
-                onUpdateProject={onUpdateProject}
-                project={project}
-                projectAssetBinding={projectAssetBinding}
-              />
-
-              <ProjectAssetSnapshotSection
-                binding={projectAssetBinding}
-                onProjectAssetBound={onProjectAssetBound}
-                onProjectAssetReloaded={onProjectAssetReloaded}
-                project={project}
-              />
-
-              <Button
-                className="justify-start"
-                onClick={() => {
-                  onDeleteProject(project.id);
-                  onClose();
-                }}
-                type="button"
-                variant="destructive"
-              >
-                <Trash2 className="h-4 w-4" />
-                {t('project.delete')}
-              </Button>
             </div>
-          </div>
-        </div>
+          </TabsContent>
+        </Tabs>
       </DialogContent>
     </Dialog>
   );

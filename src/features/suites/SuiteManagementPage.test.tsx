@@ -73,6 +73,16 @@ const renderPage = ({
 };
 
 describe('SuiteManagementPage', () => {
+  it('replaces an empty Suite workbench with one creation action', () => {
+    const project = createEmptyProject(1);
+    const { container } = renderPage({ project });
+    const emptyState = screen.getByRole('region', { name: '暂无 Suite' });
+
+    expect(screen.getByRole('button', { name: '新建 Suite' })).toBeInTheDocument();
+    expect(emptyState).toContainElement(screen.getByRole('button', { name: '新建 Suite' }));
+    expect(container.querySelector('.tech-panel')).not.toBeInTheDocument();
+  });
+
   it('offers each logical Case once and pins its latest revision in a new Suite', () => {
     const project = createProject();
     const catalogV1 = { ...project.testCases[0]!, version: 1, name: '商品目录检查 v1' };

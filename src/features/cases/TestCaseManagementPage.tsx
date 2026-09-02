@@ -69,7 +69,7 @@ import {
   SelectValue,
 } from '../../components/ui/select.js';
 import { Textarea } from '../../components/ui/textarea.js';
-import { EvidenceCard, PageBody, PageHeader, PageShell, ProjectRequiredState } from '../../components/workbench.js';
+import { EvidenceCard, OperationalEmptyState, PageBody, PageHeader, PageShell, ProjectRequiredState } from '../../components/workbench.js';
 import { useI18n } from '../../i18n/index.js';
 
 type SaveMode = 'debounced' | 'immediate';
@@ -1215,7 +1215,34 @@ export const TestCaseManagementPage = ({
     );
   }
 
-  const blockerLabel = getBlockerLabel(runBlocker, t);
+  if (!project.testCases.length) {
+    return (
+      <PageShell>
+        <PageHeader title={t('cases.header.title')} />
+        <PageBody>
+          <OperationalEmptyState
+            description={t('cases.select.emptyDescription')}
+            primaryAction={(
+              <Button onClick={onCreateTestCase} type="button">
+                <Plus className="size-4" />
+                {t('cases.action.create')}
+              </Button>
+            )}
+            title={t('cases.select.emptyTitle')}
+          />
+        </PageBody>
+      </PageShell>
+    );
+  }
+
+  const caseRunBlocker = getBlockerLabel(runBlocker, t)
+    ?? (isRunning
+      ? t('cases.run.blocked.running')
+      : isDraftOpen
+        ? t('cases.run.blocked.draft')
+        : !currentReference
+          ? t('cases.run.blocked.select')
+          : undefined);
 
   return (
     <PageShell className="figma-case-page">
@@ -1253,15 +1280,18 @@ export const TestCaseManagementPage = ({
                 </Button>
               }
             />
-            <Button
-              disabled={!publishedTestCase && !selectedTestCase || Boolean(runBlocker) || isRunning || isDraftOpen}
-              onClick={() => currentReference && onRunTestCase(currentReference)}
-              title={blockerLabel}
-              type="button"
-            >
-              <Play className="size-4" />
-              {isRunning ? t('cases.action.running') : t('cases.action.run')}
-            </Button>
+            <div className="grid max-w-64 gap-1">
+              <Button
+                aria-describedby={caseRunBlocker ? 'case-run-blocker' : undefined}
+                disabled={Boolean(caseRunBlocker)}
+                onClick={() => currentReference && onRunTestCase(currentReference)}
+                type="button"
+              >
+                <Play className="size-4" />
+                {isRunning ? t('cases.action.running') : t('cases.action.run')}
+              </Button>
+              {caseRunBlocker ? <p className="text-xs leading-5 text-muted-foreground" id="case-run-blocker">{caseRunBlocker}</p> : null}
+            </div>
           </>
         }
         meta={
@@ -1281,12 +1311,6 @@ export const TestCaseManagementPage = ({
       />
 
       <PageBody className="flex min-h-0 flex-col overflow-hidden py-2">
-        {blockerLabel ? (
-          <p className="case-run-blocker flex shrink-0 items-center gap-2 text-sm text-destructive">
-            <AlertTriangle className="size-4" />
-            {blockerLabel}
-          </p>
-        ) : null}
         {!selectedCase ? (
           <EvidenceCard
             action={

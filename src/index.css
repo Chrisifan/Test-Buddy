@@ -1008,121 +1008,6 @@
     text-align: center;
   }
 
-  .project-config-dialog {
-    grid-template-rows: auto minmax(0, 1fr);
-    border-radius: 12px;
-  }
-
-  .project-config-heading h2 {
-    font-family: var(--font-serif);
-    font-size: 1.25rem;
-    letter-spacing: 0;
-  }
-
-  .project-config-content {
-    min-height: 0;
-    overflow-y: auto;
-    padding: 1.25rem 1.5rem 1.5rem;
-  }
-
-  .project-config-section {
-    display: grid;
-    gap: 1rem;
-  }
-
-  .project-config-section + .project-config-section {
-    border-top: 1px solid var(--border);
-    padding-top: 1.25rem;
-  }
-
-  .project-config-section-heading {
-    display: flex;
-    align-items: start;
-    justify-content: space-between;
-    gap: 1rem;
-  }
-
-  .project-config-section-heading h3 {
-    color: var(--foreground);
-    font-size: 0.9375rem;
-    font-weight: 700;
-    line-height: 1.25rem;
-  }
-
-  .project-config-section-heading p {
-    margin-top: 0.1875rem;
-    color: var(--muted-foreground);
-    font-size: 0.75rem;
-    line-height: 1.125rem;
-  }
-
-  .project-config-form-grid,
-  .project-config-columns {
-    display: grid;
-    gap: 1.25rem;
-  }
-
-  .project-config-form-grid {
-    grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
-  }
-
-  .project-config-columns {
-    grid-template-columns: minmax(0, 1.18fr) minmax(280px, 0.82fr);
-    margin-top: 1.5rem;
-    border-top: 1px solid var(--border);
-    padding-top: 1.5rem;
-  }
-
-  .project-credential-list {
-    display: grid;
-    gap: 0.5rem;
-  }
-
-  .project-credential-row {
-    border-left: 2px solid color-mix(in oklch, var(--primary) 58%, var(--border));
-    background: color-mix(in oklch, var(--muted) 42%, var(--card));
-    padding: 0.625rem 0.75rem;
-  }
-
-  .project-credential-row p {
-    font-size: 0.8125rem;
-    font-weight: 700;
-    line-height: 1.125rem;
-  }
-
-  .project-credential-row span {
-    display: block;
-    margin-top: 0.125rem;
-    color: var(--muted-foreground);
-    font-family: var(--font-mono);
-    font-size: 0.6875rem;
-    line-height: 1rem;
-  }
-
-  .project-group-row {
-    border-left: 2px solid transparent;
-    padding: 0.75rem;
-  }
-
-  .project-group-row.tech-active {
-    border-left-color: var(--primary);
-    background: color-mix(in oklch, var(--primary) 7%, var(--card));
-    color: var(--foreground);
-  }
-
-  .project-group-row .inline-edit,
-  .project-group-row .inline-edit:hover {
-    border-color: color-mix(in oklch, var(--border) 82%, transparent);
-    background: var(--card);
-  }
-
-  .project-environment-row {
-    border-left: 2px solid color-mix(in oklch, var(--primary) 36%, var(--border));
-    border-radius: 0;
-    background: color-mix(in oklch, var(--muted) 34%, var(--card));
-    padding: 0.875rem;
-  }
-
   .document-studio {
     display: grid;
     min-height: min(720px, calc(100vh - 202px));
@@ -2964,10 +2849,6 @@
       grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 
-    .project-config-columns {
-      grid-template-columns: 1fr;
-    }
-
     .workflow-studio {
       grid-template-columns: 1fr;
     }
@@ -3051,8 +2932,7 @@
     }
 
     .project-overview-metrics,
-    .project-card-grid,
-    .project-config-form-grid {
+    .project-card-grid {
       grid-template-columns: 1fr;
     }
 
@@ -3068,14 +2948,6 @@
 
     .project-create-button {
       width: 100%;
-    }
-
-    .project-config-content {
-      padding: 1rem;
-    }
-
-    .project-config-heading {
-      padding: 1rem 3.75rem 1rem 1rem;
     }
 
     .workflow-editor {

@@ -32,6 +32,19 @@ const publishedFlow = (): ReusableFlowAsset => {
 };
 
 describe('ReusableFlowsPage', () => {
+  it('replaces an empty Flow workbench with one creation action', () => {
+    const project = createEmptyProject(1);
+    const { container } = render(
+      <I18nProvider locale="zh-CN">
+        <ReusableFlowsPage onPublishFlow={vi.fn()} onSelectFlow={vi.fn()} project={project} />
+      </I18nProvider>,
+    );
+    const emptyState = screen.getByRole('region', { name: '暂无 Flow' });
+
+    expect(within(emptyState).getByRole('button', { name: '新建 Flow' })).toBeInTheDocument();
+    expect(container.querySelector('.tech-panel')).not.toBeInTheDocument();
+  });
+
   it('keeps a saved Flow read-only and publishes an edit as its next immutable version', () => {
     const project = { ...createEmptyProject(1), reusableFlows: [publishedFlow()] };
     const onPublishFlow = vi.fn();

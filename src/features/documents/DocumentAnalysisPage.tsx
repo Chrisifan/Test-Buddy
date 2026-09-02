@@ -17,7 +17,7 @@ import {
 
 import { FileText, Filter, Plus, Sparkles, Table2, Undo2, Upload, Video } from 'lucide-react';
 
-import { EvidenceCard, MetricTile, PageHeader, ProjectRequiredState, Surface, PageBody, PageShell } from '../../components/workbench.js';
+import { EvidenceCard, MetricTile, OperationalEmptyState, PageHeader, ProjectRequiredState, Surface, PageBody, PageShell } from '../../components/workbench.js';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -206,6 +206,18 @@ export const DocumentAnalysisPage = ({
       sourceText,
     });
   };
+  const documentUploadAction = (
+    <label className="document-upload-action">
+      <Upload className="h-3.5 w-3.5" />
+      {t('documents.upload.eyebrow')}
+      <input
+        accept=".txt,.md,.markdown,.pdf"
+        className="sr-only"
+        onChange={(event) => void handleFileChange(event.target.files?.[0])}
+        type="file"
+      />
+    </label>
+  );
 
   if (!project) {
     return (
@@ -228,16 +240,7 @@ export const DocumentAnalysisPage = ({
       <PageHeader
         action={
           <>
-            <label className="document-upload-action">
-              <Upload className="h-3.5 w-3.5" />
-              {t('documents.upload.eyebrow')}
-              <input
-                accept=".txt,.md,.markdown,.pdf"
-                className="sr-only"
-                onChange={(event) => void handleFileChange(event.target.files?.[0])}
-                type="file"
-              />
-            </label>
+            {documents.length ? documentUploadAction : null}
             <Button onClick={() => setIsCoverageMatrixOpen(true)} size="sm" type="button" variant="outline">
               <Table2 className="h-3.5 w-3.5" />
               {t('documents.action.coverageMatrix')}
@@ -257,6 +260,14 @@ export const DocumentAnalysisPage = ({
 
       <PageBody className="figma-document-body">
       <section className="document-studio" aria-label={t('documents.aria.workbench')}>
+        {!documents.length ? (
+          <OperationalEmptyState
+            description={t('documents.empty.description')}
+            primaryAction={documentUploadAction}
+            title={t('documents.empty.title')}
+          />
+        ) : (
+          <>
         <aside className="document-asset-area" aria-label={t('documents.header.title')}>
           <header className="document-library-header">
             <span>{t('documents.library.recent')}</span>
@@ -284,12 +295,6 @@ export const DocumentAnalysisPage = ({
                 </footer>
               </button>
             ))}
-            {!documents.length ? (
-              <div className="document-library-empty">
-                <FileText aria-hidden="true" className="h-5 w-5" />
-                <p>{t('documents.empty.title')}</p>
-              </div>
-            ) : null}
           </div>
         </aside>
 
@@ -345,13 +350,7 @@ export const DocumentAnalysisPage = ({
                 value={selectedDocument.sourceText}
               />
             </Surface>
-          ) : (
-            <section className="document-workspace-empty">
-              <FileText aria-hidden="true" className="h-7 w-7" />
-              <h2>{t('documents.empty.title')}</h2>
-              <p>{t('documents.empty.description')}</p>
-            </section>
-          )}
+          ) : null}
 
           {selectedDocument ? (
             <aside className="document-path-pane" aria-label={t('documents.selected.pathCount', { count: selectedDocument.generatedPaths.length })}>
@@ -393,6 +392,8 @@ export const DocumentAnalysisPage = ({
             </aside>
           ) : null}
         </section>
+          </>
+        )}
       </section>
       </PageBody>
       <Dialog onOpenChange={setIsCoverageMatrixOpen} open={isCoverageMatrixOpen}>

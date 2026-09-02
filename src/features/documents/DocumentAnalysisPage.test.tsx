@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
@@ -62,8 +62,17 @@ describe('DocumentAnalysisPage', () => {
     expect(screen.getByRole('heading', { level: 1, name: '需求文档分析' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '覆盖矩阵' })).toBeInTheDocument();
     expect(screen.getByText('上传新文档')).toBeInTheDocument();
-    expect(screen.getByText('最近文档')).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: '暂无文档' })).toBeInTheDocument();
     expect(screen.queryByText('Upload New Document')).not.toBeInTheDocument();
+  });
+
+  it('keeps an empty document project focused on one import action without a detail rail', () => {
+    const emptyProject = { ...project, documents: [] };
+    const { container } = renderPage('zh-CN', emptyProject);
+    const emptyState = screen.getByRole('region', { name: '暂无文档' });
+
+    expect(within(emptyState).getByText('上传新文档')).toBeInTheDocument();
+    expect(container.querySelector('.document-side-panel')).not.toBeInTheDocument();
   });
 
   it('switches document analysis actions to English', () => {

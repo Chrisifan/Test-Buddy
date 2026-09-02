@@ -61,11 +61,10 @@ const getSignalSummary = (recentRuns: RunSummary[], t: (key: string) => string) 
   };
 };
 
-const getCoverageIndex = (projects: ProjectDraft[], runs: RunSummary[]): number => {
+export const getCoverageIndex = (projects: ProjectDraft[], runs: RunSummary[]): number | null => {
   const assetScore = projects.reduce(
     (total, project) =>
       total +
-      project.groups.length * 6 +
       project.testCases.length * 8 +
       project.recordings.length * 10 +
       project.documents.length * 8,
@@ -75,7 +74,11 @@ const getCoverageIndex = (projects: ProjectDraft[], runs: RunSummary[]): number 
     ? Math.round((runs.filter((run) => run.status === 'passed').length / runs.length) * 30)
     : 0;
 
-  return Math.min(98, Math.max(12, assetScore + passScore));
+  if (!assetScore && !runs.length) {
+    return null;
+  }
+
+  return Math.min(98, assetScore + passScore);
 };
 
 const DashboardCard = ({
@@ -295,6 +298,7 @@ export const HomePage = ({
       }),
       Icon: DatabaseZap,
       tone: 'neutral' as const,
+      action: undefined,
     },
     {
       label: t('home.health.title'),
@@ -302,6 +306,7 @@ export const HomePage = ({
       description: t('home.health.projectCount', { count: projects.length }),
       Icon: ShieldCheck,
       tone: signal.failed > signal.passed ? 'risk' as const : 'primary' as const,
+      action: undefined,
     },
     {
       label: t('home.health.passRate'),
@@ -312,13 +317,19 @@ export const HomePage = ({
       }),
       Icon: CheckCircle2,
       tone: 'primary' as const,
+      action: undefined,
     },
     {
       label: t('home.health.coverage'),
-      value: `${coverageIndex}`,
-      description: t('home.asset.pathsDescription'),
+      value: coverageIndex === null ? t('home.health.noCoverage') : `${coverageIndex}`,
+      description: coverageIndex === null ? t('home.health.noCoverageDescription') : t('home.asset.pathsDescription'),
       Icon: ScanSearch,
-      tone: 'primary' as const,
+      tone: coverageIndex === null ? 'neutral' as const : 'primary' as const,
+      action: coverageIndex === null ? (
+        <button className="home-link cursor-pointer text-xs font-semibold transition" onClick={() => onGoToPage('documents')} type="button">
+          {t('home.health.noCoverageAction')}
+        </button>
+      ) : undefined,
     },
   ];
   const recentRunHistory = recentRuns.slice(0, 3);
@@ -330,8 +341,8 @@ export const HomePage = ({
       <PageBody>
         <section aria-label={t('home.aria.workbench')} className="home-dashboard-layout figma-overview-canvas">
           <div className="home-summary-grid home-metric-grid grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-4">
-            {metricCards.map(({ label, value, description, Icon, tone }) => (
-              <DashboardCard className="home-summary-card home-metric-card p-4" key={label}>
+            {metricCards.map(({ label, value, description, Icon, tone, action }) => (
+              <DashboardCard action={action} className="home-summary-card home-metric-card p-4" key={label}>
                 <div className="flex items-start justify-between gap-3">
                   <p className="home-faint font-mono text-[11px] uppercase tracking-[0.1em]">{label}</p>
                   <StatGlyph testId="home-summary-icon" tone={tone}><Icon className="h-5 w-5" /></StatGlyph>

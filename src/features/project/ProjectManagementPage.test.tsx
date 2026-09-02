@@ -103,10 +103,56 @@ describe('ProjectManagementPage', () => {
 
     expect(screen.getByText('Project Name')).toBeInTheDocument();
     expect(screen.getByText('Project Description')).toBeInTheDocument();
+    fireEvent.mouseDown(screen.getByRole('tab', { name: 'Credentials & Storage' }), { button: 0 });
     expect(screen.getByText('Credential Name')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save Credential' })).toBeInTheDocument();
+    fireEvent.mouseDown(screen.getByRole('tab', { name: 'Environments' }), { button: 0 });
     expect(screen.getAllByText('Environment Name').length).toBeGreaterThan(0);
     expect(screen.getByText('Do Not Use Credentials')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Save Credential' })).toBeInTheDocument();
+  });
+
+  it('organizes project configuration into task-focused sections', () => {
+    const state = createDemoStudioState();
+    const project = state.projects[0]!;
+
+    render(
+      <I18nProvider locale="en-US">
+        <ProjectManagementPage
+          onCreateGroup={vi.fn()}
+          onCreateProject={vi.fn()}
+          onDeleteGroup={vi.fn()}
+          onDeleteProject={vi.fn()}
+          onSaveCredential={vi.fn()}
+          onSelectGroup={vi.fn()}
+          onSelectProject={vi.fn()}
+          onUpdateProject={vi.fn()}
+          projects={[project]}
+          selectedGroupId={project.groups[0]!.id}
+          selectedProject={project}
+        />
+      </I18nProvider>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Manage' }));
+
+    const details = screen.getByRole('tab', { name: 'Project Details' });
+    const environments = screen.getByRole('tab', { name: 'Environments' });
+    const credentials = screen.getByRole('tab', { name: 'Credentials & Storage' });
+    const groups = screen.getByRole('tab', { name: 'Groups' });
+    expect(details).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('tabpanel')).toHaveTextContent('Project Basic Info');
+
+    fireEvent.mouseDown(environments, { button: 0 });
+    expect(environments).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('tabpanel')).toHaveTextContent('Environment Configuration');
+
+    fireEvent.mouseDown(credentials, { button: 0 });
+    expect(credentials).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('tabpanel')).toHaveTextContent('Browser Authentication State');
+
+    fireEvent.mouseDown(groups, { button: 0 });
+    expect(groups).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('tabpanel')).toHaveTextContent('Groups');
   });
 
   it('creates an immutable fixture version without replacing the prior version', async () => {
@@ -245,6 +291,7 @@ describe('ProjectManagementPage', () => {
       render(<ProjectPageHarness />);
 
       fireEvent.click(screen.getByRole('button', { name: '管理配置' }));
+      fireEvent.mouseDown(screen.getByRole('tab', { name: '凭据与认证状态' }), { button: 0 });
       fireEvent.change(screen.getByLabelText('认证状态名称'), { target: { value: imported.label } });
       fireEvent.click(screen.getByRole('button', { name: '导入 storageState' }));
 
@@ -279,6 +326,7 @@ describe('ProjectManagementPage', () => {
       render(<ProjectPageHarness />);
 
       fireEvent.click(screen.getByRole('button', { name: '管理配置' }));
+      fireEvent.mouseDown(screen.getByRole('tab', { name: '凭据与认证状态' }), { button: 0 });
       fireEvent.change(screen.getByLabelText('认证状态名称'), { target: { value: captured.label } });
       fireEvent.click(screen.getByRole('button', { name: '捕获当前浏览器状态' }));
       expect(await screen.findByText(captured.label)).toBeInTheDocument();

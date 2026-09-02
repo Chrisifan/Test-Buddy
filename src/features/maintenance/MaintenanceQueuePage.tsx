@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { History } from 'lucide-react';
 
 import type { MaintenanceDraft } from '../../../shared/maintenance.js';
 import type {
@@ -7,6 +8,8 @@ import type {
   MaintenanceDraftRejectionRequest,
   MaintenanceEvidenceOpenRequest,
 } from '../../../shared/studio.js';
+import { OperationalEmptyState, PageBody, PageHeader, PageShell } from '../../components/workbench.js';
+import { Button } from '../../components/ui/button.js';
 import { useI18n } from '../../i18n/index.js';
 
 type ApprovalResult = MaintenanceDraftAcceptanceResult;
@@ -16,9 +19,10 @@ export interface MaintenanceQueuePageProps {
   onAccept?: (request: MaintenanceDraftAcceptanceRequest) => Promise<ApprovalResult>;
   onReject?: (request: MaintenanceDraftRejectionRequest) => Promise<MaintenanceDraft>;
   onOpenEvidence?: (request: MaintenanceEvidenceOpenRequest) => Promise<void>;
+  onOpenRuns: () => void;
 }
 
-export const MaintenanceQueuePage = ({ drafts, onAccept, onReject, onOpenEvidence }: MaintenanceQueuePageProps) => {
+export const MaintenanceQueuePage = ({ drafts, onAccept, onReject, onOpenEvidence, onOpenRuns }: MaintenanceQueuePageProps) => {
   const { t } = useI18n();
   const [confirmed, setConfirmed] = useState<Record<string, boolean>>({});
   const [rejectionRationales, setRejectionRationales] = useState<Record<string, string>>({});
@@ -26,6 +30,26 @@ export const MaintenanceQueuePage = ({ drafts, onAccept, onReject, onOpenEvidenc
   const [pending, setPending] = useState<Record<string, boolean>>({});
   const [errors, setErrors] = useState<Record<string, boolean>>({});
   const ordered = useMemo(() => [...drafts].sort((left, right) => right.createdAt.localeCompare(left.createdAt)), [drafts]);
+
+  if (!ordered.length) {
+    return (
+      <PageShell>
+        <PageHeader title={t('maintenance.title')} />
+        <PageBody>
+          <OperationalEmptyState
+            description={t('maintenance.empty.description')}
+            primaryAction={(
+              <Button onClick={onOpenRuns} type="button">
+                <History className="size-4" />
+                {t('maintenance.empty.action')}
+              </Button>
+            )}
+            title={t('maintenance.empty.title')}
+          />
+        </PageBody>
+      </PageShell>
+    );
+  }
 
   const runDraftAction = async (draftId: string, action: () => Promise<void>) => {
     setErrors((current) => ({ ...current, [draftId]: false }));
@@ -49,7 +73,7 @@ export const MaintenanceQueuePage = ({ drafts, onAccept, onReject, onOpenEvidenc
         <span className="text-sm text-[var(--muted-foreground)]">{t('maintenance.count', { count: ordered.length })}</span>
       </header>
 
-      {ordered.length ? ordered.map((draft) => {
+      {ordered.map((draft) => {
         const confirmationLabel = t('maintenance.confirmRevision', { revision: draft.projectRevision });
         const outcome = outcomes[draft.id];
         const isPending = Boolean(pending[draft.id]);
@@ -179,7 +203,7 @@ export const MaintenanceQueuePage = ({ drafts, onAccept, onReject, onOpenEvidenc
             </div>
           </article>
         );
-      }) : <p className="py-12 text-center text-sm text-[var(--muted-foreground)]">{t('maintenance.empty')}</p>}
+      })}
     </section>
   );
 };

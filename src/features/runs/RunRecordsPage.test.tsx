@@ -1,12 +1,16 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
-import { RunRecordsPage } from './RunRecordsPage.js';
+import { getRunHealthTone, RunRecordsPage } from './RunRecordsPage.js';
 import { createDemoStudioState, createPrdDocumentAsset, type RunDetail } from '../../../shared/studio.js';
 import { createStubAgentRun } from '../../../shared/agentStub.js';
 import { I18nProvider } from '../../i18n/index.js';
 
 describe('RunRecordsPage', () => {
+  it('treats the absence of run samples as neutral rather than passed', () => {
+    expect(getRunHealthTone(0, 0, 0)).toBe('neutral');
+  });
+
   it('reviews retention candidates and requires an explicit confirmation before deletion', async () => {
     const state = createDemoStudioState();
     const project = state.projects[0]!;
@@ -1647,5 +1651,44 @@ describe('RunRecordsPage', () => {
 
     expect(screen.getByRole('heading', { name: '跨运行覆盖风险' })).toBeInTheDocument();
     expect(screen.getAllByText(/从未运行/).length).toBe(project.testCases.length);
+  });
+
+  it('does not claim cross-run coverage when the project has no test cases', () => {
+    const state = createDemoStudioState();
+    const project = { ...state.projects[0]!, testCases: [] };
+
+    render(
+      <RunRecordsPage
+        onSelectRun={vi.fn()}
+        project={project}
+        recentRuns={[]}
+        runDetails={[]}
+        selectedRunId=""
+      />,
+    );
+
+    expect(screen.queryByRole('heading', { name: '跨运行覆盖风险' })).not.toBeInTheDocument();
+    expect(screen.queryByText('所有项目用例在其目标环境中均已获得最近通过结论。')).not.toBeInTheDocument();
+  });
+
+  it('renders zero run samples as waiting with no passed status', () => {
+    const state = createDemoStudioState();
+    const project = state.projects[0]!;
+
+    render(
+      <RunRecordsPage
+        onSelectRun={vi.fn()}
+        project={project}
+        recentRuns={[]}
+        runDetails={[]}
+        selectedRunId=""
+      />,
+    );
+
+    const qualitySummary = screen.getByLabelText('质量信号');
+
+    expect(within(qualitySummary).getByText('等待样本')).toBeInTheDocument();
+    expect(within(qualitySummary).getByRole('status', { name: '待处理' })).toBeInTheDocument();
+    expect(within(qualitySummary).queryByRole('status', { name: '通过' })).not.toBeInTheDocument();
   });
 });

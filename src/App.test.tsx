@@ -120,12 +120,15 @@ describe('App shell', () => {
 
     const navigation = await screen.findByRole('navigation', { name: 'Main Navigation' });
     fireEvent.click(within(navigation).getByRole('button', { name: 'Cases' }));
+    await screen.findByRole('heading', { level: 1, name: 'Case Workbench' });
     fireEvent.click(await screen.findByRole('button', { name: 'Edit as New Version' }));
     fireEvent.change(screen.getAllByLabelText('Step Title')[0]!, { target: { value: 'Case A draft step' } });
 
     fireEvent.click(within(navigation).getByRole('button', { name: 'Workflow' }));
+    await screen.findByRole('heading', { level: 1, name: 'Workflow Testing' });
     fireEvent.click(await screen.findByRole('button', { name: /Case B/u }));
     fireEvent.click(within(navigation).getByRole('button', { name: 'Cases' }));
+    await screen.findByRole('heading', { level: 1, name: 'Case Workbench' });
     fireEvent.click(await screen.findByRole('button', { name: 'Publish Version' }));
 
     await waitFor(() => {
@@ -229,12 +232,15 @@ describe('App shell', () => {
 
     const navigation = await screen.findByRole('navigation', { name: 'Main Navigation' });
     fireEvent.click(within(navigation).getByRole('button', { name: 'Cases' }));
+    await screen.findByRole('heading', { level: 1, name: 'Case Workbench' });
     fireEvent.click(await screen.findByRole('button', { name: 'Edit as New Version' }));
     fireEvent.change(screen.getAllByLabelText('Step Title')[0]!, { target: { value: 'stale A draft' } });
     fireEvent.click(within(navigation).getByRole('button', { name: 'Workflow' }));
+    await screen.findByRole('heading', { level: 1, name: 'Workflow Testing' });
     fireEvent.click(await screen.findByRole('button', { name: 'New Flow' }));
     fireEvent.click(within(navigation).getByRole('button', { name: 'Cases' }));
 
+    await screen.findByRole('heading', { level: 1, name: 'Case Workbench' });
     expect(await screen.findByRole('button', { name: 'Edit as New Version' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Publish Version' })).not.toBeInTheDocument();
     await waitFor(() => {
@@ -326,6 +332,7 @@ describe('App shell', () => {
     fireEvent.click(within(navigation).getByRole('button', { name: 'Projects' }));
     await screen.findByRole('heading', { name: 'Test Projects' });
     fireEvent.click(screen.getByRole('button', { name: 'Manage' }));
+    fireEvent.mouseDown(screen.getByRole('tab', { name: 'Groups' }), { button: 0 });
     const [groupName] = await screen.findAllByLabelText('Group Name');
     fireEvent.click(within(groupName.closest('.project-group-row')!).getByRole('button'));
     const dialog = await screen.findByRole('dialog', { name: 'Delete this item?' });

@@ -1,30 +1,23 @@
 import type { ComponentPropsWithoutRef, ReactNode } from 'react';
+import type { RunTone } from '../../shared/studio.js';
 
 import { FolderKanban } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 
-type Tone = 'neutral' | 'primary' | 'passed' | 'failed' | 'running';
+type Tone = RunTone | 'primary';
 
 const toneClass = (tone: Tone): string => {
   if (tone === 'primary') {
     return 'tech-active text-primary';
   }
 
-  if (tone === 'passed') {
-    return 'status-pill-passed';
+  if (tone === 'neutral') {
+    return 'tech-subtle text-foreground';
   }
 
-  if (tone === 'failed') {
-    return 'status-pill-failed';
-  }
-
-  if (tone === 'running') {
-    return 'status-pill-running';
-  }
-
-  return 'tech-subtle text-foreground';
+  return `status-pill-${tone}`;
 };
 
 export const PageHeader = ({
@@ -187,6 +180,29 @@ export const EvidenceCard = ({
         {action}
       </div>
     </Surface>
+  );
+};
+
+export const OperationalEmptyState = ({
+  title,
+  description,
+  primaryAction,
+  secondaryAction,
+}: {
+  title: string;
+  description: string;
+  primaryAction: ReactNode;
+  secondaryAction?: ReactNode;
+}) => {
+  return (
+    <section aria-label={title} className="operational-empty-state flex min-h-52 flex-col items-start justify-center py-8" aria-live="polite">
+      <h2 className="text-base font-semibold text-foreground">{title}</h2>
+      <p className="mt-2 max-w-xl text-sm leading-6 text-muted-foreground">{description}</p>
+      <div className="mt-5 flex flex-wrap items-center gap-3">
+        {primaryAction}
+        {secondaryAction}
+      </div>
+    </section>
   );
 };
 

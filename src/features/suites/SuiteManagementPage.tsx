@@ -16,7 +16,7 @@ import {
   SelectValue,
 } from '../../components/ui/select.js';
 import { Textarea } from '../../components/ui/textarea.js';
-import { EvidenceCard, PageBody, PageHeader, PageShell, ProjectRequiredState, Surface } from '../../components/workbench.js';
+import { EvidenceCard, OperationalEmptyState, PageBody, PageHeader, PageShell, ProjectRequiredState, Surface } from '../../components/workbench.js';
 import { useI18n } from '../../i18n/index.js';
 
 const referenceKey = (reference: VersionedTestAssetReference): string => {
@@ -90,6 +90,26 @@ export const SuiteManagementPage = ({
   const createDraft = () => {
     setDraft(createEmptySuiteAsset(project!, project!.suites.length + 1));
   };
+
+  if (!project.suites.length && !draft) {
+    return (
+      <PageShell>
+        <PageHeader title={t('suite.header.title')} />
+        <PageBody>
+          <OperationalEmptyState
+            description={t('suite.emptyState.description')}
+            primaryAction={(
+              <Button onClick={createDraft} type="button">
+                <Plus className="size-4" />
+                {t('suite.action.create')}
+              </Button>
+            )}
+            title={t('suite.emptyState.title')}
+          />
+        </PageBody>
+      </PageShell>
+    );
+  }
 
   const editAsNewVersion = () => {
     if (!selectedSuite) {

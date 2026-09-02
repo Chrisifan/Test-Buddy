@@ -127,6 +127,22 @@ const getHealthLabel = (total: number, failed: number, running: number, t: Trans
   return failed > 0 ? t('runs.health.attention') : t('runs.health.stable');
 };
 
+export const getRunHealthTone = (total: number, failed: number, running: number): RunTone => {
+  if (!total) {
+    return 'neutral';
+  }
+
+  if (failed) {
+    return 'failed';
+  }
+
+  if (running) {
+    return 'running';
+  }
+
+  return 'passed';
+};
+
 const getWorstBucket = (buckets: Bucket[]): Bucket | null => {
   return buckets
     .filter((bucket) => bucket.total > 0)
@@ -551,6 +567,7 @@ export const RunRecordsPage = ({
       failureTrend: getFailureTrend(visibleRuns),
     };
   }, [runDetails, runDetailsById, runStats.failed, runStats.passed, runStats.running, runStats.total, t, visibleRuns]);
+  const runHealthTone = getRunHealthTone(runStats.total, runStats.failed, runStats.running);
   const coverageRisk = useMemo(
     () => (project ? deriveRunCoverageRisk(project, recentRuns) : undefined),
     [project, recentRuns],
@@ -768,7 +785,7 @@ export const RunRecordsPage = ({
                   <p className="run-quality-value mt-2 font-semibold">{runAnalytics.passRate}%</p>
                   <p className="mt-2 text-sm text-muted-foreground">{t('runs.quality.summary', { total: runStats.total, failed: runStats.failed })}</p>
                 </div>
-                <StatusPill tone={runStats.failed ? 'failed' : runStats.running ? 'running' : 'passed'} />
+                <StatusPill tone={runHealthTone} />
               </div>
               <div className="mt-5 h-2 overflow-hidden rounded-full bg-background/80">
                 <div className="h-full rounded-full bg-primary transition-[width]" style={{ width: `${runAnalytics.passRate}%` }} />
@@ -776,9 +793,9 @@ export const RunRecordsPage = ({
             </Surface>
             <MetricTile label={t('runs.metric.total')} value={`${runStats.total}`} />
             <MetricTile label={t('runs.metric.failed')} value={`${runStats.failed}`} tone={runStats.failed ? 'failed' : 'neutral'} />
-            <MetricTile label={t('runs.metric.health')} value={runAnalytics.healthLabel} tone={runStats.failed ? 'failed' : 'passed'} />
+            <MetricTile label={t('runs.metric.health')} value={runAnalytics.healthLabel} tone={runHealthTone} />
           </section>
-          {project && coverageRisk ? (
+          {project && project.testCases.length > 0 && coverageRisk ? (
             <Surface aria-label={t('runs.coverage.title')} className="mt-5 p-4" variant="subtle">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
@@ -894,7 +911,7 @@ export const RunRecordsPage = ({
                   <InsightCard
                     icon={<Gauge className="h-4 w-4" />}
                     label={t('runs.metric.health')}
-                    tone={runStats.failed ? 'failed' : runStats.running ? 'running' : 'passed'}
+                    tone={runHealthTone}
                     value={runAnalytics.healthLabel}
                   />
                   <InsightCard

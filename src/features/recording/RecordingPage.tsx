@@ -7,7 +7,7 @@ import type {
   VisualDiffMask,
 } from '../../../shared/studio.js';
 
-import { CircleDashed, Film, Import, Play, Plus, Radar, Sparkles, Trash2 } from 'lucide-react';
+import { CircleDashed, Import, Play, Plus, Radar, Sparkles, Trash2 } from 'lucide-react';
 
 import { EvidenceCard, MetricTile, PageHeader, ProjectRequiredState, Surface, PageBody, PageShell } from '../../components/workbench.js';
 import { StatusPill } from '../../components/StatusPill.js';
@@ -134,6 +134,29 @@ export const RecordingPage = ({
   const groupsById = new Map(project.groups.map((group) => [group.id, group]));
   const environmentsById = new Map(project.environments.map((item) => [item.id, item]));
   const sessionTone = browserSession.status === 'error' ? 'failed' : browserSession.status === 'ready' ? 'passed' : 'neutral';
+  const browserStage = browserSession.status === 'error'
+    ? {
+        title: t('recording.browser.error'),
+        description: browserSessionMessage || t('recording.browser.errorDescription'),
+        live: 'assertive' as const,
+      }
+    : browserSession.status === 'ready'
+      ? {
+          title: t('recording.browser.ready'),
+          description: t('recording.browser.readyDescription'),
+          live: 'polite' as const,
+        }
+      : browserSession.status === 'idle' || browserSession.status === 'closed'
+        ? {
+            title: t('recording.browser.idle'),
+            description: t('recording.browser.idleDescription'),
+            live: 'polite' as const,
+          }
+        : {
+            title: t('recording.browser.connecting'),
+            description: t('recording.browser.connectingDescription'),
+            live: 'polite' as const,
+          };
 
   return (
     <PageShell className="figma-recording-page">
@@ -215,40 +238,14 @@ export const RecordingPage = ({
                     src={`file://${browserSession.screenshotPath}`}
                   />
                 ) : (
-                  <div className="designer-browser-mock">
-                    <div className="target-mock-header flex items-end justify-between border-b pb-4">
-                      <div>
-                        <p className="target-mock-eyebrow text-xs font-semibold uppercase tracking-[0.16em]">{t('recording.preview.eyebrow')}</p>
-                        <h3 className="mt-2 text-2xl font-bold">{t('recording.preview.title')}</h3>
-                      </div>
-                      <Film className="h-6 w-6 text-primary" />
-                    </div>
-                    <div className="grid gap-3">
-                      {[t('recording.preview.navigate'), t('recording.preview.click'), t('recording.preview.input')].map((item, index) => (
-                        <div className="target-mock-step relative rounded-[10px] border p-4" key={item}>
-                          {index === 1 ? <span className="absolute -right-1 -top-1 h-4 w-4 rounded-full bg-red-500 ring-4 ring-red-500/20" /> : null}
-                          <p className="target-mock-step-title text-sm font-semibold">{item}</p>
-                          <p className="target-mock-step-copy mt-1 text-xs">{t('recording.preview.interaction', { index: index + 1 })}</p>
-                        </div>
-                      ))}
-                    </div>
-                    <div className="target-mock-session rounded-[10px] p-5">
-                      <div className="target-mock-session-meta flex justify-between text-sm">
-                        <span>{t('recording.preview.session')}</span>
-                        <span>{browserSession.status}</span>
-                      </div>
-                      <button className="target-mock-action mt-4 w-full rounded-[8px] py-3 text-sm font-bold" type="button">
-                        {t('recording.preview.primaryAction')}
-                      </button>
+                  <div aria-live={browserStage.live} className="flex h-full min-h-64 flex-col items-center justify-center gap-3 px-6 text-center">
+                    <CircleDashed className="h-7 w-7 text-primary" aria-hidden="true" />
+                    <div className="max-w-sm">
+                      <h3 className="text-base font-semibold">{browserStage.title}</h3>
+                      <p className="mt-2 text-sm leading-6 text-muted-foreground">{browserStage.description}</p>
                     </div>
                   </div>
                 )}
-                {browserSession.status === 'ready' ? (
-                  <span className="designer-recording-badge">
-                    <span className="h-2 w-2 rounded-full bg-white" />
-                    {t('recording.preview.inProgress')}
-                  </span>
-                ) : null}
               </div>
             </div>
 

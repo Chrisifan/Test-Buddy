@@ -1,7 +1,7 @@
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
-import { HomePage } from './HomePage.js';
+import { getCoverageIndex, HomePage } from './HomePage.js';
 import type { AppPage } from '../../app/pageMeta.js';
 import { createEmptyProject, createInitialStudioState } from '../../../shared/studio.js';
 import { I18nProvider } from '../../i18n/index.js';
@@ -9,6 +9,10 @@ import { I18nProvider } from '../../i18n/index.js';
 const state = createInitialStudioState();
 
 describe('HomePage', () => {
+  it('does not fabricate a coverage index without assets or run samples', () => {
+    expect(getCoverageIndex([], [])).toBeNull();
+  });
+
   it('shows the empty project state when no project exists', () => {
     const onGoToPage = vi.fn<(page: AppPage) => void>();
 
@@ -65,6 +69,24 @@ describe('HomePage', () => {
     expect(screen.queryByRole('button', { name: '管理项目' })).not.toBeInTheDocument();
     expect(screen.queryByRole('heading', { level: 2, name: '测试路径流水线' })).not.toBeInTheDocument();
     expect(screen.queryByText('快捷入口')).not.toBeInTheDocument();
+  });
+
+  it('shows a neutral coverage state and first-asset action for an empty project', () => {
+    const project = createEmptyProject(1);
+
+    render(
+      <HomePage
+        browserSession={state.browserSession}
+        onCreateProject={vi.fn()}
+        onGoToPage={vi.fn()}
+        projects={[project]}
+        recentRuns={[]}
+      />,
+    );
+
+    expect(screen.getByText('尚无数据')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '创建测试资产' })).toBeInTheDocument();
+    expect(screen.queryByText('12')).not.toBeInTheDocument();
   });
 
   it('renders the dashboard in English when the interface locale changes', () => {

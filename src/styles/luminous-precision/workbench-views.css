@@ -439,6 +439,7 @@
 
 .designer-split.nl-workbench,
 .nl-workbench {
+  min-height: 0;
   grid-template-columns: minmax(220px, 0.88fr) minmax(280px, 1fr) minmax(250px, 0.96fr);
   height: 100%;
 }
@@ -575,4 +576,3 @@
     border-bottom: 1px solid var(--panel-border);
   }
 }
-

@@ -70,6 +70,107 @@ describe('WorkflowPage', () => {
     expect(onOpenProjects).toHaveBeenCalledTimes(1);
   });
 
+  it('shows one create action instead of an empty workflow workbench', () => {
+    const onCreateWorkflow = vi.fn();
+
+    render(
+      <I18nProvider locale="en-US">
+        <WorkflowPage
+          hasProject
+          isRunning={false}
+          onAppendStep={vi.fn()}
+          onCreateWorkflow={onCreateWorkflow}
+          onDeleteStep={vi.fn()}
+          onDuplicateStepType={vi.fn()}
+          onRunWorkflow={vi.fn()}
+          onSelectWorkflow={vi.fn()}
+          onUpdateRuntimeProfile={vi.fn()}
+          onUpdateWorkflow={vi.fn()}
+          runId=""
+          runLogs={[]}
+          runStatus="neutral"
+          runTitle=""
+          runtimeProfile={state.runtimeProfile}
+          selectedWorkflowId=""
+          workflows={[]}
+        />
+      </I18nProvider>,
+    );
+
+    expect(screen.getByRole('heading', { level: 2, name: 'No Flows' })).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: 'New Flow' })).toHaveLength(1);
+    expect(screen.queryByRole('region', { name: 'Workflow Testing' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Runtime Profile')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'New Flow' }));
+    expect(onCreateWorkflow).toHaveBeenCalledOnce();
+  });
+
+  it('names flow selection as the prerequisite for a disabled run', () => {
+    render(
+      <I18nProvider locale="en-US">
+        <WorkflowPage
+          hasProject
+          isRunning={false}
+          onAppendStep={vi.fn()}
+          onCreateWorkflow={vi.fn()}
+          onDeleteStep={vi.fn()}
+          onDuplicateStepType={vi.fn()}
+          onRunWorkflow={vi.fn()}
+          onSelectWorkflow={vi.fn()}
+          onUpdateRuntimeProfile={vi.fn()}
+          onUpdateWorkflow={vi.fn()}
+          runId=""
+          runLogs={[]}
+          runStatus="neutral"
+          runTitle=""
+          runtimeProfile={state.runtimeProfile}
+          selectedWorkflowId=""
+          workflows={[workflow]}
+        />
+      </I18nProvider>,
+    );
+
+    expect(screen.getByRole('button', { name: 'Run Current Flow' })).toBeDisabled();
+    expect(screen.getByText('Select a Flow from the list before running it.')).toBeVisible();
+  });
+
+  it('keeps a blank runtime Base URL distinct from the current Flow target', () => {
+    render(
+      <I18nProvider locale="en-US">
+        <WorkflowPage
+          hasProject
+          isRunning={false}
+          onAppendStep={vi.fn()}
+          onCreateWorkflow={vi.fn()}
+          onDeleteStep={vi.fn()}
+          onDuplicateStepType={vi.fn()}
+          onRunWorkflow={vi.fn()}
+          onSelectWorkflow={vi.fn()}
+          onUpdateRuntimeProfile={vi.fn()}
+          onUpdateWorkflow={vi.fn()}
+          runId=""
+          runLogs={[]}
+          runStatus="neutral"
+          runTitle=""
+          runtimeProfile={{ ...state.runtimeProfile, baseUrl: '' }}
+          selectedWorkflow={workflow}
+          selectedWorkflowId={workflow.id}
+          workflows={[workflow]}
+        />
+      </I18nProvider>,
+    );
+
+    expect(screen.getByRole('textbox', { name: 'Base URL' })).toHaveValue('');
+    expect(screen.getByRole('region', { name: 'Flow Target URL' })).toHaveTextContent(workflow.url);
+    expect(screen.getByRole('region', { name: 'Flow Target URL' })).toHaveTextContent(
+      'This target belongs to the current Flow and does not configure the runtime Base URL.',
+    );
+    screen.getAllByRole('button', { name: 'Run Current Flow' }).forEach((button) => {
+      expect(button).toBeDisabled();
+      expect(button).toHaveAccessibleDescription('Set a Base URL in Runtime Profile before running this Flow.');
+    });
+  });
+
   it('uses Chinese workflow labels by default', () => {
     renderPage();
 
@@ -203,6 +304,10 @@ describe('WorkflowPage', () => {
     );
 
     expect(screen.getByRole('button', { name: /第二个流程/u })).toBeDisabled();
-    screen.getAllByRole('button', { name: '执行当前流程' }).forEach((button) => expect(button).toBeDisabled());
+    screen.getAllByRole('button', { name: '执行当前流程' }).forEach((button) => {
+      expect(button).toBeDisabled();
+      expect(button).toHaveAccessibleDescription('请先发布或放弃草稿后再执行。');
+    });
+    expect(screen.getAllByText('请先发布或放弃草稿后再执行。')).toHaveLength(2);
   });
 });

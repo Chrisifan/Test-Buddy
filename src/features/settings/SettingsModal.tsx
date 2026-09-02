@@ -430,7 +430,7 @@ export const SettingsModal = ({
     }
   };
   const settingsShell = (
-    <div className="settings-dialog-shell flex min-h-0 w-full flex-col overflow-hidden rounded-[8px]">
+    <div className="settings-dialog-shell grid h-full min-h-0 w-full grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden rounded-[8px]">
       <DialogHeader className="settings-dialog-topbar flex h-[52px] shrink-0 flex-row items-center justify-between border-b border-border px-3.5 py-0 text-left">
         <div className="flex items-center gap-2.5">
           <span className="flex h-7 w-7 items-center justify-center rounded-[4px] bg-primary/12 text-primary">
