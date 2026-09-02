@@ -8,7 +8,7 @@ import { WorkflowPage } from './WorkflowPage.js';
 const state = createDemoStudioState();
 const workflow = testCaseToWorkflow(state.projects[0].testCases[0]);
 
-function renderPage(locale: 'zh-CN' | 'en-US' = 'zh-CN') {
+const renderPage = (locale: 'zh-CN' | 'en-US' = 'zh-CN') => {
   return render(
     <I18nProvider locale={locale}>
       <WorkflowPage
@@ -33,7 +33,7 @@ function renderPage(locale: 'zh-CN' | 'en-US' = 'zh-CN') {
       />
     </I18nProvider>,
   );
-}
+};
 
 describe('WorkflowPage', () => {
   it('guides users to projects before creating a flow', () => {

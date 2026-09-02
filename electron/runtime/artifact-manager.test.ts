@@ -866,6 +866,6 @@ describe('ArtifactManager', () => {
   });
 });
 
-function escapeRegExp(value: string): string {
+const escapeRegExp = (value: string): string => {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
+};

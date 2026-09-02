@@ -59,17 +59,17 @@ describe('ModelSecretStore without Electron safeStorage', () => {
   });
 });
 
-function transpileModule(source: string): string {
+const transpileModule = (source: string): string => {
   return ts.transpileModule(source, {
     compilerOptions: {
       module: ts.ModuleKind.ESNext,
       target: ts.ScriptTarget.ES2022,
     },
   }).outputText;
-}
+};
 
-async function createTemporaryDirectory(): Promise<string> {
+const createTemporaryDirectory = async (): Promise<string> => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'testbuddy-model-secret-node-'));
   temporaryDirectories.push(directory);
   return directory;
-}
+};

@@ -286,7 +286,7 @@ describe('run provenance', () => {
   });
 });
 
-function createVersionedProject(): ProjectDraft {
+const createVersionedProject = (): ProjectDraft => {
   const project = createEmptyProject(1);
   project.id = 'project-provenance';
   project.name = 'Provenance project';
@@ -300,9 +300,9 @@ function createVersionedProject(): ProjectDraft {
   project.testCases = [createTestCase(project)];
   project.fixtures = [fixture()];
   return project;
-}
+};
 
-function createTestCase(project: ProjectDraft): TestCaseDraft {
+const createTestCase = (project: ProjectDraft): TestCaseDraft => {
   return {
     id: 'case-checkout',
     version: 1,
@@ -319,9 +319,9 @@ function createTestCase(project: ProjectDraft): TestCaseDraft {
     assetReferences: { fixtures: [], reusableFlows: [] },
     steps: [],
   };
-}
+};
 
-function fixture(): FixtureAsset {
+const fixture = (): FixtureAsset => {
   return {
     schemaVersion: 1,
     id: 'fixture-account',
@@ -342,9 +342,9 @@ function fixture(): FixtureAsset {
     createdAt: '2026-08-16T00:00:00.000Z',
     updatedAt: '2026-08-16T00:00:00.000Z',
   };
-}
+};
 
-function reusableFlow() {
+const reusableFlow = () => {
   return {
     schemaVersion: 1 as const,
     id: 'flow-login',
@@ -368,17 +368,17 @@ function reusableFlow() {
     createdAt: '2026-08-16T00:00:00.000Z',
     updatedAt: '2026-08-16T00:00:00.000Z',
   };
-}
+};
 
-function assetReferences(): TestCaseAssetReferences {
+const assetReferences = (): TestCaseAssetReferences => {
   return {
     fixtures: [{ id: 'fixture-account', version: 1 }],
     reusableFlows: [{ id: 'flow-login', version: 2 }],
     baseline: { id: 'baseline-dashboard', version: 3 },
   };
-}
+};
 
-function runtimeMetadata(endpoint = 'https://api-user:api-password@models.example.test/v1?tenant=private#fragment'): RunProvenanceRuntimeMetadata {
+const runtimeMetadata = (endpoint = 'https://api-user:api-password@models.example.test/v1?tenant=private#fragment'): RunProvenanceRuntimeMetadata => {
   return {
     browserProfile: { engine: 'webkit', headless: false },
     executor: { appVersion: 'app-9.0.0', runnerVersion: 'runner-3.0.0' },
@@ -390,21 +390,21 @@ function runtimeMetadata(endpoint = 'https://api-user:api-password@models.exampl
     },
     createdAt: '2026-08-16T00:00:00.000Z',
   };
-}
+};
 
-function projectSnapshot(project: ProjectDraft, revision: string): ProjectSnapshot {
+const projectSnapshot = (project: ProjectDraft, revision: string): ProjectSnapshot => {
   return {
     project,
     revision,
     source: 'projectDirectory',
     reproducibility: 'versioned',
   };
-}
+};
 
-async function createBoundRepository(project: ProjectDraft): Promise<{
+const createBoundRepository = async (project: ProjectDraft): Promise<{
   binding: ProjectAssetBinding;
   repository: ProjectRepository;
-}> {
+}> => {
   const rootDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'testbuddy-run-provenance-'));
   temporaryDirectories.push(rootDirectory);
   const projectDirectory = path.join(rootDirectory, 'project-assets');
@@ -424,4 +424,4 @@ async function createBoundRepository(project: ProjectDraft): Promise<{
     projectAssetBindings: [binding],
   });
   return { binding, repository: new ProjectRepository({ studioStore }) };
-}
+};

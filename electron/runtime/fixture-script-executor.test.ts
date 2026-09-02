@@ -140,7 +140,7 @@ describe('FixtureScriptExecutor', () => {
   });
 });
 
-function createBrokenStdinChild(): ChildProcessType {
+const createBrokenStdinChild = (): ChildProcessType => {
   const child = new ChildProcess();
   const stdout = new PassThrough();
   const stderr = new PassThrough();
@@ -163,16 +163,16 @@ function createBrokenStdinChild(): ChildProcessType {
     },
   });
   return child;
-}
+};
 
-async function createTemporaryProjectDirectory(): Promise<string> {
+const createTemporaryProjectDirectory = async (): Promise<string> => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'testbuddy-fixture-script-'));
   temporaryDirectories.push(directory);
   await fs.mkdir(path.join(directory, 'scripts'));
   return directory;
-}
+};
 
-async function createScriptFixture(projectDirectory: string, source: string): Promise<FixtureAsset> {
+const createScriptFixture = async (projectDirectory: string, source: string): Promise<FixtureAsset> => {
   const relativePath = 'scripts/seed-orders.mjs';
   await fs.writeFile(path.join(projectDirectory, relativePath), source);
   return {
@@ -199,9 +199,9 @@ async function createScriptFixture(projectDirectory: string, source: string): Pr
     createdAt: new Date(0).toISOString(),
     updatedAt: new Date(0).toISOString(),
   };
-}
+};
 
-function createRequest(fixture: FixtureAsset, projectDirectory: string, cancellationSignal?: AbortSignal) {
+const createRequest = (fixture: FixtureAsset, projectDirectory: string, cancellationSignal?: AbortSignal) => {
   const trustRecord: FixtureScriptTrustRecord = {
     schemaVersion: 1,
     projectId: 'project-orders',
@@ -222,4 +222,4 @@ function createRequest(fixture: FixtureAsset, projectDirectory: string, cancella
     scriptTrustRecords: [trustRecord],
     ...(cancellationSignal ? { cancellationSignal } : {}),
   };
-}
+};

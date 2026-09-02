@@ -258,6 +258,48 @@ describe('StudioStore', () => {
     expect((state.midsceneConfig as { modelApiKey?: string }).modelApiKey).toBe('sk-live-midscene');
   });
 
+  it('migrates apiKey values from Midscene and every agent role before direct durable save', async () => {
+    const rootDirectory = await createTemporaryDirectory();
+    const secrets = new ModelSecretStore(rootDirectory, protection);
+    const store = new StudioStore(rootDirectory, fs, secrets);
+    const submittedKeys = {
+      midscene: 'sk-store-midscene-api-key',
+      planner: 'sk-store-planner-api-key',
+      executor: 'sk-store-executor-api-key',
+      verifier: 'sk-store-verifier-api-key',
+      reporter: 'sk-store-reporter-api-key',
+    };
+    const state = {
+      ...createInitialStudioState(),
+      midsceneConfig: {
+        ...createInitialStudioState().midsceneConfig,
+        apiKey: submittedKeys.midscene,
+      },
+      agentModelConfig: Object.fromEntries(
+        (['planner', 'executor', 'verifier', 'reporter'] as const).map((role) => [role, {
+          ...createInitialStudioState().agentModelConfig[role],
+          apiKey: submittedKeys[role],
+        }]),
+      ),
+    } as unknown as ReturnType<typeof createInitialStudioState>;
+
+    const saved = await store.save(state);
+    const loaded = await store.loadExisting();
+    const persisted = await fs.readFile(store.storagePath, 'utf8');
+
+    Object.values(submittedKeys).forEach((submittedKey) => {
+      expect(JSON.stringify(saved)).not.toContain(submittedKey);
+      expect(JSON.stringify(loaded)).not.toContain(submittedKey);
+      expect(persisted).not.toContain(submittedKey);
+    });
+    expect(saved.midsceneConfig.modelSecret).toMatchObject({ id: 'midscene', hasKey: true });
+    await expect(secrets.resolve({ scope: 'midscene' })).resolves.toBe(submittedKeys.midscene);
+    for (const role of ['planner', 'executor', 'verifier', 'reporter'] as const) {
+      expect(saved.agentModelConfig[role].modelSecret).toMatchObject({ id: `agent:${role}`, hasKey: true });
+      await expect(secrets.resolve({ scope: `agent:${role}` })).resolves.toBe(submittedKeys[role]);
+    }
+  });
+
   it('keeps the existing state file when direct-save model-key encryption fails', async () => {
     const rootDirectory = await createTemporaryDirectory();
     const stableStore = new StudioStore(rootDirectory);
@@ -274,7 +316,7 @@ describe('StudioStore', () => {
   });
 });
 
-function legacyModelKeyState() {
+const legacyModelKeyState = () => {
   const state = createInitialStudioState() as ReturnType<typeof createInitialStudioState> & {
     midsceneConfig: ReturnType<typeof createInitialStudioState>['midsceneConfig'] & { modelApiKey: string };
     agentModelConfig: ReturnType<typeof createInitialStudioState>['agentModelConfig'] & {
@@ -284,18 +326,18 @@ function legacyModelKeyState() {
   state.midsceneConfig.modelApiKey = 'sk-live-midscene';
   state.agentModelConfig.planner.modelApiKey = 'sk-live-planner';
   return state;
-}
+};
 
-function legacyMidsceneModelKeyState() {
+const legacyMidsceneModelKeyState = () => {
   const state = createInitialStudioState() as ReturnType<typeof createInitialStudioState> & {
     midsceneConfig: ReturnType<typeof createInitialStudioState>['midsceneConfig'] & { modelApiKey: string };
   };
   state.midsceneConfig.modelApiKey = 'sk-live-midscene';
   return state;
-}
+};
 
-async function createTemporaryDirectory(): Promise<string> {
+const createTemporaryDirectory = async (): Promise<string> => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'testbuddy-studio-store-'));
   temporaryDirectories.push(directory);
   return directory;
-}
+};

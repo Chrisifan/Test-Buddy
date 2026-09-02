@@ -21,7 +21,7 @@ const context: DeterministicInteractionPreflightContext = {
   knownSecrets: ['resolved-secret-value'],
 };
 
-function step(action: NonNullable<TestStepDraft['execution']>['action']): TestStepDraft {
+const step = (action: NonNullable<TestStepDraft['execution']>['action']): TestStepDraft => {
   return {
     id: `step-${action.kind}`,
     type: 'ai',
@@ -35,7 +35,7 @@ function step(action: NonNullable<TestStepDraft['execution']>['action']): TestSt
       action,
     },
   };
-}
+};
 
 describe('deterministic interaction preflight contract', () => {
   it.each([

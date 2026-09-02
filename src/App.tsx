@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef, useState } from 'react';
+import { Suspense, useEffect, useRef, useState } from 'react';
 import {
   ClipboardList,
   FileText,
@@ -96,6 +96,19 @@ import {
 } from '../shared/studio.js';
 import type { AgentReporterSummary, AgentRunResult } from '../shared/agent.js';
 import type { AppPage } from './app/pageMeta.js';
+import {
+  DocumentAnalysisPage,
+  MaintenanceQueuePage,
+  NaturalLanguagePage,
+  ProjectManagementPage,
+  RecordingPage,
+  ReusableFlowsPage,
+  RunRecordsPage,
+  SettingsModal,
+  SuiteManagementPage,
+  TestCaseManagementPage,
+  WorkflowPage,
+} from './app/page-registry.js';
 import { NavButton } from './components/NavButton.js';
 import { StatusPill } from './components/StatusPill.js';
 import { Button } from './components/ui/button.js';
@@ -142,39 +155,6 @@ const initialState = createInitialStudioState();
 const PAGE_EXIT_DURATION_MS = 120;
 const SAVE_DEBOUNCE_MS = 350;
 const initialTranslator = createTranslator(resolveLocale(initialState.appearance.localeMode));
-const ProjectManagementPage = lazy(() =>
-  import('./features/project/ProjectManagementPage.js').then(({ ProjectManagementPage: Page }) => ({ default: Page })),
-);
-const DocumentAnalysisPage = lazy(() =>
-  import('./features/documents/DocumentAnalysisPage.js').then(({ DocumentAnalysisPage: Page }) => ({ default: Page })),
-);
-const TestCaseManagementPage = lazy(() =>
-  import('./features/cases/TestCaseManagementPage.js').then(({ TestCaseManagementPage: Page }) => ({ default: Page })),
-);
-const SuiteManagementPage = lazy(() =>
-  import('./features/suites/SuiteManagementPage.js').then(({ SuiteManagementPage: Page }) => ({ default: Page })),
-);
-const ReusableFlowsPage = lazy(() =>
-  import('./features/flows/ReusableFlowsPage.js').then(({ ReusableFlowsPage: Page }) => ({ default: Page })),
-);
-const RunRecordsPage = lazy(() =>
-  import('./features/runs/RunRecordsPage.js').then(({ RunRecordsPage: Page }) => ({ default: Page })),
-);
-const MaintenanceQueuePage = lazy(() =>
-  import('./features/maintenance/MaintenanceQueuePage.js').then(({ MaintenanceQueuePage: Page }) => ({ default: Page })),
-);
-const NaturalLanguagePage = lazy(() =>
-  import('./features/natural-language/NaturalLanguagePage.js').then(({ NaturalLanguagePage: Page }) => ({ default: Page })),
-);
-const WorkflowPage = lazy(() =>
-  import('./features/workflow/WorkflowPage.js').then(({ WorkflowPage: Page }) => ({ default: Page })),
-);
-const RecordingPage = lazy(() =>
-  import('./features/recording/RecordingPage.js').then(({ RecordingPage: Page }) => ({ default: Page })),
-);
-const SettingsModal = lazy(() =>
-  import('./features/settings/SettingsModal.js').then(({ SettingsModal: Modal }) => ({ default: Modal })),
-);
 
 type SaveMode = 'debounced' | 'immediate';
 

@@ -453,7 +453,7 @@ describe('MaintenanceService', () => {
   });
 });
 
-function createHarness(knownSecrets: readonly string[] = []) {
+const createHarness = (knownSecrets: readonly string[] = []) => {
   const project = createEmptyProject(1);
   const source = {
     ...createEmptyTestCase(1, project.groups[0]!.id, project.environments[0]!.id),
@@ -554,9 +554,9 @@ function createHarness(knownSecrets: readonly string[] = []) {
     },
     get state() { return state; },
   };
-}
+};
 
-function sortObject(value: unknown): unknown {
+const sortObject = (value: unknown): unknown => {
   if (Array.isArray(value)) return value.map(sortObject);
   if (value && typeof value === 'object') {
     return Object.keys(value).sort().reduce<Record<string, unknown>>((result, key) => {
@@ -566,11 +566,11 @@ function sortObject(value: unknown): unknown {
     }, {});
   }
   return value;
-}
+};
 
 type MalformedNetworkMockBodyVariant = 'sparse' | 'ownProperty' | 'symbol' | 'nonStandardPrototype';
 
-function malformedNetworkMockAction(variant: MalformedNetworkMockBodyVariant) {
+const malformedNetworkMockAction = (variant: MalformedNetworkMockBodyVariant) => {
   const body: unknown[] = ['approved'];
   let hiddenValue: string | undefined;
   if (variant === 'sparse') {
@@ -602,11 +602,11 @@ function malformedNetworkMockAction(variant: MalformedNetworkMockBodyVariant) {
     },
     hiddenValue,
   };
-}
+};
 
 type MalformedNetworkMockObjectVariant = 'nonEnumerable' | 'accessor' | 'nullPrototype' | 'nonStandardPrototype';
 
-function malformedNetworkMockObjectAction(variant: MalformedNetworkMockObjectVariant) {
+const malformedNetworkMockObjectAction = (variant: MalformedNetworkMockObjectVariant) => {
   let getterRead = false;
   let hiddenValue: string | undefined;
   let body: object;
@@ -642,4 +642,4 @@ function malformedNetworkMockObjectAction(variant: MalformedNetworkMockObjectVar
     hiddenValue,
     getterWasRead: () => getterRead,
   };
-}
+};

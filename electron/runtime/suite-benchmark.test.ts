@@ -34,7 +34,8 @@ import { StudioStateUpdateQueue } from '../studio-state-update-queue.js';
 const SAFETY_TIMEOUT_MS = 60_000;
 const MAX_ARTIFACT_BYTES_PER_CASE = 2 * 1024 * 1024;
 const MAX_HEAP_GROWTH_BYTES = 128 * 1024 * 1024;
-const { registerRuntimeIpcHandlers, runtimeIpcChannels } = loadRuntimeIpcHandlers();
+let registerRuntimeIpcHandlers: ReturnType<typeof loadRuntimeIpcHandlers>['registerRuntimeIpcHandlers'];
+let runtimeIpcChannels: ReturnType<typeof loadRuntimeIpcHandlers>['runtimeIpcChannels'];
 
 describe('versioned BrowserPool Suite acceptance', () => {
   // The 100-Case memory gate must start before smaller benchmarks leave their
@@ -324,11 +325,11 @@ interface PooledSuiteBenchmark extends Omit<SerialSuiteBenchmark, 'metrics'> {
 
 type DurableSuiteParentSnapshot = Pick<SuiteRunRecord, 'id' | 'status'>;
 
-function createDurableSuiteProgressObserver(runId: string): {
+const createDurableSuiteProgressObserver = (runId: string): {
   runId: string;
   snapshots: DurableSuiteParentSnapshot[];
   observe: (state: Pick<StudioState, 'suiteRunRecords'>) => void;
-} {
+} => {
   const snapshots: DurableSuiteParentSnapshot[] = [];
 
   return {
@@ -345,12 +346,12 @@ function createDurableSuiteProgressObserver(runId: string): {
       snapshots.push({ id: parent.id, status: parent.status });
     },
   };
-}
+};
 
-function shouldHydrateDurableSuiteProgress(
+const shouldHydrateDurableSuiteProgress = (
   observer: ReturnType<typeof createDurableSuiteProgressObserver>,
   state: Pick<StudioState, 'suiteRunRecords'>,
-): boolean {
+): boolean => {
   const parent = state.suiteRunRecords.find((record) => record.id === observer.runId);
   if (!parent) {
     return false;
@@ -359,9 +360,9 @@ function shouldHydrateDurableSuiteProgress(
   return !observer.snapshots.some((snapshot) =>
     (snapshot.status === 'running' ? 'running' : 'terminal') === boundary,
   );
-}
+};
 
-function reportPooledMetrics(benchmark: PooledSuiteBenchmark): void {
+const reportPooledMetrics = (benchmark: PooledSuiteBenchmark): void => {
   if (process.env.TEST_BUDDY_BENCHMARK_REPORT !== '1') {
     return;
   }
@@ -376,11 +377,11 @@ function reportPooledMetrics(benchmark: PooledSuiteBenchmark): void {
     artifactBytes: benchmark.metrics.artifactBytes,
     fixtureCleanup: benchmark.fixtureStats.activeResources === 0,
   }));
-}
+};
 
-async function runPooledSuiteBenchmark(
+const runPooledSuiteBenchmark = async (
   options: Pick<BenchmarkOptions, 'caseCount'>,
-): Promise<PooledSuiteBenchmark> {
+): Promise<PooledSuiteBenchmark> => {
   const poolCapacity = 2;
   const removeRoot = (directory: string) => fs.rm(directory, { recursive: true, force: true });
   let fixture: BenchmarkFixture | undefined;
@@ -535,9 +536,9 @@ async function runPooledSuiteBenchmark(
     }
     throwWithCleanupErrors(error, cleanupErrors);
   }
-}
+};
 
-function instrumentPooledArtifactRegistration(bundle: RuntimeBundle): void {
+const instrumentPooledArtifactRegistration = (bundle: RuntimeBundle): void => {
   const artifacts = bundle.artifactManager;
   const registerExisting = artifacts.registerExisting.bind(artifacts);
   artifacts.registerExisting = async (registration) => {
@@ -546,12 +547,12 @@ function instrumentPooledArtifactRegistration(bundle: RuntimeBundle): void {
     reportBenchmarkDebug(`pooled artifact:register ${registration.ownerRunId ?? 'session'}:done`);
     return artifact;
   };
-}
+};
 
-async function createInstrumentedBrowserPool(capacity: number): Promise<{
+const createInstrumentedBrowserPool = async (capacity: number): Promise<{
   pool: BrowserPool;
   lifecycle: PooledBrowserContextLifecycle;
-}> {
+}> => {
   const lifecycle: PooledBrowserContextLifecycle = {
     created: 0,
     closed: 0,
@@ -594,9 +595,9 @@ async function createInstrumentedBrowserPool(capacity: number): Promise<{
   });
   instrumentPooledLeaseReleases(pool);
   return { pool, lifecycle };
-}
+};
 
-function instrumentPooledLeaseReleases(pool: BrowserPool): void {
+const instrumentPooledLeaseReleases = (pool: BrowserPool): void => {
   const internals = pool as unknown as {
     closeActive: (active: unknown) => Promise<void>;
   };
@@ -606,11 +607,11 @@ function instrumentPooledLeaseReleases(pool: BrowserPool): void {
     reportBenchmarkDebug(`pooled lease:release ${caller ?? 'unknown caller'}`);
     return closeActive(active);
   };
-}
+};
 
-function instrumentPooledWorkerContext(context: Awaited<ReturnType<typeof chromium.launch>> extends infer Browser
+const instrumentPooledWorkerContext = (context: Awaited<ReturnType<typeof chromium.launch>> extends infer Browser
   ? Browser extends { newContext: () => Promise<infer Context> } ? Context : never
-  : never): void {
+  : never): void => {
   const originalNewPage = context.newPage.bind(context);
   context.newPage = async () => {
     try {
@@ -639,15 +640,15 @@ function instrumentPooledWorkerContext(context: Awaited<ReturnType<typeof chromi
       throw error;
     }
   };
-}
+};
 
-function reportBenchmarkDebug(message: string): void {
+const reportBenchmarkDebug = (message: string): void => {
   if (process.env.TEST_BUDDY_BENCHMARK_DEBUG === '1') {
     console.info(`[suite-benchmark] ${message}`);
   }
-}
+};
 
-function expectPooledCompletedSuite(benchmark: PooledSuiteBenchmark, caseCount: number): void {
+const expectPooledCompletedSuite = (benchmark: PooledSuiteBenchmark, caseCount: number): void => {
   const expectedCaseIds = Array.from(
     { length: caseCount },
     (_, offset) => `case-pooled-benchmark-${String(offset + 1).padStart(3, '0')}`,
@@ -711,7 +712,7 @@ function expectPooledCompletedSuite(benchmark: PooledSuiteBenchmark, caseCount: 
     }),
   )));
   expectDurableProgress(benchmark, 'passed');
-}
+};
 
 interface BenchmarkFixture {
   url: string;
@@ -727,7 +728,7 @@ interface BenchmarkHarnessDependencies {
   removeRoot: (rootDir: string) => Promise<void>;
 }
 
-function reportMetrics(outcome: 'complete' | 'cancelled-at-case-8', benchmark: SerialSuiteBenchmark): void {
+const reportMetrics = (outcome: 'complete' | 'cancelled-at-case-8', benchmark: SerialSuiteBenchmark): void => {
   if (process.env.TEST_BUDDY_BENCHMARK_REPORT !== '1') {
     return;
   }
@@ -742,12 +743,12 @@ function reportMetrics(outcome: 'complete' | 'cancelled-at-case-8', benchmark: S
     artifactBytes: benchmark.metrics.artifactBytes,
     fixtureCleanup: benchmark.fixtureStats.activeResources === 0,
   }));
-}
+};
 
-async function runSerialSuiteBenchmark(
+const runSerialSuiteBenchmark = async (
   options: BenchmarkOptions,
   dependencies: Partial<BenchmarkHarnessDependencies> = {},
-): Promise<SerialSuiteBenchmark> {
+): Promise<SerialSuiteBenchmark> => {
   const removeRoot = dependencies.removeRoot ?? ((directory: string) => fs.rm(directory, { recursive: true, force: true }));
   let fixture: BenchmarkFixture | undefined;
   let rootDir: string | undefined;
@@ -843,9 +844,9 @@ async function runSerialSuiteBenchmark(
     const cleanupErrors = await cleanupBenchmarkResources({ bundle, fixture, rootDir, removeRoot });
     throwWithCleanupErrors(error, cleanupErrors);
   }
-}
+};
 
-async function cleanupBenchmarkResources({
+const cleanupBenchmarkResources = async ({
   bundle,
   fixture,
   rootDir,
@@ -857,7 +858,7 @@ async function cleanupBenchmarkResources({
   rootDir?: string;
   removeRoot: (rootDir: string) => Promise<void>;
   contextLifecycle?: BrowserContextLifecycle;
-}): Promise<unknown[]> {
+}): Promise<unknown[]> => {
   const cleanupErrors: unknown[] = [];
   if (bundle) {
     try {
@@ -891,9 +892,9 @@ async function cleanupBenchmarkResources({
     }
   }
   return cleanupErrors;
-}
+};
 
-function throwWithCleanupErrors(error: unknown, cleanupErrors: readonly unknown[]): never {
+const throwWithCleanupErrors = (error: unknown, cleanupErrors: readonly unknown[]): never => {
   if (error && typeof error === 'object' && cleanupErrors.length) {
     Object.defineProperty(error, 'cleanupErrors', {
       value: [...cleanupErrors],
@@ -902,21 +903,21 @@ function throwWithCleanupErrors(error: unknown, cleanupErrors: readonly unknown[
     });
   }
   throw error;
-}
+};
 
-function throwCleanupErrors(cleanupErrors: readonly unknown[]): void {
+const throwCleanupErrors = (cleanupErrors: readonly unknown[]): void => {
   if (!cleanupErrors.length) return;
   if (cleanupErrors.length === 1) throw cleanupErrors[0];
   throw new AggregateError(cleanupErrors, 'Serial Suite benchmark cleanup failed.');
-}
+};
 
-function cleanupErrorsFor(error: unknown): unknown[] {
+const cleanupErrorsFor = (error: unknown): unknown[] => {
   if (!error || typeof error !== 'object' || !('cleanupErrors' in error)) return [];
   const cleanupErrors = (error as { cleanupErrors?: unknown }).cleanupErrors;
   return Array.isArray(cleanupErrors) ? cleanupErrors : [];
-}
+};
 
-function instrumentBrowserContextLifecycle(bundle: RuntimeBundle): BrowserContextLifecycle {
+const instrumentBrowserContextLifecycle = (bundle: RuntimeBundle): BrowserContextLifecycle => {
   const activeContexts = new Set<object>();
   const lifecycle: BrowserContextLifecycle = { created: 0, closed: 0, active: 0, peak: 0 };
   const runtime = bundle.browserRuntime;
@@ -946,9 +947,9 @@ function instrumentBrowserContextLifecycle(bundle: RuntimeBundle): BrowserContex
     }
   };
   return lifecycle;
-}
+};
 
-function createBenchmarkProject(url: string, options: BenchmarkOptions) {
+const createBenchmarkProject = (url: string, options: BenchmarkOptions) => {
   const project = createEmptyProject(1);
   project.id = `project-suite-benchmark-${options.caseCount}`;
   const environment = {
@@ -1013,9 +1014,9 @@ function createBenchmarkProject(url: string, options: BenchmarkOptions) {
     testCases: cases,
     suites: [suite],
   };
-}
+};
 
-function createPooledBenchmarkProject(url: string, options: Pick<BenchmarkOptions, 'caseCount'>) {
+const createPooledBenchmarkProject = (url: string, options: Pick<BenchmarkOptions, 'caseCount'>) => {
   const project = createEmptyProject(1);
   project.id = `project-pooled-suite-benchmark-${options.caseCount}`;
   const environment = {
@@ -1080,9 +1081,9 @@ function createPooledBenchmarkProject(url: string, options: Pick<BenchmarkOption
     testCases: cases,
     suites: [suite],
   };
-}
+};
 
-function executableFixture(environmentId: string, id: string, endpoint: string): FixtureAsset {
+const executableFixture = (environmentId: string, id: string, endpoint: string): FixtureAsset => {
   return {
     schemaVersion: 1,
     id,
@@ -1108,9 +1109,9 @@ function executableFixture(environmentId: string, id: string, endpoint: string):
     createdAt: new Date(0).toISOString(),
     updatedAt: new Date(0).toISOString(),
   };
-}
+};
 
-function expectCompletedSuite(benchmark: SerialSuiteBenchmark, caseCount: number, retryCaseNumber: number): void {
+const expectCompletedSuite = (benchmark: SerialSuiteBenchmark, caseCount: number, retryCaseNumber: number): void => {
   const { response, persistedState } = benchmark;
   const parent = persistedState.suiteRunRecords[0]!;
   const expectedCaseIds = Array.from({ length: caseCount }, (_, offset) => `case-benchmark-${String(offset + 1).padStart(2, '0')}`);
@@ -1149,33 +1150,33 @@ function expectCompletedSuite(benchmark: SerialSuiteBenchmark, caseCount: number
   expect(persistedState.runDetails.map((detail) => detail.id).sort()).toEqual(
     response.detail.caseDetails.map((detail) => detail.id).sort(),
   );
-}
+};
 
-function expectDurableProgress(
+const expectDurableProgress = (
   benchmark: SerialSuiteBenchmark,
   terminalStatus: 'passed' | 'cancelled',
-): void {
+): void => {
   expect(benchmark.durableSnapshots).toEqual(expect.arrayContaining([
     { id: benchmark.runId, status: 'running' },
     { id: benchmark.runId, status: terminalStatus },
   ]));
-}
+};
 
-function expectContextLifecycleAtSuiteCompletion(benchmark: SerialSuiteBenchmark): void {
+const expectContextLifecycleAtSuiteCompletion = (benchmark: SerialSuiteBenchmark): void => {
   expect(benchmark.metrics.contextLifecycle).toEqual({
     created: benchmark.starts,
     closed: benchmark.starts - 1,
     active: 1,
     peak: 1,
   });
-}
+};
 
-async function managedArtifactBytes(rootDir: string): Promise<number> {
+const managedArtifactBytes = async (rootDir: string): Promise<number> => {
   const manifest = await readArtifactManifest(rootDir);
   return manifest.entries.reduce((total, entry) => total + entry.byteCount, 0);
-}
+};
 
-async function assertManifestHasNoOrphanArtifacts(rootDir: string): Promise<void> {
+const assertManifestHasNoOrphanArtifacts = async (rootDir: string): Promise<void> => {
   const artifactsDir = path.join(rootDir, 'studio-data', 'artifacts');
   const manifest = await readArtifactManifest(rootDir);
   const manifestPaths = manifest.entries
@@ -1187,14 +1188,14 @@ async function assertManifestHasNoOrphanArtifacts(rootDir: string): Promise<void
 
   expect(artifactFiles).toEqual(manifestPaths);
   expect(await fs.readdir(path.join(artifactsDir, '.deletions')).catch(() => [])).toEqual([]);
-}
+};
 
-async function readArtifactManifest(rootDir: string): Promise<{ entries: Array<{ path: string; byteCount: number }> }> {
+const readArtifactManifest = async (rootDir: string): Promise<{ entries: Array<{ path: string; byteCount: number }> }> => {
   const manifestPath = path.join(rootDir, 'studio-data', 'artifacts', 'manifest.json');
   return JSON.parse(await fs.readFile(manifestPath, 'utf8')) as { entries: Array<{ path: string; byteCount: number }> };
-}
+};
 
-async function listFiles(directory: string): Promise<string[]> {
+const listFiles = async (directory: string): Promise<string[]> => {
   const entries = await fs.readdir(directory, { withFileTypes: true });
   const nested = await Promise.all(entries.map(async (entry) => {
     const entryPath = path.join(directory, entry.name);
@@ -1204,18 +1205,18 @@ async function listFiles(directory: string): Promise<string[]> {
     return entry.isDirectory() ? listFiles(entryPath) : [];
   }));
   return nested.flat();
-}
+};
 
-function browserRuntimeInternals(bundle: RuntimeBundle): { browser: unknown; context: unknown; page: unknown } {
+const browserRuntimeInternals = (bundle: RuntimeBundle): { browser: unknown; context: unknown; page: unknown } => {
   const runtime = bundle.browserRuntime as unknown as { browser: unknown; context: unknown; page: unknown };
   return { browser: runtime.browser, context: runtime.context, page: runtime.page };
-}
+};
 
-async function startBenchmarkFixture(): Promise<{
+const startBenchmarkFixture = async (): Promise<{
   url: string;
   stats: () => { activeResources: number; setups: number; cleanups: number };
   close: () => Promise<void>;
-}> {
+}> => {
   let activeResources = 0;
   let setups = 0;
   let cleanups = 0;
@@ -1257,7 +1258,7 @@ async function startBenchmarkFixture(): Promise<{
     stats: () => ({ activeResources, setups, cleanups }),
     close: () => new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())),
   };
-}
+};
 
 /**
  * The IPC channel contract is CommonJS for Electron preload compatibility.
@@ -1265,10 +1266,10 @@ async function startBenchmarkFixture(): Promise<{
  * production handler's existing integration-test loader and executes its
  * source with the real run-history/provenance implementation.
  */
-function loadRuntimeIpcHandlers(): {
+const loadRuntimeIpcHandlers = (): {
   registerRuntimeIpcHandlers: (dependencies: unknown) => void;
   runtimeIpcChannels: { runSuite: string };
-} {
+} => {
   const ipcDirectory = path.join(process.cwd(), 'electron', 'ipc');
   const compile = (sourcePath: string) => ts.transpileModule(fsSync.readFileSync(sourcePath, 'utf8'), {
     compilerOptions: {
@@ -1319,4 +1320,6 @@ function loadRuntimeIpcHandlers(): {
   );
 
   return handlerModule.exports as unknown as ReturnType<typeof loadRuntimeIpcHandlers>;
-}
+};
+
+({ registerRuntimeIpcHandlers, runtimeIpcChannels } = loadRuntimeIpcHandlers());

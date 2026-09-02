@@ -17,11 +17,11 @@ import type { RecordingReplayResult } from './browser-runtime.js';
 import type { FixtureLifecycleExecutor } from './fixture-http-executor.js';
 import { TestRunner } from './test-runner.js';
 
-function createExecutableHttpFixture(
+const createExecutableHttpFixture = (
   environment: ProjectEnvironment,
   id = 'fixture-orders',
   cleanup = true,
-): FixtureAsset {
+): FixtureAsset => {
   return {
     schemaVersion: 1,
     id,
@@ -49,13 +49,13 @@ function createExecutableHttpFixture(
     createdAt: new Date(0).toISOString(),
     updatedAt: new Date(0).toISOString(),
   };
-}
+};
 
-function fixtureEvidence(
+const fixtureEvidence = (
   fixture: FixtureAsset,
   lifecycle: 'setup' | 'cleanup',
   outcome: FixtureLifecycleEvidence['outcome'] = 'passed',
-): FixtureLifecycleEvidence {
+): FixtureLifecycleEvidence => {
   const declaration = lifecycle === 'setup' ? fixture.setup : fixture.cleanup!;
   const http = declaration.http!;
   return {
@@ -69,7 +69,7 @@ function fixtureEvidence(
     ...(outcome === 'passed' ? { httpStatus: http.expectedStatuses[0] } : {}),
     durationMs: 1,
   };
-}
+};
 
 describe('TestRunner recording replay', () => {
   it('blocks an unconfirmed controlled Case action before policy, fixture, or browser startup', async () => {
@@ -2565,11 +2565,11 @@ describe('TestRunner HTTP fixture lifecycle', () => {
   });
 });
 
-function createProjectWithRecording(): {
+const createProjectWithRecording = (): {
   project: ProjectDraft;
   environment: ProjectEnvironment;
   testCase: TestCaseDraft;
-}['project'] {
+}['project'] => {
   const project = createEmptyProject(1);
   const environment = project.environments[0];
   const group = project.groups[0];
@@ -2623,11 +2623,11 @@ function createProjectWithRecording(): {
     recordings: [recording],
     testCases: [testCase],
   };
-}
+};
 
 type MalformedNetworkMockBodyVariant = 'sparse' | 'ownProperty' | 'symbol' | 'nonStandardPrototype';
 
-function malformedNetworkMockAction(variant: MalformedNetworkMockBodyVariant) {
+const malformedNetworkMockAction = (variant: MalformedNetworkMockBodyVariant) => {
   const body: unknown[] = ['approved'];
   let hiddenValue: string | undefined;
   if (variant === 'sparse') {
@@ -2659,11 +2659,11 @@ function malformedNetworkMockAction(variant: MalformedNetworkMockBodyVariant) {
     },
     hiddenValue,
   };
-}
+};
 
 type MalformedNetworkMockObjectVariant = 'nonEnumerable' | 'accessor' | 'nullPrototype' | 'nonStandardPrototype';
 
-function malformedNetworkMockObjectAction(variant: MalformedNetworkMockObjectVariant) {
+const malformedNetworkMockObjectAction = (variant: MalformedNetworkMockObjectVariant) => {
   let getterRead = false;
   let hiddenValue: string | undefined;
   let body: object;
@@ -2699,4 +2699,4 @@ function malformedNetworkMockObjectAction(variant: MalformedNetworkMockObjectVar
     hiddenValue,
     getterWasRead: () => getterRead,
   };
-}
+};

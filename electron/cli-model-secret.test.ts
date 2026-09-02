@@ -108,8 +108,8 @@ describe('TestBuddy CLI model secrets', () => {
   });
 });
 
-async function createTemporaryDirectory(): Promise<string> {
+const createTemporaryDirectory = async (): Promise<string> => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'testbuddy-cli-model-secret-'));
   temporaryDirectories.push(directory);
   return directory;
-}
+};

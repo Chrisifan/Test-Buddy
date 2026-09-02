@@ -19,6 +19,25 @@ import {
   findReusableFlowAsset,
   listLatestReusableFlowVersions,
 } from './studio/reusable-flows.js';
+import {
+  createInitialStudioState,
+  defaultAgentModelConfig,
+  defaultAppearanceConfig,
+  defaultBrowserSession,
+  defaultMidsceneConfig,
+  defaultRuntimeProfile,
+  initialChatTimeline,
+  initialRecentRuns,
+  initialRunLog,
+  initialWorkflows,
+} from './studio/defaults.js';
+import {
+  createStudioStateHydrator,
+  findUnambiguousMatchingRunDetail,
+  isMidsceneConfigured,
+  mergeProjectAssetBindings,
+  normalizeProjectAssetBindings,
+} from './studio/hydration.js';
 
 export {
   appendLatestTestCaseTransforms,
@@ -39,6 +58,19 @@ export {
   findReusableFlowAsset,
   listLatestReusableFlowVersions,
 };
+export {
+  createInitialStudioState,
+  defaultAgentModelConfig,
+  defaultAppearanceConfig,
+  defaultBrowserSession,
+  defaultMidsceneConfig,
+  defaultRuntimeProfile,
+  initialChatTimeline,
+  initialRecentRuns,
+  initialRunLog,
+  initialWorkflows,
+};
+export { isMidsceneConfigured, mergeProjectAssetBindings, normalizeProjectAssetBindings };
 
 export type RunStatus = 'running' | 'passed' | 'failed' | 'blocked' | 'skipped' | 'cancelled' | 'error';
 /**
@@ -2085,55 +2117,6 @@ export type MaintenanceDraftAcceptanceResult =
     draft: MaintenanceDraft;
   };
 
-export const defaultRuntimeProfile: RuntimeProfile = {
-  browser: 'chromium',
-  baseUrl: '',
-  viewport: 'desktop',
-  locale: 'zh-CN',
-  headless: true,
-};
-
-const createEmptyModelSecretRef = (id: string): ModelSecretRef => {
-  return {
-    id,
-    hasKey: false,
-    updatedAt: new Date(0).toISOString(),
-  };
-};
-
-export const defaultMidsceneConfig: MidsceneConfig = {
-  modelBaseUrl: '',
-  modelSecret: createEmptyModelSecretRef('midscene'),
-  modelName: '',
-  modelFamily: '',
-  preferredLanguage: 'Chinese',
-  replanningCycleLimit: '10',
-  openaiHttpProxy: '',
-  defaultContext: '',
-};
-
-const defaultAgentRoleModelConfig = (role: AgentModelRole): AgentRoleModelConfig => ({
-  provider: 'reuseMidscene',
-  modelBaseUrl: '',
-  modelSecret: createEmptyModelSecretRef(`agent:${role}`),
-  modelName: '',
-  modelFamily: '',
-  temperature: '0.2',
-  enabled: true,
-});
-
-export const defaultAgentModelConfig: AgentModelConfig = {
-  planner: defaultAgentRoleModelConfig('planner'),
-  executor: defaultAgentRoleModelConfig('executor'),
-  verifier: defaultAgentRoleModelConfig('verifier'),
-  reporter: defaultAgentRoleModelConfig('reporter'),
-};
-
-export const defaultAppearanceConfig: AppearanceConfig = {
-  themeMode: 'light',
-  localeMode: 'zh-CN',
-};
-
 const agentModelRoleOrder: AgentModelRole[] = ['planner', 'executor', 'verifier', 'reporter'];
 
 export const resolveAgentModelAssignments = ({
@@ -2175,152 +2158,6 @@ export const resolveAgentModelAssignments = ({
     };
   });
 };
-
-export const defaultBrowserSession: BrowserSessionState = {
-  id: 'session-idle',
-  status: 'idle',
-  currentUrl: '',
-  pageTitle: '尚未启动浏览器',
-  message: '选择项目环境后启动受控浏览器会话。',
-  updatedAt: new Date(0).toISOString(),
-};
-
-export const initialRecentRuns: RunSummary[] = [
-  {
-    id: 'run-2401',
-    name: 'Checkout smoke',
-    status: 'running',
-    duration: '00:03:17',
-    summary: '执行到支付方式选择步骤，正在等待结算区域稳定。',
-    projectId: 'project-demo',
-    testCaseId: 'wf-001',
-    environmentId: 'env-staging',
-    environmentName: 'Staging',
-  },
-  {
-    id: 'run-2398',
-    name: 'Search regression',
-    status: 'passed',
-    duration: '00:01:42',
-    summary: '搜索、筛选和结果断言全部通过。',
-    projectId: 'project-demo',
-    testCaseId: 'wf-002',
-    environmentId: 'env-staging',
-    environmentName: 'Staging',
-  },
-  {
-    id: 'run-2397',
-    name: 'Login happy path',
-    status: 'failed',
-    duration: '00:00:51',
-    summary: '验证码遮罩导致登录按钮定位失败。',
-    projectId: 'project-demo',
-    testCaseId: 'wf-003',
-    environmentId: 'env-staging',
-    environmentName: 'Staging',
-  },
-];
-
-export const initialWorkflows: WorkflowDraft[] = [
-  {
-    id: 'wf-001',
-    kind: 'scenario',
-    name: '购物车到支付',
-    category: '核心链路',
-    lastEdited: '2 小时前',
-    url: 'https://demo-shop.local/checkout',
-    notes: '用于验证从商品详情页到结算页的关键路径。',
-    steps: [
-      {
-        id: 'step-001',
-        type: 'ai',
-        title: '搜索商品',
-        body: '在搜索框输入 {{keyword}} 并提交，等待结果列表稳定。',
-      },
-      {
-        id: 'step-002',
-        type: 'aiAssert',
-        title: '断言结果列表',
-        body: '页面展示了与 {{keyword}} 相关的搜索结果。',
-      },
-      {
-        id: 'step-003',
-        type: 'aiQuery',
-        title: '提取首个标题',
-        body: '读取第一页第一个商品卡片标题，并保存到 firstCardTitle。',
-      },
-    ],
-  },
-  {
-    id: 'wf-002',
-    kind: 'assertion',
-    name: '搜索页关键断言',
-    category: '断言验证',
-    lastEdited: '昨天',
-    url: 'https://demo-shop.local/search',
-    notes: '专门用于验证搜索页的排序、筛选和关键状态文案。',
-    steps: [
-      {
-        id: 'step-004',
-        type: 'aiAssert',
-        title: '断言默认排序',
-        body: '页面初始状态下，排序控件显示“综合排序”。',
-      },
-      {
-        id: 'step-005',
-        type: 'aiAssert',
-        title: '断言结果数量',
-        body: '结果区域展示了总数，并且首屏至少出现 1 个商品卡片。',
-      },
-    ],
-  },
-  {
-    id: 'wf-003',
-    kind: 'extraction',
-    name: '商品卡片信息提取',
-    category: '数据提取',
-    lastEdited: '3 天前',
-    url: 'https://demo-shop.local/search',
-    notes: '从搜索结果页提取关键字段，供后续断言或回填流程使用。',
-    steps: [
-      {
-        id: 'step-006',
-        type: 'aiQuery',
-        title: '提取首个商品标题',
-        body: '读取第一页第一个商品卡片标题，并保存到 firstCardTitle。',
-      },
-      {
-        id: 'step-007',
-        type: 'aiQuery',
-        title: '提取价格与库存',
-        body: '提取首个商品的价格与库存文案，保存到 firstCardPrice 和 firstCardStock。',
-      },
-    ],
-  },
-];
-
-export const initialChatTimeline: ChatEntry[] = [
-  {
-    id: 'chat-001',
-    role: 'system',
-    text: `浏览器会话已准备完成，当前目标页面为 ${defaultRuntimeProfile.baseUrl}。`,
-  },
-  {
-    id: 'chat-002',
-    role: 'user',
-    text: '搜索 “wireless keyboard”，筛选价格低于 300，并打开第一个商品详情页。',
-  },
-  {
-    id: 'chat-003',
-    role: 'assistant',
-    text: '已完成搜索、筛选和跳转。当前页面位于商品详情，库存提示为“有货”。',
-  },
-];
-
-export const initialRunLog: string[] = [];
-
-const builtInMockProjectId = 'project-demo';
-const builtInMockChatEntryIds = new Set(['chat-001', 'chat-002', 'chat-003']);
 
 export const workflowToTestCase = (
   workflow: WorkflowDraft,
@@ -2603,35 +2440,6 @@ export const createDemoProject = (): ProjectDraft => {
   };
 };
 
-export const createInitialStudioState = (): StudioState => {
-  return {
-    selectedProjectId: '',
-    selectedGroupId: '',
-    selectedTestCaseId: '',
-    selectedRecordingId: '',
-    projects: [],
-    projectAssetBindings: [],
-    runDetails: [],
-    suiteRunRecords: [],
-    maintenanceDrafts: [],
-    recentRuns: [],
-    chatEntries: [],
-    runtimeProfile: structuredClone(defaultRuntimeProfile),
-    midsceneConfig: structuredClone(defaultMidsceneConfig),
-    agentModelConfig: structuredClone(defaultAgentModelConfig),
-    appearance: structuredClone(defaultAppearanceConfig),
-    startupGuide: {
-      completed: false,
-    },
-    browserSession: {
-      ...defaultBrowserSession,
-      updatedAt: new Date().toISOString(),
-    },
-    selectedWorkflowId: '',
-    workflows: [],
-  };
-};
-
 /** Provides the legacy demo workspace exclusively for isolated UI and state fixtures. */
 export const createDemoStudioState = (): StudioState => {
   const project = createDemoProject();
@@ -2651,308 +2459,11 @@ export const createDemoStudioState = (): StudioState => {
   };
 };
 
-export const hydrateStudioState = (
-  rawState: Partial<StudioState> | null | undefined,
-): StudioState => {
-  const initialState = createInitialStudioState();
-  if (!rawState) {
-    return initialState;
-  }
-
-  const migratedProjects = Array.isArray(rawState.projects)
-    ? rawState.projects
-        .filter((project) => project?.id !== builtInMockProjectId)
-        .map(normalizeProjectDraft)
-    : [];
-  const projectAssetBindings = normalizeProjectAssetBindings(rawState.projectAssetBindings, migratedProjects);
-
-  const selectedProjectId =
-    rawState.selectedProjectId && migratedProjects.some((project) => project.id === rawState.selectedProjectId)
-      ? rawState.selectedProjectId
-      : migratedProjects[0]?.id ?? '';
-  const selectedProject = migratedProjects.find((project) => project.id === selectedProjectId);
-  const selectedGroupId =
-    rawState.selectedGroupId && selectedProject?.groups.some((group) => group.id === rawState.selectedGroupId)
-      ? rawState.selectedGroupId
-      : selectedProject?.groups[0]?.id ?? '';
-  const legacySelectedTestCaseId =
-    rawState.selectedTestCaseId &&
-    selectedProject?.testCases.some((testCase) => testCase.id === rawState.selectedTestCaseId)
-      ? rawState.selectedTestCaseId
-      : selectedProject?.testCases[0]?.id ?? '';
-  const selectedTestCaseReference =
-    rawState.selectedTestCaseReference && selectedProject && findTestCaseVersion(selectedProject, rawState.selectedTestCaseReference)
-      ? rawState.selectedTestCaseReference
-      : legacySelectedTestCaseId
-        ? (() => {
-            const latest = listLatestTestCaseVersions(selectedProject ?? { testCases: [] })
-              .find((testCase) => testCase.id === legacySelectedTestCaseId);
-            return latest ? { id: latest.id, version: normalizeTestCaseVersion(latest.version) } : undefined;
-          })()
-        : undefined;
-  const selectedRecordingId =
-    rawState.selectedRecordingId &&
-    selectedProject?.recordings.some((recording) => recording.id === rawState.selectedRecordingId)
-      ? rawState.selectedRecordingId
-      : selectedProject?.recordings[0]?.id ?? '';
-  const rawMidsceneConfig = (rawState.midsceneConfig ?? {}) as Partial<MidsceneConfig> & {
-    endpoint?: string;
-    workspaceName?: string;
-    modelApiKey?: unknown;
-  };
-  const { modelApiKey: _legacyMidsceneApiKey, ...keyFreeMidsceneConfig } = rawMidsceneConfig;
-  const hydratedMidsceneConfig = {
-    ...initialState.midsceneConfig,
-    ...keyFreeMidsceneConfig,
-    modelBaseUrl: rawMidsceneConfig.modelBaseUrl ?? rawMidsceneConfig.endpoint ?? '',
-    modelName: rawMidsceneConfig.modelName ?? rawMidsceneConfig.workspaceName ?? '',
-  };
-  const rawAgentModelConfig = (rawState.agentModelConfig ?? {}) as Partial<AgentModelConfig>;
-  const hydratedAgentModelConfig = (Object.keys(initialState.agentModelConfig) as AgentModelRole[]).reduce(
-    (nextConfig, role) => ({
-      ...nextConfig,
-      [role]: {
-        ...initialState.agentModelConfig[role],
-        ...withoutLegacyModelApiKey(rawAgentModelConfig[role]),
-      },
-    }),
-    {} as AgentModelConfig,
-  );
-  const rawStartupGuide: Partial<StartupGuideState> = rawState.startupGuide ?? {};
-  const runDetails = Array.isArray(rawState.runDetails)
-    ? rawState.runDetails
-      .filter((run) => run.projectId !== builtInMockProjectId)
-      .map(migrateLegacyRunDetail)
-    : initialState.runDetails;
-  const suiteRunRecords = Array.isArray(rawState.suiteRunRecords)
-    ? rawState.suiteRunRecords.map((record) => ({
-      ...structuredClone(record),
-      members: Array.isArray(record.members) ? structuredClone(record.members) : [],
-    }))
-    : initialState.suiteRunRecords;
-  const recentRuns = Array.isArray(rawState.recentRuns)
-    ? rawState.recentRuns
-      .filter((run) => run.projectId !== builtInMockProjectId)
-      .map((run) => migrateLegacyRunSummary(run, findUnambiguousMatchingRunDetail(run, runDetails)))
-    : initialState.recentRuns;
-
-  return {
-    selectedProjectId,
-    selectedGroupId,
-    ...(selectedTestCaseReference ? { selectedTestCaseReference } : {}),
-    selectedRecordingId,
-    projects: migratedProjects,
-    projectAssetBindings,
-    runDetails,
-    suiteRunRecords,
-    maintenanceDrafts: normalizeMaintenanceDrafts(rawState.maintenanceDrafts),
-    recentRuns,
-    chatEntries: Array.isArray(rawState.chatEntries)
-      ? rawState.chatEntries.filter((entry) => !builtInMockChatEntryIds.has(entry.id))
-      : initialState.chatEntries,
-    runtimeProfile: {
-      ...initialState.runtimeProfile,
-      ...(rawState.runtimeProfile ?? {}),
-      baseUrl:
-        rawState.runtimeProfile?.baseUrl === 'https://demo-shop.local'
-          ? ''
-          : rawState.runtimeProfile?.baseUrl ?? initialState.runtimeProfile.baseUrl,
-    },
-    midsceneConfig: hydratedMidsceneConfig,
-    agentModelConfig: hydratedAgentModelConfig,
-    appearance: {
-      ...initialState.appearance,
-      ...(rawState.appearance ?? {}),
-    },
-    startupGuide: {
-      ...initialState.startupGuide,
-      ...rawStartupGuide,
-      completed: rawStartupGuide.completed ?? isMidsceneConfigured(hydratedMidsceneConfig),
-    },
-    // A Playwright page belongs to the Electron process and cannot outlive it.
-    // Restoring its former status would display stale errors or a false-ready state.
-    browserSession: initialState.browserSession,
-    selectedWorkflowId: selectedTestCaseReference?.id ?? '',
-    workflows: selectedProject?.testCases.map(testCaseToWorkflow) ?? initialState.workflows,
-  };
-};
-
-const migrateLegacyRunDetail = (run: RunDetail): RunDetail => {
-  if ((run as { status?: unknown }).status !== 'neutral') {
-    return run;
-  }
-
-  return {
-    ...run,
-    ...classifyLegacyNeutralRun(run.cancellation),
-  };
-};
-
-const migrateLegacyRunSummary = (run: RunSummary, detail?: RunDetail): RunSummary => {
-  if ((run as { status?: unknown }).status !== 'neutral') {
-    return run;
-  }
-
-  if (detail && isTerminalRunStatus(detail.status)) {
-    return {
-      ...run,
-      status: detail.status,
-      ...(detail.reason ? { reason: detail.reason } : {}),
-    };
-  }
-
-  return {
-    ...run,
-    ...classifyLegacyNeutralRun(),
-  };
-};
-
-const findUnambiguousMatchingRunDetail = (summary: RunSummary, details: RunDetail[]): RunDetail | undefined => {
-  const sameId = details.filter((detail) => detail.id === summary.id);
-  const hasProjectId = summary.projectId !== undefined;
-  const hasTestCaseId = summary.testCaseId !== undefined;
-  const hasEnvironmentId = summary.environmentId !== undefined;
-  if (!hasProjectId && !hasTestCaseId && !hasEnvironmentId) {
-    return sameId.length === 1 ? sameId[0] : undefined;
-  }
-
-  const matches = sameId.filter((detail) =>
-    (!hasProjectId || detail.projectId === summary.projectId) &&
-    (!hasTestCaseId || detail.testCaseId === summary.testCaseId) &&
-    (!hasEnvironmentId || detail.environmentId === summary.environmentId),
-  );
-  return matches.length === 1 ? matches[0] : undefined;
-};
-
-const classifyLegacyNeutralRun = (cancellationValue?: unknown): Pick<RunDetail, 'status' | 'reason'> => {
-  const cancellation = normalizeLegacyUserCancellation(cancellationValue);
-  if (cancellation) {
-    return {
-      status: 'cancelled',
-      reason: {
-        code: 'userCancelled',
-        message: cancellation.message,
-      },
-    };
-  }
-
-  return {
-    status: 'blocked',
-    reason: {
-      code: 'legacyAmbiguousNeutral',
-      message: 'Legacy neutral run could not be classified from structured evidence.',
-    },
-  };
-};
-
-const normalizeLegacyUserCancellation = (value: unknown): RunCancellation | undefined => {
-  if (!value || typeof value !== 'object') {
-    return undefined;
-  }
-
-  const cancellation = value as Partial<RunCancellation>;
-  return cancellation.source === 'user' &&
-    cancellation.reason === 'userCancelled' &&
-    typeof cancellation.message === 'string' &&
-    cancellation.message.trim() &&
-    typeof cancellation.cancelledAt === 'string'
-    ? {
-        source: 'user',
-        reason: 'userCancelled',
-        message: cancellation.message,
-        cancelledAt: cancellation.cancelledAt,
-      }
-    : undefined;
-};
-
-/** Drops malformed or stale pointers without reading any external project directory. */
-export const normalizeProjectAssetBindings = (
-  rawBindings: unknown,
-  projects: Array<Pick<ProjectDraft, 'id'>>,
-): ProjectAssetBinding[] => {
-  if (!Array.isArray(rawBindings)) {
-    return [];
-  }
-
-  const projectIds = new Set(projects.map((project) => project.id));
-  const seenProjectIds = new Set<string>();
-  return rawBindings.flatMap((candidate) => {
-    if (!candidate || typeof candidate !== 'object') {
-      return [];
-    }
-
-    const binding = candidate as Partial<ProjectAssetBinding>;
-    if (
-      typeof binding.projectId !== 'string' ||
-      !projectIds.has(binding.projectId) ||
-      seenProjectIds.has(binding.projectId) ||
-      typeof binding.projectDirectory !== 'string' ||
-      !binding.projectDirectory.trim() ||
-      typeof binding.revision !== 'string' ||
-      !/^[a-f0-9]{64}$/i.test(binding.revision) ||
-      typeof binding.boundAt !== 'string' ||
-      Number.isNaN(Date.parse(binding.boundAt))
-    ) {
-      return [];
-    }
-
-    seenProjectIds.add(binding.projectId);
-    return [{
-      projectId: binding.projectId,
-      projectDirectory: binding.projectDirectory,
-      revision: binding.revision,
-      boundAt: binding.boundAt,
-    }];
-  });
-};
-
-/**
- * Renderer saves carry the full editing state and can be queued behind an IPC
- * that records a new asset binding. Preserve existing bindings unless the
- * incoming state supplies a newer pointer for the same surviving project.
- */
-export const mergeProjectAssetBindings = (
-  currentBindings: unknown,
-  incomingBindings: unknown,
-  projects: Array<Pick<ProjectDraft, 'id'>>,
-): ProjectAssetBinding[] => {
-  const currentByProjectId = new Map(
-    normalizeProjectAssetBindings(currentBindings, projects).map((binding) => [binding.projectId, binding]),
-  );
-  const incomingByProjectId = new Map(
-    normalizeProjectAssetBindings(incomingBindings, projects).map((binding) => [binding.projectId, binding]),
-  );
-
-  return projects.flatMap((project) => {
-    const currentBinding = currentByProjectId.get(project.id);
-    const incomingBinding = incomingByProjectId.get(project.id);
-    const binding = currentBinding && incomingBinding
-      ? Date.parse(incomingBinding.boundAt) >= Date.parse(currentBinding.boundAt)
-        ? incomingBinding
-        : currentBinding
-      : incomingBinding ?? currentBinding;
-    return binding ? [binding] : [];
-  });
-};
-
-export const isMidsceneConfigured = (config: MidsceneConfig): boolean => {
-  return Boolean(
-    config.modelBaseUrl.trim() &&
-      config.modelSecret.hasKey &&
-      config.modelName.trim() &&
-      config.modelFamily.trim(),
-  );
-};
-
-const withoutLegacyModelApiKey = (config: Partial<AgentRoleModelConfig> | undefined): Partial<AgentRoleModelConfig> => {
-  if (!config) {
-    return {};
-  }
-  const { modelApiKey: _legacyModelApiKey, ...keyFreeConfig } = config as Partial<AgentRoleModelConfig> & {
-    modelApiKey?: unknown;
-  };
-  return keyFreeConfig;
-};
+export const hydrateStudioState = createStudioStateHydrator({
+  normalizeProjectDraft: (project) => normalizeProjectDraft(project),
+  normalizeMaintenanceDrafts,
+  testCaseToWorkflow: (testCase) => testCaseToWorkflow(testCase),
+});
 
 const inferWorkflowKind = (steps: WorkflowStepDraft[]): WorkflowKind => {
   const scores = steps.reduce(

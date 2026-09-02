@@ -336,7 +336,7 @@ describe('suite asset contract', () => {
 
 type MalformedNetworkMockBodyVariant = 'sparse' | 'ownProperty' | 'symbol' | 'nonStandardPrototype';
 
-function malformedNetworkMockAction(variant: MalformedNetworkMockBodyVariant) {
+const malformedNetworkMockAction = (variant: MalformedNetworkMockBodyVariant) => {
   const body: unknown[] = ['approved'];
   let hiddenValue: string | undefined;
   if (variant === 'sparse') {
@@ -368,11 +368,11 @@ function malformedNetworkMockAction(variant: MalformedNetworkMockBodyVariant) {
     },
     hiddenValue,
   };
-}
+};
 
 type MalformedNetworkMockObjectVariant = 'nonEnumerable' | 'accessor' | 'nullPrototype' | 'nonStandardPrototype';
 
-function malformedNetworkMockObjectAction(variant: MalformedNetworkMockObjectVariant) {
+const malformedNetworkMockObjectAction = (variant: MalformedNetworkMockObjectVariant) => {
   let getterRead = false;
   let hiddenValue: string | undefined;
   let body: object;
@@ -408,7 +408,7 @@ function malformedNetworkMockObjectAction(variant: MalformedNetworkMockObjectVar
     hiddenValue,
     getterWasRead: () => getterRead,
   };
-}
+};
 
 describe('fixture asset contract', () => {
   it('resolves fixed fixture versions and blocks missing, mismatched, and script fixtures', () => {

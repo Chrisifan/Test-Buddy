@@ -27,7 +27,9 @@ import { RunCancelledError, isRunCancelled } from '../runtime/run-cancellation.j
 import * as runtimeBundle from '../runtime/runtime-bundle.js';
 import { StudioStore } from '../studioStore.js';
 
-const { executeDesktopSuiteIntent, registerRuntimeIpcHandlers, runtimeIpcChannels } = loadRuntimeIpcHandlers();
+let executeDesktopSuiteIntent: ReturnType<typeof loadRuntimeIpcHandlers>['executeDesktopSuiteIntent'];
+let registerRuntimeIpcHandlers: ReturnType<typeof loadRuntimeIpcHandlers>['registerRuntimeIpcHandlers'];
+let runtimeIpcChannels: ReturnType<typeof loadRuntimeIpcHandlers>['runtimeIpcChannels'];
 
 type RuntimeIpcDependencies = {
   handle: (channel: string, listener: (event: unknown, ...args: never[]) => unknown) => void;
@@ -1802,16 +1804,16 @@ describe('registerRuntimeIpcHandlers', () => {
   });
 });
 
-function registerHandlers(dependencies: RuntimeIpcDependencies) {
+const registerHandlers = (dependencies: RuntimeIpcDependencies) => {
   const handlers = new Map<string, (event: unknown, ...args: unknown[]) => unknown>();
   registerRuntimeIpcHandlers({
     ...dependencies,
     handle: (channel: string, listener: (event: unknown, ...args: unknown[]) => unknown) => handlers.set(channel, listener),
   });
   return handlers;
-}
+};
 
-function createDependencies(overrides: Partial<RuntimeIpcDependencies> = {}): RuntimeIpcDependencies {
+const createDependencies = (overrides: Partial<RuntimeIpcDependencies> = {}): RuntimeIpcDependencies => {
   const state = createInitialStudioState();
   const project = createEmptyProject(0);
   const loadState = overrides.loadState ?? vi.fn().mockResolvedValue(state);
@@ -1860,31 +1862,31 @@ function createDependencies(overrides: Partial<RuntimeIpcDependencies> = {}): Ru
     },
     ...overrides,
   };
-}
+};
 
-function resolvedAgentModelConfig(state: ReturnType<typeof createInitialStudioState>) {
+const resolvedAgentModelConfig = (state: ReturnType<typeof createInitialStudioState>) => {
   return {
     planner: { ...state.agentModelConfig.planner, modelApiKey: 'test-only-main-process-planner-key' },
     executor: { ...state.agentModelConfig.executor, modelApiKey: 'test-only-main-process-executor-key' },
     verifier: { ...state.agentModelConfig.verifier, modelApiKey: 'test-only-main-process-verifier-key' },
     reporter: { ...state.agentModelConfig.reporter, modelApiKey: 'test-only-main-process-reporter-key' },
   };
-}
+};
 
-function projectSnapshot(
+const projectSnapshot = (
   project: ProjectDraft,
   revision: string,
   source: 'projectDirectory' | 'legacyStudioStore',
-) {
+) => {
   return {
     project,
     revision,
     source,
     reproducibility: source === 'projectDirectory' ? 'versioned' as const : 'legacy' as const,
   };
-}
+};
 
-function createTestCase(project: ProjectDraft, id: string, environmentId: string) {
+const createTestCase = (project: ProjectDraft, id: string, environmentId: string) => {
   return {
     id,
     version: 1,
@@ -1899,9 +1901,9 @@ function createTestCase(project: ProjectDraft, id: string, environmentId: string
     source: 'manual' as const,
     steps: [],
   };
-}
+};
 
-function deferredResult<T>() {
+const deferredResult = <T>() => {
   let resolve: (value: T) => void = () => undefined;
   let markStarted: () => void = () => undefined;
   const promise = new Promise<T>((nextResolve) => {
@@ -1911,9 +1913,9 @@ function deferredResult<T>() {
     markStarted = nextResolve;
   });
   return { promise, resolve, started, markStarted };
-}
+};
 
-function loadRuntimeIpcHandlers(): {
+const loadRuntimeIpcHandlers = (): {
   executeDesktopSuiteIntent?: (dependencies: RuntimeIpcDependencies, request: {
     runId?: string;
     projectId: string;
@@ -1941,7 +1943,7 @@ function loadRuntimeIpcHandlers(): {
     exportArtifact: string;
     attachManualEvidence: string;
   };
-} {
+} => {
   const ipcDirectory = path.join(process.cwd(), 'electron', 'ipc');
   const compile = (sourcePath: string) => ts.transpileModule(fs.readFileSync(sourcePath, 'utf8'), {
     compilerOptions: {
@@ -2016,9 +2018,11 @@ function loadRuntimeIpcHandlers(): {
   );
 
   return handlerModule.exports as unknown as ReturnType<typeof loadRuntimeIpcHandlers>;
-}
+};
 
-function runTestCaseResponse(projectId: string, testCaseId: string, environmentId: string): RunTestCaseResponse {
+({ executeDesktopSuiteIntent, registerRuntimeIpcHandlers, runtimeIpcChannels } = loadRuntimeIpcHandlers());
+
+const runTestCaseResponse = (projectId: string, testCaseId: string, environmentId: string): RunTestCaseResponse => {
   return {
     runId: 'run-1',
     title: 'Case one',
@@ -2038,9 +2042,9 @@ function runTestCaseResponse(projectId: string, testCaseId: string, environmentI
       artifacts: [],
     },
   };
-}
+};
 
-function runSuiteResponse(projectId: string, testCaseId: string, environmentId: string) {
+const runSuiteResponse = (projectId: string, testCaseId: string, environmentId: string) => {
   return {
     runId: 'suite-run-1',
     title: 'Suite one',
@@ -2070,4 +2074,4 @@ function runSuiteResponse(projectId: string, testCaseId: string, environmentId: 
       }],
     },
   };
-}
+};

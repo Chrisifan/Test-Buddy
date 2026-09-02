@@ -8,7 +8,7 @@ const exposeInMainWorld = vi.fn();
 const invoke = vi.fn();
 const preloadPath = path.join(process.cwd(), 'electron', 'preload.cts');
 
-function loadPreloadWithElectronMock() {
+const loadPreloadWithElectronMock = () => {
   exposeInMainWorld.mockReset();
   invoke.mockReset();
   const source = fs.readFileSync(preloadPath, 'utf8');
@@ -32,9 +32,9 @@ function loadPreloadWithElectronMock() {
   new Function('require', 'module', 'exports', compiled)(require, preloadModule, preloadModule.exports);
 
   return source;
-}
+};
 
-function loadRuntimeIpcChannels() {
+const loadRuntimeIpcChannels = () => {
   const source = fs.readFileSync(path.join(process.cwd(), 'electron', 'ipc', 'runtime-ipc-channels.cts'), 'utf8');
   const compiled = ts.transpileModule(source, {
     compilerOptions: {
@@ -47,7 +47,7 @@ function loadRuntimeIpcChannels() {
   new Function('module', 'exports', compiled)(channelModule, channelModule.exports);
 
   return channelModule.exports as { runtimeIpcChannels: Record<string, string> };
-}
+};
 
 describe('desktop preload runtime IPC contract', () => {
   it('loads in the Electron sandbox without relative preload dependencies', () => {

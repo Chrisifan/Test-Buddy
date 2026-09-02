@@ -13,7 +13,7 @@ import { DocumentAnalysisPage } from './DocumentAnalysisPage.js';
 const state = createDemoStudioState();
 const project = state.projects[0];
 
-function renderPage(
+const renderPage = (
   locale: 'zh-CN' | 'en-US' = 'zh-CN',
   currentProject = project,
   options: {
@@ -32,7 +32,7 @@ function renderPage(
     semanticAnalyzingDocumentId?: string | null;
     semanticAnalysisError?: string | null;
   } = {},
-) {
+) => {
   return render(
     <I18nProvider locale={locale}>
       <DocumentAnalysisPage
@@ -53,7 +53,7 @@ function renderPage(
       />
     </I18nProvider>,
   );
-}
+};
 
 describe('DocumentAnalysisPage', () => {
   it('uses Chinese document analysis controls by default', () => {

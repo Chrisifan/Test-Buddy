@@ -15,7 +15,7 @@ const environment: ProjectEnvironment = {
   headless: true,
 };
 
-function createFixture(overrides: Partial<FixtureAsset> = {}): FixtureAsset {
+const createFixture = (overrides: Partial<FixtureAsset> = {}): FixtureAsset => {
   return {
     schemaVersion: 1,
     id: 'fixture-orders',
@@ -51,7 +51,7 @@ function createFixture(overrides: Partial<FixtureAsset> = {}): FixtureAsset {
     updatedAt: new Date(0).toISOString(),
     ...overrides,
   };
-}
+};
 
 describe('FixtureHttpExecutor', () => {
   it('executes only the declared same-origin path and records body-free evidence', async () => {

@@ -802,12 +802,14 @@ describe('TestBuddy CLI', () => {
 
     const originalSave = StudioStore.prototype.save;
     let saveCount = 0;
-    vi.spyOn(StudioStore.prototype, 'save').mockImplementation(async function (nextState) {
+    const saveSpy = vi.spyOn(StudioStore.prototype, 'save');
+    saveSpy.mockImplementation(async (nextState) => {
       saveCount += 1;
       if (saveCount === 4) {
         throw new Error('terminal parent persistence failed');
       }
-      return originalSave.call(this, nextState);
+      const currentStore = saveSpy.mock.instances[saveCount - 1] as StudioStore;
+      return originalSave.call(currentStore, nextState);
     });
     vi.spyOn(runtimeBundle, 'createRuntimeBundle').mockReturnValue({
       ensureReady: vi.fn(),

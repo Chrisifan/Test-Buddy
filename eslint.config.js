@@ -11,7 +11,7 @@ export default [
       'shared/**/*.{ts,tsx,cts,mts}',
       'scripts/**/*.{ts,tsx,cts,mts}',
     ],
-    ignores: ['**/*.test.*', '**/*.spec.*', '**/*.d.ts', '**/fixtures/**', '**/generated/**'],
+    ignores: ['**/*.d.ts', '**/fixtures/**', '**/generated/**'],
     languageOptions: {
       parser: tseslint.parser,
     },

@@ -121,17 +121,17 @@ describe('ProjectRepository', () => {
   });
 });
 
-async function createTemporaryDirectory(): Promise<string> {
+const createTemporaryDirectory = async (): Promise<string> => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'testbuddy-project-repository-'));
   temporaryDirectories.push(directory);
   return directory;
-}
+};
 
-function createProject(id: string, name: string): ProjectDraft {
+const createProject = (id: string, name: string): ProjectDraft => {
   return { ...createEmptyProject(1), id, name };
-}
+};
 
-async function createBinding(projectDirectory: string, projectId: string): Promise<ProjectAssetBinding> {
+const createBinding = async (projectDirectory: string, projectId: string): Promise<ProjectAssetBinding> => {
   const snapshot = await new ProjectAssetStore(projectDirectory).loadWithRevision();
   return {
     projectId,
@@ -139,13 +139,13 @@ async function createBinding(projectDirectory: string, projectId: string): Promi
     revision: snapshot.revision,
     boundAt: '2026-08-14T00:00:00.000Z',
   };
-}
+};
 
-async function saveStudioState(
+const saveStudioState = async (
   rootDirectory: string,
   project: ProjectDraft,
   projectAssetBindings: ProjectAssetBinding[],
-): Promise<StudioStore> {
+): Promise<StudioStore> => {
   const studioStore = new StudioStore(rootDirectory);
   await studioStore.save({
     ...createInitialStudioState(),
@@ -153,4 +153,4 @@ async function saveStudioState(
     projectAssetBindings,
   });
   return studioStore;
-}
+};

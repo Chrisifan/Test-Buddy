@@ -137,19 +137,19 @@ describe('registerProjectAssetIpcHandlers', () => {
   });
 });
 
-function registerHandlers(dependencies: ReturnType<typeof createDependencies>): Map<string, Handler> {
+const registerHandlers = (dependencies: ReturnType<typeof createDependencies>): Map<string, Handler> => {
   const handlers = new Map<string, Handler>();
   registerProjectAssetIpcHandlers({
     ...dependencies,
     handle: (channel, listener) => handlers.set(channel, listener as Handler),
   });
   return handlers;
-}
+};
 
-function createDependencies(
+const createDependencies = (
   project: ReturnType<typeof createEmptyProject>,
   overrides: Record<string, unknown> = {},
-) {
+) => {
   const binding = overrides.binding ?? {
     projectId: project.id,
     projectDirectory: '/projects/one',
@@ -193,9 +193,9 @@ function createDependencies(
     assetStore,
     ...overrides,
   };
-}
+};
 
-function requestFor(channel: string, project: ReturnType<typeof createEmptyProject>) {
+const requestFor = (channel: string, project: ReturnType<typeof createEmptyProject>) => {
   if (channel === projectAssetIpcChannels.planMigration || channel === projectAssetIpcChannels.writeSnapshot) {
     return {
       projectId: project.id,
@@ -217,4 +217,4 @@ function requestFor(channel: string, project: ReturnType<typeof createEmptyProje
     expectedRevision: 'd'.repeat(64),
     plannedRevision: 'f'.repeat(64),
   };
-}
+};

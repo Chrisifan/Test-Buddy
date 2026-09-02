@@ -10,7 +10,7 @@ import {
   PrdSemanticAnalysisRuntime,
 } from './prd-semantic-analyzer.js';
 
-function plannerModelConfig() {
+const plannerModelConfig = () => {
   return {
     ...defaultAgentModelConfig,
     planner: {
@@ -24,7 +24,7 @@ function plannerModelConfig() {
       enabled: true,
     },
   };
-}
+};
 
 describe('PrdSemanticAnalysisRuntime', () => {
   it('refines only existing rule paths and preserves stable PRD references', async () => {

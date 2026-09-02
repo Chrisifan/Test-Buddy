@@ -167,7 +167,7 @@ interface LegacyModelKeyMigration {
 
 const collectLegacyModelKeyMigrations = (state: StudioState): LegacyModelKeyMigration[] => {
   const migrations: LegacyModelKeyMigration[] = [];
-  const midsceneKey = legacyModelApiKey(state.midsceneConfig);
+  const midsceneKey = legacyModelKey(state.midsceneConfig);
   if (midsceneKey !== undefined) {
     migrations.push({
       scope: 'midscene',
@@ -177,7 +177,7 @@ const collectLegacyModelKeyMigrations = (state: StudioState): LegacyModelKeyMigr
   }
   (['planner', 'executor', 'verifier', 'reporter'] as AgentModelRole[]).forEach((role) => {
     const roleConfig = state.agentModelConfig?.[role];
-    const roleKey = legacyModelApiKey(roleConfig);
+    const roleKey = legacyModelKey(roleConfig);
     if (roleKey !== undefined) {
       migrations.push({
         scope: `agent:${role}`,
@@ -189,12 +189,16 @@ const collectLegacyModelKeyMigrations = (state: StudioState): LegacyModelKeyMigr
   return migrations;
 };
 
-const legacyModelApiKey = (config: unknown): string | undefined => {
+const legacyModelKey = (config: unknown): string | undefined => {
   if (!config || typeof config !== 'object') {
     return undefined;
   }
-  const value = (config as { modelApiKey?: unknown }).modelApiKey;
-  return typeof value === 'string' ? value : undefined;
+  const { modelApiKey, apiKey } = config as { apiKey?: unknown; modelApiKey?: unknown };
+  return typeof modelApiKey === 'string'
+    ? modelApiKey
+    : typeof apiKey === 'string'
+      ? apiKey
+      : undefined;
 };
 
 const existingModelSecretRef = (config: unknown, scope: ModelSecretScope): ModelSecretRef | undefined => {
@@ -213,7 +217,11 @@ const existingModelSecretRef = (config: unknown, scope: ModelSecretScope): Model
 };
 
 const replaceLegacyModelKey = <T extends object>(config: T, modelSecret: ModelSecretRef): T & { modelSecret: ModelSecretRef } => {
-  const { modelApiKey: _legacyModelApiKey, ...keyFreeConfig } = config as T & { modelApiKey?: unknown };
+  const {
+    apiKey: _legacyApiKey,
+    modelApiKey: _legacyModelApiKey,
+    ...keyFreeConfig
+  } = config as T & { apiKey?: unknown; modelApiKey?: unknown };
   return { ...keyFreeConfig, modelSecret } as T & { modelSecret: ModelSecretRef };
 };
 

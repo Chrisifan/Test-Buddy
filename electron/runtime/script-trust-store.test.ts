@@ -8,11 +8,11 @@ import { ScriptTrustStore } from './script-trust-store.js';
 
 const temporaryDirectories: string[] = [];
 
-async function createTemporaryDirectory(): Promise<string> {
+const createTemporaryDirectory = async (): Promise<string> => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'testbuddy-script-trust-'));
   temporaryDirectories.push(directory);
   return directory;
-}
+};
 
 afterEach(async () => {
   await Promise.all(temporaryDirectories.splice(0).map((directory) => fs.rm(directory, { recursive: true, force: true })));

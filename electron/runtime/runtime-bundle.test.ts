@@ -1475,11 +1475,11 @@ describe('RuntimeBundle desktop Suite adapter', () => {
   });
 });
 
-function projectSnapshot(project: ReturnType<typeof createEmptyProject>) {
+const projectSnapshot = (project: ReturnType<typeof createEmptyProject>) => {
   return {
     project,
     revision: 'a'.repeat(64),
     source: 'legacyStudioStore' as const,
     reproducibility: 'legacy' as const,
   };
-}
+};

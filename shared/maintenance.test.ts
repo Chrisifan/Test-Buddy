@@ -388,7 +388,7 @@ describe('maintenance draft contract', () => {
 
 type MalformedNetworkMockObjectVariant = 'nonEnumerable' | 'accessor' | 'nullPrototype' | 'nonStandardPrototype';
 
-function malformedNetworkMockObjectAction(variant: MalformedNetworkMockObjectVariant) {
+const malformedNetworkMockObjectAction = (variant: MalformedNetworkMockObjectVariant) => {
   let getterReads = 0;
   let body: object;
   if (variant === 'nullPrototype') {
@@ -421,13 +421,13 @@ function malformedNetworkMockObjectAction(variant: MalformedNetworkMockObjectVar
     },
     getterReadCount: () => getterReads,
   };
-}
+};
 
-function canonicalJsonForTest(value: unknown): string {
+const canonicalJsonForTest = (value: unknown): string => {
   return JSON.stringify(sortForTest(value));
-}
+};
 
-function sortForTest(value: unknown): unknown {
+const sortForTest = (value: unknown): unknown => {
   if (Array.isArray(value)) return value.map(sortForTest);
   if (value && typeof value === 'object') {
     return Object.keys(value).sort().reduce<Record<string, unknown>>((result, key) => {
@@ -437,4 +437,4 @@ function sortForTest(value: unknown): unknown {
     }, {});
   }
   return value;
-}
+};

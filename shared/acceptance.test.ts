@@ -16,7 +16,7 @@ const localMatrix: AcceptanceMatrix = {
   targets: [{ id: 'local-fixture', kind: 'localFixture', configFingerprint: hash('local'), requiredForRelease: true }],
 };
 
-function localAttempts() {
+const localAttempts = () => {
   return Array.from({ length: 10 }, (_, attemptIndex) => createAcceptanceAttempt({
     targetId: 'local-fixture',
     targetKind: 'localFixture',
@@ -34,12 +34,12 @@ function localAttempts() {
     flaky: false,
     humanConclusion: 'accepted',
   }));
-}
+};
 
-function asAttemptInput(attempt: ReturnType<typeof localAttempts>[number]) {
+const asAttemptInput = (attempt: ReturnType<typeof localAttempts>[number]) => {
   const { schemaVersion: _schemaVersion, ...input } = attempt;
   return input;
-}
+};
 
 describe('acceptance matrix release gate', () => {
   it('permits an evidenced local-only release claim after twenty matching pairs remain stable for ten attempts', () => {

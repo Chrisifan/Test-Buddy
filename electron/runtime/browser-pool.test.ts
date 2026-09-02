@@ -10,11 +10,11 @@ type MockContext = {
   close: ReturnType<typeof vi.fn>;
 };
 
-function createContext(): MockContext {
+const createContext = (): MockContext => {
   return { close: vi.fn().mockResolvedValue(undefined) };
-}
+};
 
-function createPool(capacity = 2) {
+const createPool = (capacity = 2) => {
   const contexts: MockContext[] = [];
   const closeBrowser = vi.fn().mockResolvedValue(undefined);
   const newContext = vi.fn(async () => {
@@ -31,7 +31,7 @@ function createPool(capacity = 2) {
       createBrowser: async () => ({ newContext, close: closeBrowser }),
     }),
   };
-}
+};
 
 const environment = {
   id: 'environment-staging',

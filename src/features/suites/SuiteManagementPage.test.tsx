@@ -6,7 +6,7 @@ import { createEmptyProject, createEmptySuiteAsset, createEmptyTestCase, type Pr
 import { I18nProvider } from '../../i18n/index.js';
 import { SuiteManagementPage } from './SuiteManagementPage.js';
 
-function createProject(): ProjectDraft {
+const createProject = (): ProjectDraft => {
   const project = createEmptyProject(1);
   const environment = project.environments[0]!;
   project.testCases = [
@@ -26,9 +26,9 @@ function createProject(): ProjectDraft {
     },
   ];
   return project;
-}
+};
 
-function renderPage({
+const renderPage = ({
   project = createProject(),
   selectedSuiteReference,
   onPublishSuite = vi.fn(),
@@ -48,7 +48,7 @@ function renderPage({
   isRunning?: boolean;
   activeRunId?: string;
   suiteRunRecords?: SuiteRunRecord[];
-} = {}) {
+} = {}) => {
   return {
     onOpenRun,
     onPublishSuite,
@@ -70,7 +70,7 @@ function renderPage({
       </I18nProvider>,
     ),
   };
-}
+};
 
 describe('SuiteManagementPage', () => {
   it('offers each logical Case once and pins its latest revision in a new Suite', () => {
@@ -373,7 +373,7 @@ describe('SuiteManagementPage', () => {
     project.suites = [versionOne, versionTwo];
     const onRunSuite = vi.fn();
 
-    function SuiteSelectionHarness() {
+    const SuiteSelectionHarness = () => {
       const [selectedSuiteReference, setSelectedSuiteReference] = useState({
         id: versionTwo.id,
         version: versionTwo.version,
@@ -391,7 +391,7 @@ describe('SuiteManagementPage', () => {
           />
         </I18nProvider>
       );
-    }
+    };
 
     render(<SuiteSelectionHarness />);
 

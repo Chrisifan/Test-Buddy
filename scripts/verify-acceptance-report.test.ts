@@ -15,7 +15,7 @@ afterEach(async () => {
   await Promise.all(directories.splice(0).map((directory) => fs.rm(directory, { recursive: true, force: true })));
 });
 
-function reportContents() {
+const reportContents = () => {
   const target = { id: 'local-fixture', kind: 'localFixture' as const, configFingerprint: hash('local'), requiredForRelease: true };
   const attempts = Array.from({ length: 10 }, (_, attemptIndex) => createAcceptanceAttempt({
     targetId: target.id, targetKind: target.kind, targetConfigFingerprint: target.configFingerprint,
@@ -28,7 +28,7 @@ function reportContents() {
     terminalSummary: { passed: 20, failed: 0, blocked: 0, error: 0, cancelled: 0, skipped: 0 }, retries: 0, flaky: false, humanConclusion: 'accepted',
   }));
   return { schemaVersion: 1, lane: 'localFixture', matrix: { schemaVersion: 1, targets: [target] }, attempts };
-}
+};
 
 describe('acceptance report verifier', () => {
   it('recomputes the canonical report hash and rejects tampering or unsafe report text', async () => {

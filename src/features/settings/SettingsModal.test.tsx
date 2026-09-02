@@ -35,7 +35,7 @@ const runtimeProfile: RuntimeProfile = {
   headless: true,
 };
 
-function renderSettingsModal({
+const renderSettingsModal = ({
   agentModelConfig = defaultAgentModelConfig,
   modelSecret = midsceneConfig.modelSecret,
   modelName = '',
@@ -63,7 +63,7 @@ function renderSettingsModal({
   requiresMidsceneBeforeSave?: boolean;
   locale?: 'zh-CN' | 'en-US';
   initialSection?: 'appearance' | 'midscene' | 'agentModels' | 'runtime';
-} = {}) {
+} = {}) => {
   return {
     onSave,
     onSaveModelSecret,
@@ -94,7 +94,7 @@ function renderSettingsModal({
       />,
     ),
   };
-}
+};
 
 describe('SettingsModal', () => {
   it('omits redundant MidScene onboarding content and numbered section labels', () => {

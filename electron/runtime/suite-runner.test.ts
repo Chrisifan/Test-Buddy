@@ -413,7 +413,7 @@ describe('SuiteRunner', () => {
   });
 });
 
-function createSuiteProject(options: Partial<SuiteAsset['execution']> = {}): { project: ReturnType<typeof createEmptyProject>; suite: SuiteAsset } {
+const createSuiteProject = (options: Partial<SuiteAsset['execution']> = {}): { project: ReturnType<typeof createEmptyProject>; suite: SuiteAsset } => {
   const project = createEmptyProject(1);
   const environment = project.environments[0]!;
   const group = project.groups[0]!;
@@ -435,9 +435,9 @@ function createSuiteProject(options: Partial<SuiteAsset['execution']> = {}): { p
     updatedAt: '2026-08-11T00:00:00.000Z',
   };
   return { project, suite };
-}
+};
 
-function createDeferred<T>(): { promise: Promise<T>; resolve(value: T): void } {
+const createDeferred = <T>(): { promise: Promise<T>; resolve(value: T): void } => {
   let resolve!: (value: T) => void;
   return {
     promise: new Promise<T>((nextResolve) => {
@@ -445,4 +445,4 @@ function createDeferred<T>(): { promise: Promise<T>; resolve(value: T): void } {
     }),
     resolve,
   };
-}
+};

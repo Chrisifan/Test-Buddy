@@ -283,6 +283,48 @@ describe('StudioStateUpdateQueue', () => {
     await expect(fs.readFile(store.storagePath, 'utf8')).resolves.not.toContain(submittedKey);
   });
 
+  it('rejects legacy apiKey values in every model scope before writing renderer state to disk', async () => {
+    const rootDirectory = await createTemporaryDirectory();
+    const saveSecret = vi.fn();
+    const store = new StudioStore(rootDirectory, fs, { save: saveSecret });
+    const initialState = createInitialStudioState();
+    await store.save(initialState);
+    const updates = new StudioStateUpdateQueue(store);
+    const submittedKeys = {
+      midscene: 'sk-renderer-midscene-api-key',
+      planner: 'sk-renderer-planner-api-key',
+      executor: 'sk-renderer-executor-api-key',
+      verifier: 'sk-renderer-verifier-api-key',
+      reporter: 'sk-renderer-reporter-api-key',
+    };
+    const maliciousState = {
+      ...initialState,
+      midsceneConfig: {
+        ...initialState.midsceneConfig,
+        apiKey: submittedKeys.midscene,
+      },
+      agentModelConfig: Object.fromEntries(
+        (['planner', 'executor', 'verifier', 'reporter'] as const).map((role) => [role, {
+          ...initialState.agentModelConfig[role],
+          apiKey: submittedKeys[role],
+        }]),
+      ),
+    } as unknown as typeof initialState;
+
+    const rejection = updates.saveRendererState(maliciousState);
+
+    await expect(rejection).rejects.toThrow('渲染进程状态包含不允许的模型密钥字段。');
+    expect(saveSecret).not.toHaveBeenCalled();
+    const persisted = await fs.readFile(store.storagePath, 'utf8');
+    Object.values(submittedKeys).forEach((submittedKey) => {
+      expect(persisted).not.toContain(submittedKey);
+    });
+    const loaded = await store.loadExisting();
+    Object.values(submittedKeys).forEach((submittedKey) => {
+      expect(JSON.stringify(loaded)).not.toContain(submittedKey);
+    });
+  });
+
   it('rejects a renderer state containing a raw model key nested outside model configuration', async () => {
     const rootDirectory = await createTemporaryDirectory();
     const saveSecret = vi.fn();
@@ -355,21 +397,21 @@ describe('StudioStateUpdateQueue', () => {
   );
 });
 
-function deferred<T>() {
+const deferred = <T>() => {
   let resolve!: (value: T | PromiseLike<T>) => void;
   const promise = new Promise<T>((next) => {
     resolve = next;
   });
   return { promise, resolve };
-}
+};
 
-async function createTemporaryDirectory(): Promise<string> {
+const createTemporaryDirectory = async (): Promise<string> => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'test-buddy-state-update-queue-'));
   temporaryDirectories.push(directory);
   return directory;
-}
+};
 
-function runResult(): RunTestCaseResponse {
+const runResult = (): RunTestCaseResponse => {
   return {
     runId: 'run-history-1',
     title: 'Checkout',
@@ -389,9 +431,9 @@ function runResult(): RunTestCaseResponse {
       artifacts: [],
     },
   };
-}
+};
 
-function suiteRunRecord({
+const suiteRunRecord = ({
   status,
   finishedAt,
   memberRunIds = [],
@@ -401,7 +443,7 @@ function suiteRunRecord({
   finishedAt?: string;
   memberRunIds?: string[];
   includeMember?: boolean;
-}): SuiteRunRecord {
+}): SuiteRunRecord => {
   const memberStatus = status === 'running' ? 'passed' : status;
   const summary = { passed: 0, failed: 0, blocked: 0, skipped: 0, cancelled: 0, error: 0 };
   if (includeMember) {
@@ -457,4 +499,4 @@ function suiteRunRecord({
     }] : [],
     summary,
   };
-}
+};

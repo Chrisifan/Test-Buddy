@@ -194,8 +194,23 @@ const containsModelApiKey = (value: unknown, visited: WeakSet<object>): boolean 
   visited.add(value);
 
   return Object.entries(value).some(([key, nestedValue]) =>
-    key === 'modelApiKey' || containsModelApiKey(nestedValue, visited),
+    key === 'modelApiKey' ||
+    (key === 'midsceneConfig' && containsLegacyApiKey(nestedValue)) ||
+    (key === 'agentModelConfig' && containsLegacyAgentModelApiKey(nestedValue)) ||
+    containsModelApiKey(nestedValue, visited),
   );
+};
+
+const containsLegacyApiKey = (value: unknown): boolean => {
+  return Boolean(value && typeof value === 'object' && Object.hasOwn(value, 'apiKey'));
+};
+
+const containsLegacyAgentModelApiKey = (value: unknown): boolean => {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+  return (['planner', 'executor', 'verifier', 'reporter'] as AgentModelRole[])
+    .some((role) => containsLegacyApiKey((value as Partial<Record<AgentModelRole, unknown>>)[role]));
 };
 
 const withModelSecretRef = (

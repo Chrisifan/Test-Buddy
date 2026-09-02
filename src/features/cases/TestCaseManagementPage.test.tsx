@@ -20,7 +20,7 @@ const state = createDemoStudioState();
 const project = state.projects[0]!;
 const selectedTestCase = project.testCases[0]!;
 
-function renderPage({
+const renderPage = ({
   locale = 'zh-CN',
   testCase = selectedTestCase,
   runBlocker,
@@ -34,7 +34,7 @@ function renderPage({
   saveStatus?: 'idle' | 'saving' | 'saved' | 'error';
   onRetrySave?: () => void;
   onCreateTestCase?: () => void;
-} = {}) {
+} = {}) => {
   const selectedCase = testCase ?? undefined;
   const onUpdateTestCase = vi.fn();
   const onMoveStep = vi.fn();
@@ -67,12 +67,12 @@ function renderPage({
       </I18nProvider>,
     ),
   };
-}
+};
 
-function createStructuredActionCase(
+const createStructuredActionCase = (
   action: DeterministicTestAction,
   reviewStatus: 'needsReview' | 'confirmed' = 'needsReview',
-): TestCaseDraft {
+): TestCaseDraft => {
   return {
     ...selectedTestCase,
     steps: [
@@ -96,12 +96,12 @@ function createStructuredActionCase(
       },
     ],
   };
-}
+};
 
-function createStructuredAssertionCase(
+const createStructuredAssertionCase = (
   assertion: ExplicitTestAssertion,
   reviewStatus: 'needsReview' | 'confirmed' = 'needsReview',
-): TestCaseDraft {
+): TestCaseDraft => {
   return {
     ...selectedTestCase,
     steps: [
@@ -125,9 +125,9 @@ function createStructuredAssertionCase(
       },
     ],
   };
-}
+};
 
-function CasePageHarness({
+const CasePageHarness = ({
   initialProject = project,
   initialTestCase = selectedTestCase,
   onUpdated = vi.fn(),
@@ -135,7 +135,7 @@ function CasePageHarness({
   initialProject?: typeof project;
   initialTestCase?: typeof selectedTestCase;
   onUpdated?: (testCase: TestCaseDraft) => void;
-}) {
+}) => {
   const [testCase, setTestCase] = React.useState(initialTestCase);
   const nextStepId = React.useRef(1);
 
@@ -176,12 +176,12 @@ function CasePageHarness({
       />
     </I18nProvider>
   );
-}
+};
 
-function ImmutableCaseHarness({ onPublished = vi.fn(), onRun = vi.fn() }: {
+const ImmutableCaseHarness = ({ onPublished = vi.fn(), onRun = vi.fn() }: {
   onPublished?: (testCase: TestCaseDraft) => void;
   onRun?: (reference: VersionedTestAssetReference) => void;
-}) {
+}) => {
   const v1 = React.useMemo(() => ({ ...selectedTestCase, id: 'immutable-case', version: 1, name: 'Checkout v1' }), []);
   const [publishedCases, setPublishedCases] = React.useState<TestCaseDraft[]>([v1]);
   const [reference, setReference] = React.useState<VersionedTestAssetReference>({ id: v1.id, version: 1 });
@@ -222,7 +222,7 @@ function ImmutableCaseHarness({ onPublished = vi.fn(), onRun = vi.fn() }: {
       />
     </I18nProvider>
   );
-}
+};
 
 describe('TestCaseManagementPage', () => {
   it('keeps a discarded edit-as-new-version draft out of the published v1 asset', () => {

@@ -6,7 +6,7 @@ import { ProjectManagementPage } from './ProjectManagementPage.js';
 import { createDemoStudioState, type DesktopApi } from '../../../shared/studio.js';
 import { I18nProvider } from '../../i18n/index.js';
 
-function ProjectPageHarness() {
+const ProjectPageHarness = () => {
   const state = createDemoStudioState();
   const [project, setProject] = React.useState(state.projects[0]!);
 
@@ -27,7 +27,7 @@ function ProjectPageHarness() {
       />
     </I18nProvider>
   );
-}
+};
 
 describe('ProjectManagementPage', () => {
   it('uses the project overview labels by default', () => {

@@ -6,13 +6,13 @@ import { createMaintenanceDraft } from '../../../shared/maintenance.js';
 import { I18nProvider } from '../../i18n/index.js';
 import { MaintenanceQueuePage, type MaintenanceQueuePageProps } from './MaintenanceQueuePage.js';
 
-function renderQueue(props: unknown) {
+const renderQueue = (props: unknown) => {
   return render(
     <I18nProvider locale="en-US">
       <MaintenanceQueuePage {...(props as MaintenanceQueuePageProps)} />
     </I18nProvider>,
   );
-}
+};
 
 describe('MaintenanceQueuePage', () => {
   it('labels source and candidate diffs, opens exact cited evidence, and requires confirmation before approval', async () => {

@@ -113,7 +113,7 @@ describe('StorageStateStore', () => {
   });
 });
 
-function storageState({ expires, value = 'session-token' }: { expires: number; value?: string }): string {
+const storageState = ({ expires, value = 'session-token' }: { expires: number; value?: string }): string => {
   return JSON.stringify({
     cookies: [{
       name: 'session',
@@ -124,10 +124,10 @@ function storageState({ expires, value = 'session-token' }: { expires: number; v
     }],
     origins: [{ origin: 'https://staging.example.test', localStorage: [] }],
   });
-}
+};
 
-async function createTemporaryDirectory(): Promise<string> {
+const createTemporaryDirectory = async (): Promise<string> => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'testbuddy-storage-state-'));
   temporaryDirectories.push(directory);
   return directory;
-}
+};

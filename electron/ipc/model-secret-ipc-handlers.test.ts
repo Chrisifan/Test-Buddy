@@ -47,7 +47,7 @@ describe('registerModelSecretIpcHandlers', () => {
   });
 });
 
-async function registerHandlers() {
+const registerHandlers = async () => {
   const { registerModelSecretIpcHandlers } = await import('./model-secret-ipc-handlers.js');
   const handlers = new Map<string, (event: unknown, request: unknown) => unknown>();
   const coordinator = {
@@ -59,13 +59,13 @@ async function registerHandlers() {
     coordinator,
   });
   return { handlers, coordinator };
-}
+};
 
-async function reject(value: unknown): Promise<Error> {
+const reject = async (value: unknown): Promise<Error> => {
   try {
     await value;
     throw new Error('Expected request to reject.');
   } catch (error) {
     return error instanceof Error ? error : new Error(String(error));
   }
-}
+};

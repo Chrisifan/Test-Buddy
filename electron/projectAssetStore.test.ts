@@ -1504,16 +1504,16 @@ describe('ProjectAssetStore', () => {
   });
 });
 
-async function createTemporaryDirectory(): Promise<string> {
+const createTemporaryDirectory = async (): Promise<string> => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'testbuddy-project-assets-'));
   temporaryDirectories.push(directory);
   return directory;
-}
+};
 
-async function readDirectorySnapshot(directory: string): Promise<Record<string, string>> {
+const readDirectorySnapshot = async (directory: string): Promise<Record<string, string>> => {
   const files: Array<[string, string]> = [];
 
-  async function visit(relativeDirectory: string): Promise<void> {
+  const visit = async (relativeDirectory: string): Promise<void> => {
     const entries = await fs.readdir(path.join(directory, relativeDirectory), { withFileTypes: true });
     await Promise.all(entries.map(async (entry) => {
       const relativePath = path.join(relativeDirectory, entry.name);
@@ -1527,17 +1527,17 @@ async function readDirectorySnapshot(directory: string): Promise<Record<string, 
       }
       files.push([relativePath, await fs.readFile(path.join(directory, relativePath), 'utf8')]);
     }));
-  }
+  };
 
   await visit('');
   return Object.fromEntries(files.sort(([left], [right]) => left.localeCompare(right)));
-}
+};
 
 /** Converts the current v2 fixture into the on-disk layout written by schema v1. */
-async function writeLegacyCaseProject(
+const writeLegacyCaseProject = async (
   projectDirectory: string,
   options: { emptyCases?: boolean } = {},
-): Promise<void> {
+): Promise<void> => {
   const store = new ProjectAssetStore(projectDirectory);
   await store.saveInitial(createAssetProject());
   const manifestPath = path.join(projectDirectory, 'project.json');
@@ -1556,9 +1556,9 @@ async function writeLegacyCaseProject(
   } else {
     await fs.rename(v2CasePath, path.join(projectDirectory, 'cases', 'case%2Fcheckout.json'));
   }
-}
+};
 
-function createAssetProject(): ProjectDraft {
+const createAssetProject = (): ProjectDraft => {
   const project = createEmptyProject(1);
   const group = project.groups[0]!;
   const environment = project.environments[0]!;
@@ -1610,4 +1610,4 @@ function createAssetProject(): ProjectDraft {
     }],
     documents: [document],
   };
-}
+};

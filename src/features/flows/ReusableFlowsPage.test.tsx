@@ -5,7 +5,7 @@ import { createEmptyProject, createEmptySuiteAsset, createEmptyTestCase, type Re
 import { I18nProvider } from '../../i18n/index.js';
 import { ReusableFlowsPage } from './ReusableFlowsPage.js';
 
-function publishedFlow(): ReusableFlowAsset {
+const publishedFlow = (): ReusableFlowAsset => {
   return {
     schemaVersion: 1,
     id: 'flow-login',
@@ -29,7 +29,7 @@ function publishedFlow(): ReusableFlowAsset {
     createdAt: '2026-08-21T00:00:00.000Z',
     updatedAt: '2026-08-21T00:00:00.000Z',
   };
-}
+};
 
 describe('ReusableFlowsPage', () => {
   it('keeps a saved Flow read-only and publishes an edit as its next immutable version', () => {

@@ -10,6 +10,32 @@
 
 ---
 
+## Completion Record (2026-09-02)
+
+**Status:** Complete for this optimization pass. Delivery spans `bab7cab`,
+`80dc60b`, and the final follow-up commit.
+
+- Shared state defaults and hydration, runtime command parsing and assertion
+  evaluation, and renderer page registration are now separate tested
+  boundaries while their existing public entrypoints remain stable.
+- ESLint now enforces arrow functions in production and test TypeScript/TSX
+  files. Constructors, accessors, and intentional prototype methods remain
+  methods because converting them would alter `this` and allocation semantics.
+- Knip and jscpd remain opt-in reports. The final audit leaves only public API
+  and CSS/CLI-tool candidates in Knip; jscpd reports 138 existing clones
+  (2.55%), which require domain-specific follow-up rather than a broad merge.
+- The full non-browser Vitest suite, lint, typecheck, build, lockfile check,
+  and diff check pass. Browser-backed benchmarks cannot bind `127.0.0.1` in
+  this sandbox and are recorded as environment-limited rather than product
+  failures.
+
+The checklists below are preserved as the original implementation record. The
+stable-boundary extraction in Task 5 intentionally avoids splitting
+browser-session and run-orchestration code that remains coupled to the
+`StudioRuntime` lifecycle.
+
+---
+
 ## Research Record
 
 | Candidate | GitHub evidence checked 2026-09-01 | Decision |

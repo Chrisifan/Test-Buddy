@@ -98,8 +98,8 @@ describe('ModelSecretStore', () => {
   });
 });
 
-async function createTemporaryDirectory(): Promise<string> {
+const createTemporaryDirectory = async (): Promise<string> => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'testbuddy-model-secret-'));
   temporaryDirectories.push(directory);
   return directory;
-}
+};

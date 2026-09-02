@@ -16,7 +16,7 @@ afterEach(async () => {
   await Promise.all(directories.splice(0).map((directory) => fs.rm(directory, { recursive: true, force: true })));
 });
 
-function localReport(target: AcceptanceTarget) {
+const localReport = (target: AcceptanceTarget) => {
   const attempts = Array.from({ length: 10 }, (_, attemptIndex) => createAcceptanceAttempt({
     targetId: target.id,
     targetKind: target.kind,
@@ -35,7 +35,7 @@ function localReport(target: AcceptanceTarget) {
     humanConclusion: 'accepted',
   }));
   return { matrix: { schemaVersion: 1 as const, targets: [target] }, attempts };
-}
+};
 
 describe('acceptance command', () => {
   it('keeps the local fixture server open until its adapters have settled', async () => {

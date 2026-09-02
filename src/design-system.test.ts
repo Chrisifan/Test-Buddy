@@ -9,38 +9,38 @@ const tokenStylesheetPath = path.resolve(process.cwd(), 'src/styles/design-token
 const stylesheet = readLuminousPrecisionCss();
 const tokenStylesheet = existsSync(tokenStylesheetPath) ? readFileSync(tokenStylesheetPath, 'utf8') : '';
 
-function normalizeCss(value: string): string {
+const normalizeCss = (value: string): string => {
   return value.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\s+/g, ' ').trim().toLowerCase();
-}
+};
 
-function ruleFor(selector: string): string {
+const ruleFor = (selector: string): string => {
   return ruleForIn(stylesheet, selector);
-}
+};
 
-function ruleForIn(source: string, selector: string): string {
+const ruleForIn = (source: string, selector: string): string => {
   const escapedSelector = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const match = normalizeCss(source).match(new RegExp(`${escapedSelector}\\s*\\{([^}]+)\\}`));
 
   return match?.[1] ?? '';
-}
+};
 
-function canonicalValue(value: string): string {
+const canonicalValue = (value: string): string => {
   const compactValue = normalizeCss(value)
     .replace(/\s*!important$/, '')
     .replace(/\s+/g, '')
     .replace(/([(:,])0\.(?=\d)/g, '$1.');
 
   return compactValue === '#fff' ? '#ffffff' : compactValue;
-}
+};
 
-function expectDeclaration(rule: string, property: string, value: string): void {
+const expectDeclaration = (rule: string, property: string, value: string): void => {
   const escapedProperty = property.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const declaration = rule.match(new RegExp(`(?:^|;)\\s*${escapedProperty}\\s*:\\s*([^;]+)`));
 
   expect(canonicalValue(declaration?.[1] ?? ''), `Expected ${property} to be ${value}.`).toBe(
     canonicalValue(value),
   );
-}
+};
 
 describe('Luminous Precision design system', () => {
   it('keeps semantic tokens in the dedicated stylesheet', () => {

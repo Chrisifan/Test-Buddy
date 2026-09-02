@@ -271,12 +271,12 @@ describe('local browser runtime smoke', () => {
   });
 });
 
-function browserStartCase(
+const browserStartCase = (
   project: ReturnType<typeof createEmptyProject>,
   environment: ReturnType<typeof createEmptyProject>['environments'][number],
   id: string,
   seed: number,
-) {
+) => {
   return {
     ...createEmptyTestCase(seed, project.groups[0]!.id, environment.id),
     id,
@@ -299,9 +299,9 @@ function browserStartCase(
       },
     ],
   };
-}
+};
 
-async function startFixture(): Promise<{ url: string; close: () => Promise<void> }> {
+const startFixture = async (): Promise<{ url: string; close: () => Promise<void> }> => {
   const server = http.createServer((request, response) => {
     const requestUrl = new URL(request.url ?? '/', 'http://fixture.local');
     if (requestUrl.pathname === '/frame') {
@@ -351,4 +351,4 @@ async function startFixture(): Promise<{ url: string; close: () => Promise<void>
     url: `http://127.0.0.1:${address.port}`,
     close: () => new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())),
   };
-}
+};

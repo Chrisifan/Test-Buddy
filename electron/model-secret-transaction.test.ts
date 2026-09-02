@@ -437,25 +437,26 @@ class FailingStudioStatePersistence implements StudioStatePersistence {
   }
 }
 
-async function createTemporaryDirectory(): Promise<string> {
+const createTemporaryDirectory = async (): Promise<string> => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'test-buddy-model-secret-transaction-'));
   temporaryDirectories.push(directory);
   return directory;
-}
+};
 
-function modelSecretReference(state: StudioState, scope: 'midscene'): ModelSecretRef;
-function modelSecretReference(state: StudioState, scope: `agent:${'planner' | 'executor' | 'verifier' | 'reporter'}`): ModelSecretRef;
-function modelSecretReference(state: StudioState, scope: 'midscene' | `agent:${'planner' | 'executor' | 'verifier' | 'reporter'}`): ModelSecretRef {
+const modelSecretReference = (
+  state: StudioState,
+  scope: 'midscene' | `agent:${'planner' | 'executor' | 'verifier' | 'reporter'}`,
+): ModelSecretRef => {
   if (scope === 'midscene') {
     return state.midsceneConfig.modelSecret;
   }
   return state.agentModelConfig[scope.slice('agent:'.length) as 'planner' | 'executor' | 'verifier' | 'reporter'].modelSecret;
-}
+};
 
-function deferred<T>() {
+const deferred = <T>() => {
   let resolve!: (value: T | PromiseLike<T>) => void;
   const promise = new Promise<T>((resolvePromise) => {
     resolve = resolvePromise;
   });
   return { promise, resolve };
-}
+};

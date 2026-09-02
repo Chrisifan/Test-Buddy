@@ -9,7 +9,7 @@ const state = createDemoStudioState();
 const project = state.projects[0];
 const environment = project.environments[0];
 
-function renderPanel(locale: 'zh-CN' | 'en-US' = 'zh-CN') {
+const renderPanel = (locale: 'zh-CN' | 'en-US' = 'zh-CN') => {
   return render(
     <I18nProvider locale={locale}>
       <BrowserSessionPanel
@@ -25,7 +25,7 @@ function renderPanel(locale: 'zh-CN' | 'en-US' = 'zh-CN') {
       />
     </I18nProvider>,
   );
-}
+};
 
 describe('BrowserSessionPanel', () => {
   it('uses Chinese browser controls by default', () => {

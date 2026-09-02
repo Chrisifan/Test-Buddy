@@ -73,7 +73,7 @@ describe('detachRecordingFromTestCases', () => {
   });
 });
 
-function recording({
+const recording = ({
   id,
   groupId,
   environmentId,
@@ -81,7 +81,7 @@ function recording({
   id: string;
   groupId: string;
   environmentId: string;
-}): RecordingAsset {
+}): RecordingAsset => {
   return {
     id,
     name: id,
@@ -96,9 +96,9 @@ function recording({
     createdAt: new Date(0).toISOString(),
     updatedAt: new Date(0).toISOString(),
   };
-}
+};
 
-function testCase({ id, steps }: Pick<TestCaseDraft, 'id' | 'steps'>): TestCaseDraft {
+const testCase = ({ id, steps }: Pick<TestCaseDraft, 'id' | 'steps'>): TestCaseDraft => {
   return {
     id,
     kind: 'recording',
@@ -112,4 +112,4 @@ function testCase({ id, steps }: Pick<TestCaseDraft, 'id' | 'steps'>): TestCaseD
     notes: '',
     steps,
   };
-}
+};
