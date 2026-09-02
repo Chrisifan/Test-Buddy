@@ -3188,13 +3188,13 @@ export const App = () => {
 
           {activePage === 'nl' ? (
             <NaturalLanguagePage
+              browserSession={browserSession}
               chatInput={chatInput}
               commandMode={commandMode}
               deepLocate={deepLocate}
               deepThink={deepThink}
               isRunning={isRunning}
               isSending={isSending}
-              midsceneConfig={midsceneConfig}
               onChangeChatInput={setChatInput}
               onChangeCommandMode={setCommandMode}
               onChangeDeepLocate={setDeepLocate}
@@ -3206,7 +3206,6 @@ export const App = () => {
               onSendMessage={handleSendMessage}
               onToggleSession={handleToggleSession}
               recentChatEntries={recentChatEntries}
-              runtimeProfile={runtimeProfile}
               sessionActive={sessionActive}
               targetEnvironment={targetEnvironment}
             />

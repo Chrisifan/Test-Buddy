@@ -122,67 +122,6 @@
   background: var(--card);
 }
 
-/* Natural language studio */
-
-.nl-metric-grid {
-  border-color: var(--outline-variant);
-  border-radius: var(--panel-radius);
-  background: var(--card);
-  box-shadow: var(--panel-shadow);
-}
-
-.nl-metric-grid .metric-tile {
-  background: var(--card);
-}
-
-.nl-metric-grid .metric-tile + .metric-tile {
-  border-color: var(--outline-variant);
-}
-
-.nl-workspace-stage,
-.nl-command-panel,
-.nl-command-panel .designer-panel-body,
-.nl-browser-panel,
-.nl-browser-panel .designer-browser-viewport {
-  background: var(--surface-container-low);
-}
-
-.nl-command-panel .designer-panel-header,
-.nl-browser-panel .designer-browser-bar {
-  background: var(--card);
-}
-
-.nl-chat-bubble {
-  border-radius: var(--control-radius);
-  box-shadow: none;
-}
-
-.nl-chat-bubble:not(.bg-primary) {
-  border-color: var(--outline-variant);
-  background: var(--card);
-}
-
-.nl-command-composer textarea {
-  border-color: var(--input);
-  background: var(--card);
-  font-size: var(--font-size-control);
-}
-
-.nl-browser-panel .designer-browser-stage,
-.nl-browser-panel .designer-browser-viewport > div,
-.nl-evidence-grid > .tech-panel {
-  border-color: var(--outline-variant);
-  border-radius: var(--panel-radius);
-  background: var(--card);
-  box-shadow: var(--panel-shadow);
-}
-
-.nl-evidence-grid .bg-muted {
-  border-left: 2px solid color-mix(in srgb, var(--primary) 46%, var(--outline-variant));
-  border-radius: var(--control-radius);
-  background: var(--surface-container-low);
-}
-
 /* Workflow and recording */
 
 .workflow-studio {
@@ -276,4 +215,3 @@
   color: var(--on-error-container);
   box-shadow: none;
 }
-

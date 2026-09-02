@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+
 import { describe, expect, it } from 'vitest';
 
 import { readLuminousPrecisionCss } from './luminous-precision.test-utils.js';
@@ -49,16 +51,42 @@ describe('application shell navigation', () => {
     expect(actionsRule).toMatch(/-webkit-app-region:\s*no-drag;/);
   });
 
-  it('keeps planner and evidence rails reachable at intermediate widths', () => {
+  it('keeps the run evidence rail reachable at intermediate widths', () => {
     const styles = readLuminousPrecisionCss();
     const responsiveStart = styles.indexOf('@media (max-width: 1120px)');
     const responsiveEnd = styles.indexOf('/* Keep modal proportions', responsiveStart);
     const responsive = styles.slice(responsiveStart, responsiveEnd);
 
-    expect(responsive).toContain('.nl-planner-panel');
     expect(responsive).toContain('.run-evidence-rail');
     expect(responsive).toMatch(/grid-column:\s*1\s*\/\s*-1;/);
     expect(responsive).toMatch(/max-height:\s*min\(/);
     expect(responsive).not.toContain('display: none;');
+  });
+
+  it('stacks natural language browser status below the session controls on narrow desktops', () => {
+    const styles = readLuminousPrecisionCss();
+    const responsiveStart = styles.indexOf('@media (max-width: 980px)');
+    const responsiveEnd = styles.indexOf('/* Keep modal proportions', responsiveStart);
+    const responsive = styles.slice(responsiveStart, responsiveEnd);
+
+    expect(responsive).toContain('.designer-split.nl-workbench');
+    expect(responsive).toMatch(/grid-template-columns:\s*1fr;/);
+    expect(responsive).toMatch(/grid-template-rows:\s*minmax\(0, 1fr\)\s*minmax\(220px, auto\);/);
+    expect(responsive).toContain('.nl-browser-panel');
+    expect(responsive).toMatch(/min-height:\s*220px;/);
+    expect(responsive).not.toContain('.nl-planner-panel');
+  });
+
+  it('keeps natural language layout ownership out of global responsive rules', () => {
+    const globalStyles = readFileSync('src/index.css', 'utf8');
+    const responsiveStyles = readFileSync('src/styles/luminous-precision/settings-responsive.css', 'utf8');
+    const pageDetailsStyles = readFileSync('src/styles/luminous-precision/page-details.css', 'utf8');
+    const narrowStart = pageDetailsStyles.indexOf('@media (max-width: 980px)');
+    const narrowEnd = pageDetailsStyles.indexOf('/* Keep modal proportions', narrowStart);
+    const narrowResponsive = pageDetailsStyles.slice(narrowStart, narrowEnd);
+
+    expect(globalStyles).not.toContain('.designer-split.nl-workbench');
+    expect(responsiveStyles).not.toContain('.designer-split.nl-workbench');
+    expect(narrowResponsive).toMatch(/grid-template-rows:\s*minmax\(0, 1fr\)\s*minmax\(220px, auto\);/);
   });
 });

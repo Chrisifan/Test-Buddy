@@ -432,60 +432,6 @@
   padding: 0 var(--density-panel-padding);
 }
 
-/* Natural language: three simultaneous columns, as in the planner reference. */
-.nl-metric-grid {
-  display: none;
-}
-
-.designer-split.nl-workbench,
-.nl-workbench {
-  min-height: 0;
-  grid-template-columns: minmax(220px, 0.88fr) minmax(280px, 1fr) minmax(250px, 0.96fr);
-  height: 100%;
-}
-
-.nl-command-panel {
-  grid-column: 1;
-  min-width: 0;
-}
-
-.nl-workspace-stage {
-  display: contents;
-}
-
-.nl-browser-panel > .designer-browser-stage {
-  grid-column: 2;
-  min-width: 0;
-  margin: var(--density-panel-padding);
-}
-
-.nl-browser-panel > .nl-evidence-grid {
-  grid-column: 3;
-  grid-row: 1;
-  display: grid;
-  min-height: 0;
-  grid-template-columns: 1fr;
-  grid-template-rows: minmax(0, 1fr) auto;
-  gap: var(--density-gap);
-  padding: var(--density-panel-padding);
-}
-
-.nl-evidence-grid > .tech-panel {
-  min-height: 0;
-  overflow: auto;
-  border-radius: var(--panel-radius);
-  padding: var(--density-panel-padding);
-}
-
-.nl-command-panel .designer-panel-header,
-.nl-command-composer {
-  padding: var(--density-panel-padding);
-}
-
-.nl-command-composer textarea {
-  min-height: 76px;
-}
-
 /* Recording: browser canvas takes priority; asset/timeline rail stays actionable. */
 .designer-split.recording-console,
 .recording-console {
@@ -548,14 +494,9 @@
   }
 
   .document-side-panel,
-  .nl-workbench,
   .recording-console,
   .case-workbench {
     grid-template-columns: minmax(0, 1fr) minmax(280px, 38%);
-  }
-
-  .nl-browser-panel > .nl-evidence-grid {
-    display: none;
   }
 }
 

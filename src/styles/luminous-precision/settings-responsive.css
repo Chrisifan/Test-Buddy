@@ -225,8 +225,6 @@
   .project-card-grid,
   .document-asset-grid,
   .document-side-panel,
-  .nl-metric-grid,
-  .nl-evidence-grid,
   .workflow-runtime-metrics {
     grid-template-columns: 1fr;
   }
@@ -241,7 +239,6 @@
   }
 
   .designer-split,
-  .designer-split.nl-workbench,
   .designer-split.run-workbench,
   .designer-split.recording-console,
   .designer-split.workflow-console,
@@ -311,4 +308,3 @@
     width: 100%;
   }
 }
-

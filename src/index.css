@@ -512,10 +512,6 @@
     background: var(--card);
   }
 
-  .designer-split.nl-workbench {
-    grid-template-columns: 360px minmax(0, 1fr);
-  }
-
   .designer-split.run-workbench {
     grid-template-columns: 320px minmax(0, 1fr);
   }
@@ -2025,7 +2021,6 @@
   }
 
   @media (max-width: 960px) {
-    .designer-split.nl-workbench,
     .designer-split.run-workbench,
     .designer-split.project-console,
     .designer-split.recording-console,
@@ -2272,180 +2267,6 @@
   .home-dashboard {
     background: transparent;
     box-shadow: none;
-  }
-
-  .nl-metric-grid {
-    display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 0.75rem;
-    margin-bottom: 1rem;
-  }
-
-  .nl-workspace-stage {
-    background: color-mix(in oklch, var(--muted) 46%, var(--background));
-  }
-
-  .nl-workspace-stage .designer-browser-stage {
-    border-radius: 6px;
-    box-shadow: 0 1px 2px var(--workbench-card-shadow);
-  }
-
-  .nl-workbench .designer-panel:first-child {
-    background: var(--card);
-  }
-
-  .nl-evidence-grid > .tech-panel {
-    box-shadow: none;
-  }
-
-  .nl-metric-grid {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 0;
-    overflow: hidden;
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    background: var(--card);
-  }
-
-  .nl-metric-grid .metric-tile {
-    min-height: 68px;
-    border: 0;
-    border-radius: 0;
-    background: transparent;
-    padding: 0.75rem 0.875rem;
-    box-shadow: none;
-  }
-
-  .nl-metric-grid .metric-tile + .metric-tile {
-    border-left: 1px solid var(--border);
-  }
-
-  .nl-metric-grid .metric-tile p:first-child {
-    overflow: hidden;
-    font-size: 0.5625rem;
-    line-height: 0.875rem;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .nl-metric-grid .metric-tile p:last-child {
-    margin-top: 0.1875rem;
-    font-size: 0.9375rem;
-    line-height: 1.25rem;
-  }
-
-  .nl-studio {
-    grid-template-columns: minmax(294px, 340px) minmax(0, 1fr) !important;
-    min-height: min(720px, calc(100vh - 286px));
-  }
-
-  .nl-command-panel {
-    background: var(--card) !important;
-  }
-
-  .nl-command-panel .designer-panel-header {
-    gap: 0.875rem;
-    padding: 0.875rem;
-  }
-
-  .nl-command-panel .designer-panel-header h2 {
-    color: var(--foreground);
-    font-size: 0.8125rem;
-    line-height: 1.125rem;
-  }
-
-  .nl-command-panel [data-slot='tabs-list'] {
-    border: 1px solid color-mix(in oklch, var(--border) 76%, transparent);
-    background: color-mix(in oklch, var(--muted) 58%, var(--card));
-  }
-
-  .nl-command-panel [data-slot='tabs-trigger'] {
-    min-height: 2rem;
-    color: var(--muted-foreground);
-    font-size: 0.625rem;
-    letter-spacing: 0.04em;
-  }
-
-  .nl-command-panel .designer-panel-body {
-    display: grid;
-    align-content: start;
-    gap: 0.5rem;
-    background: color-mix(in oklch, var(--muted) 36%, var(--background));
-    padding: 0.875rem;
-  }
-
-  .nl-chat-bubble {
-    border: 1px solid transparent;
-    border-radius: 5px !important;
-    box-shadow: none;
-  }
-
-  .nl-chat-bubble:not(.bg-primary) {
-    border-color: color-mix(in oklch, var(--border) 76%, transparent);
-    background: var(--card) !important;
-  }
-
-  .nl-command-composer {
-    padding: 0.875rem !important;
-  }
-
-  .nl-command-composer textarea {
-    min-height: 86px;
-    border-color: color-mix(in oklch, var(--border) 84%, transparent);
-    background: color-mix(in oklch, var(--muted) 34%, var(--card));
-    font-size: 0.75rem;
-    line-height: 1.25rem;
-  }
-
-  .nl-browser-panel {
-    gap: 0.875rem !important;
-    background: color-mix(in oklch, var(--muted) 40%, var(--background));
-    padding: 0.875rem !important;
-  }
-
-  .nl-browser-panel .designer-browser-stage {
-    border: 0;
-    border-radius: 6px;
-    box-shadow: 0 1px 2px color-mix(in oklch, var(--foreground) 6%, transparent);
-  }
-
-  .nl-browser-panel .designer-browser-bar {
-    height: 2.25rem;
-    background: var(--card);
-    padding-inline: 0.75rem;
-  }
-
-  .nl-browser-panel .designer-browser-viewport {
-    background:
-      linear-gradient(to right, color-mix(in oklch, var(--border) 42%, transparent) 1px, transparent 1px) 0 0 / 2rem 2rem,
-      linear-gradient(to bottom, color-mix(in oklch, var(--border) 42%, transparent) 1px, transparent 1px) 0 0 / 2rem 2rem,
-      color-mix(in oklch, var(--muted) 46%, var(--background));
-  }
-
-  .nl-browser-panel .designer-browser-viewport > div {
-    border: 1px solid color-mix(in oklch, var(--border) 82%, transparent);
-    border-radius: 6px;
-    padding: clamp(1.25rem, 3vw, 2rem);
-    box-shadow: 0 12px 32px color-mix(in oklch, var(--foreground) 6%, transparent);
-  }
-
-  .nl-evidence-grid {
-    gap: 0.75rem !important;
-  }
-
-  .nl-evidence-grid > .tech-panel {
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    background: var(--card);
-    padding: 0.875rem !important;
-  }
-
-  .nl-evidence-grid .bg-muted {
-    border: 0 !important;
-    border-left: 2px solid color-mix(in oklch, var(--primary) 48%, var(--border)) !important;
-    border-radius: 0 !important;
-    background: color-mix(in oklch, var(--muted) 54%, var(--card)) !important;
-    padding: 0.5rem 0.625rem !important;
   }
 
   .settings-dialog-content {
@@ -2817,17 +2638,6 @@
       grid-template-columns: repeat(3, minmax(0, 1fr));
     }
 
-    .nl-metric-grid {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
-
-    .nl-studio {
-      grid-template-columns: 1fr !important;
-    }
-
-    .nl-browser-panel {
-      min-height: 560px;
-    }
   }
 
   @media (max-width: 1024px) {
@@ -2876,24 +2686,6 @@
     .home-signal-chart {
       gap: 0.5rem;
       padding-inline: 0.75rem;
-    }
-
-    .nl-metric-grid {
-      grid-template-columns: 1fr;
-    }
-
-    .nl-metric-grid .metric-tile + .metric-tile {
-      border-top: 1px solid var(--border);
-      border-left: 0;
-    }
-
-    .nl-browser-panel {
-      grid-template-rows: minmax(360px, 1fr) auto !important;
-      min-height: 0;
-    }
-
-    .nl-evidence-grid {
-      grid-template-columns: 1fr !important;
     }
 
     .document-asset-area {

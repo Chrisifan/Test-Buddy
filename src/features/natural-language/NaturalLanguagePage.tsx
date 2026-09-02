@@ -1,14 +1,13 @@
 import type {
+  BrowserSessionState,
   ChatEntry,
   CommandMode,
-  MidsceneConfig,
-  RuntimeProfile,
 } from '../../../shared/studio.js';
 import type { AgentRunResult } from '../../../shared/agent.js';
 
-import { BrainCircuit, ClipboardPlus, RadioTower, Send, SquareActivity } from 'lucide-react';
+import { ClipboardPlus, MonitorDot, Play, Send, Square } from 'lucide-react';
 
-import { EvidenceCard, MetricTile, PageHeader, Surface, PageBody, PageShell } from '../../components/workbench.js';
+import { EvidenceCard, PageHeader, PageBody, PageShell } from '../../components/workbench.js';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -55,7 +54,54 @@ const getEnvironmentLabel = (environment: string, t: (key: string) => string): s
   return environment;
 };
 
+const getBrowserStatus = (
+  browserSession: BrowserSessionState,
+  sessionActive: boolean,
+  t: (key: string) => string,
+): { description: string; title: string } => {
+  if (browserSession.status === 'ready') {
+    return {
+      description: t('nl.browser.connectedDescription'),
+      title: t('nl.browser.connected'),
+    };
+  }
+
+  if (browserSession.status === 'starting' || browserSession.status === 'navigating') {
+    return {
+      description: t('nl.browser.connectingDescription'),
+      title: t('nl.browser.connecting'),
+    };
+  }
+
+  if (browserSession.status === 'error') {
+    return {
+      description: t('nl.browser.errorDescription'),
+      title: t('nl.browser.error'),
+    };
+  }
+
+  if (browserSession.status === 'closed') {
+    return {
+      description: t('nl.browser.closedDescription'),
+      title: t('nl.browser.closed'),
+    };
+  }
+
+  if (sessionActive) {
+    return {
+      description: t('nl.browser.waitingDescription'),
+      title: t('nl.browser.waiting'),
+    };
+  }
+
+  return {
+    description: t('nl.browser.disconnectedDescription'),
+    title: t('nl.browser.disconnected'),
+  };
+};
+
 export const NaturalLanguagePage = ({
+  browserSession,
   commandMode,
   chatInput,
   targetEnvironment,
@@ -65,8 +111,6 @@ export const NaturalLanguagePage = ({
   isRunning,
   sessionActive,
   recentChatEntries,
-  runtimeProfile,
-  midsceneConfig,
   latestAgentRun,
   onChangeCommandMode,
   onChangeChatInput,
@@ -78,6 +122,7 @@ export const NaturalLanguagePage = ({
   onSavePromptAsStep,
   onSendMessage,
 }: {
+  browserSession: BrowserSessionState;
   commandMode: CommandMode;
   chatInput: string;
   targetEnvironment: string;
@@ -87,8 +132,6 @@ export const NaturalLanguagePage = ({
   isRunning: boolean;
   sessionActive: boolean;
   recentChatEntries: ChatEntry[];
-  runtimeProfile: RuntimeProfile;
-  midsceneConfig: MidsceneConfig;
   latestAgentRun?: Pick<AgentRunResult, 'status'>;
   onChangeCommandMode: (mode: CommandMode) => void;
   onChangeChatInput: (value: string) => void;
@@ -102,20 +145,14 @@ export const NaturalLanguagePage = ({
 }) => {
   const { t } = useI18n();
   const sessionStatus = sessionActive ? t('nl.session.active') : t('nl.session.standby');
+  const browserStatus = getBrowserStatus(browserSession, sessionActive, t);
 
   return (
     <PageShell>
       <PageHeader
-        action={
-          <Button disabled={isSending || isRunning} onClick={onToggleSession} type="button" variant="outline">
-            <RadioTower className="h-4 w-4" />
-            {sessionActive ? t('nl.session.stop') : t('nl.session.start')}
-          </Button>
-        }
         meta={[
           t('nl.meta.mode', { mode: getModeLabel(commandMode, t) }),
           t('nl.meta.environment', { environment: getEnvironmentLabel(targetEnvironment, t) }),
-          t('nl.meta.session', { status: sessionStatus }),
         ].map((item) => (
           <Badge className="page-header-meta" key={item} variant="outline">
             {item}
@@ -125,14 +162,8 @@ export const NaturalLanguagePage = ({
       />
 
       <PageBody>
-      <section className="nl-metric-grid">
-        <MetricTile label={t('nl.meta.session', { status: sessionStatus })} tone={sessionActive ? 'running' : 'neutral'} value={sessionStatus} />
-        <MetricTile label={t('nl.meta.mode', { mode: getModeLabel(commandMode, t) })} tone="primary" value={getModeLabel(commandMode, t)} />
-        <MetricTile label={t('nl.meta.environment', { environment: getEnvironmentLabel(targetEnvironment, t) })} value={getEnvironmentLabel(targetEnvironment, t)} />
-        <MetricTile label={t('workflow.runtime.browser')} value={runtimeProfile.browser} />
-      </section>
-      <section className="designer-split nl-workbench nl-studio" aria-label={t('nl.aria.workbench')}>
-        <aside className="designer-panel nl-command-panel grid min-h-0 grid-rows-[auto_minmax(0,1fr)_auto]">
+        <section className="designer-split nl-workbench nl-studio" aria-label={t('nl.aria.workbench')}>
+          <aside className="designer-panel nl-command-panel grid min-h-0 grid-rows-[auto_minmax(0,1fr)_auto]">
           <div className="designer-panel-header grid gap-4">
             <div className="flex items-center justify-between">
               <h2 className="text-sm font-semibold text-primary">{t('nl.session.title')}</h2>
@@ -178,7 +209,7 @@ export const NaturalLanguagePage = ({
             </div>
           </div>
 
-          <div className="designer-panel-body flex-1 space-y-3">
+            <div className="designer-panel-body flex-1 space-y-3">
             {recentChatEntries.map((entry) => (
               <article
                 className={`nl-chat-bubble max-w-[92%] rounded-[14px] px-3 py-2 text-sm leading-6 ${
@@ -197,9 +228,9 @@ export const NaturalLanguagePage = ({
             {!recentChatEntries.length ? (
               <EvidenceCard title={t('nl.empty.title')} description={t('nl.empty.description')} />
             ) : null}
-          </div>
+            </div>
 
-          <div className="nl-command-composer shrink-0 border-t border-border bg-card p-4">
+            <div className="nl-command-composer shrink-0 border-t border-border bg-card p-4">
             <div className="relative">
               <Textarea
                 className="min-h-[96px] pr-12 font-mono text-sm leading-6"
@@ -212,82 +243,44 @@ export const NaturalLanguagePage = ({
                 <Send className="h-4 w-4" />
               </Button>
             </div>
-            <div className="mt-2 flex flex-wrap gap-2">
-              <Button onClick={onSavePromptAsStep} size="sm" type="button" variant="outline">{t('nl.saveAsStep')}</Button>
-              {latestAgentRun?.status === 'passed' ? (
-                <Button disabled={isSending || isRunning} onClick={onSaveLatestRunAsTestCase} size="sm" type="button" variant="outline">
-                  <ClipboardPlus className="h-4 w-4" />
-                  {t('nl.saveAsCase')}
-                </Button>
-              ) : null}
-              <Button disabled={isSending || isRunning} onClick={onToggleSession} size="sm" type="button" variant="outline">
+              <div className="mt-2 flex flex-wrap gap-2">
+                <Button onClick={onSavePromptAsStep} size="sm" type="button" variant="outline">{t('nl.saveAsStep')}</Button>
+                {latestAgentRun?.status === 'passed' ? (
+                  <Button disabled={isSending || isRunning} onClick={onSaveLatestRunAsTestCase} size="sm" type="button" variant="outline">
+                    <ClipboardPlus className="h-4 w-4" />
+                    {t('nl.saveAsCase')}
+                  </Button>
+                ) : null}
+              </div>
+            </div>
+          </aside>
+
+          <section aria-label={t('nl.browser.status')} className="designer-panel nl-browser-panel min-h-0">
+            <header className="designer-panel-header flex items-center justify-between gap-3">
+              <h2 className="text-sm font-semibold text-foreground">{t('nl.browser.status')}</h2>
+              <span className={`nl-browser-status-pill is-${browserSession.status}`}>{browserStatus.title}</span>
+            </header>
+            <div className="nl-browser-status-body">
+              <div className="nl-browser-status-icon" aria-hidden="true">
+                <MonitorDot className="size-5" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-base font-semibold text-foreground">{browserStatus.title}</p>
+                <p className="mt-1 max-w-xl text-sm leading-6 text-muted-foreground">{browserStatus.description}</p>
+                {browserSession.currentUrl ? (
+                  <p className="nl-browser-address mt-4" title={browserSession.currentUrl}>{browserSession.currentUrl}</p>
+                ) : null}
+                {browserSession.status !== 'idle' && browserSession.message ? (
+                  <p className="mt-3 text-sm leading-6 text-muted-foreground">{browserSession.message}</p>
+                ) : null}
+              </div>
+              <Button className="justify-self-start" disabled={isSending || isRunning} onClick={onToggleSession} type="button">
+                {sessionActive ? <Square className="size-4" /> : <Play className="size-4" />}
                 {sessionActive ? t('nl.session.stop') : t('nl.session.start')}
               </Button>
             </div>
-          </div>
-        </aside>
-
-        <section className="designer-panel nl-browser-panel min-h-0">
-          <div className="designer-browser-stage">
-            <div className="designer-browser-bar">
-              <span className="designer-browser-dot bg-red-300" />
-              <span className="designer-browser-dot bg-amber-300" />
-              <span className="designer-browser-dot bg-emerald-400" />
-              <div className="ml-2 flex h-7 flex-1 items-center rounded-[4px] border border-border bg-card px-3 font-mono text-[11px] text-muted-foreground">
-                {runtimeProfile.baseUrl || 'https://app.demo-workspace.com'}
-              </div>
-            </div>
-            <div className="designer-browser-viewport">
-              <div className="nl-browser-empty-card w-full max-w-md rounded-[8px] border border-border bg-card p-5 shadow-sm">
-                <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-full bg-primary/10 text-primary">
-                  <SquareActivity className="h-5 w-5" />
-                </div>
-                <h3 className="mt-3 text-center text-lg font-bold">{t('nl.stage.title')}</h3>
-                <p className="mt-2 text-center text-sm leading-6 text-muted-foreground">
-                  {t('nl.stage.description')}
-                </p>
-                <div className="mt-4 rounded-[4px] border-2 border-dashed border-primary/30 px-3 py-2 text-center text-xs font-semibold text-primary">
-                  {t('nl.stage.tools')}
-                </div>
-              </div>
-            </div>
-          </div>
-
+          </section>
         </section>
-
-        <aside className="designer-panel nl-planner-panel min-h-0">
-          <header className="designer-panel-header">
-            <div className="flex items-center justify-between gap-3">
-              <h2 className="text-sm font-semibold">{t('nl.flow.title')}</h2>
-              <span className={`nl-planner-state ${sessionActive ? 'is-active' : ''}`}>{sessionStatus}</span>
-            </div>
-          </header>
-          <div className="nl-evidence-grid">
-            <Surface className="p-4" variant="panel">
-              <div className="flex items-center justify-between">
-                <p className="font-mono text-[11px] uppercase tracking-[0.08em] text-muted-foreground">{t('nl.flow.title')}</p>
-                <Button size="sm" type="button" variant="outline">{t('nl.flow.run')}</Button>
-              </div>
-              <div className="mt-3 grid gap-2">
-                {recentChatEntries.slice(-3).map((entry, index) => (
-                  <div className="flex items-center gap-3 rounded-[4px] border border-border bg-muted px-3 py-2" key={entry.id}>
-                    <span className="flex h-5 w-5 items-center justify-center rounded-[4px] bg-primary/10 font-mono text-[10px] text-primary">{index + 1}</span>
-                    <span className="truncate text-sm">{entry.text}</span>
-                  </div>
-                ))}
-                {!recentChatEntries.length ? <p className="text-sm text-muted-foreground">{t('nl.flow.empty')}</p> : null}
-              </div>
-            </Surface>
-            <Surface className="p-4" variant="panel">
-              <p className="text-[10px] font-black uppercase tracking-[0.14em] opacity-80">{t('nl.confidence')}</p>
-              <p className="mt-2 text-xl font-bold tracking-[-0.03em] text-foreground">
-                {midsceneConfig.modelSecret.hasKey ? t('settings.status.ready') : t('nl.model.pending')}
-              </p>
-              <p className="mt-3 truncate font-mono text-xs text-muted-foreground">MidScene {midsceneConfig.modelName || t('nl.model.unset')}</p>
-            </Surface>
-          </div>
-        </aside>
-      </section>
       </PageBody>
     </PageShell>
   );
