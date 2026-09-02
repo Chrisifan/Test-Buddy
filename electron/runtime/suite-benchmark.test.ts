@@ -23,6 +23,7 @@ import {
   type StudioState,
 } from '../../shared/studio.js';
 import { isSafeMaintenanceRationale } from '../../shared/maintenance.js';
+import { deepFreeze } from '../../shared/deep-freeze.js';
 import { ProjectRepository, ProjectRepositoryError } from '../projectRepository.js';
 import { ProjectAssetStore } from '../projectAssetStore.js';
 import { RunCancelledError, isRunCancelled } from './run-cancellation.js';
@@ -1282,7 +1283,12 @@ const loadRuntimeIpcHandlers = (): {
   new Function('module', 'exports', compile(path.join(ipcDirectory, 'runtime-ipc-channels.cts')))(channelModule, channelModule.exports);
 
   const runHistoryModule = { exports: {} as { appendRunToStudioState?: unknown; appendSuiteRunToStudioState?: unknown } };
-  new Function('module', 'exports', compile(path.join(process.cwd(), 'electron', 'runtime', 'run-history.ts')))(
+  const runHistoryRequire = (moduleId: string) => {
+    if (moduleId === '../../shared/deep-freeze.js') return { deepFreeze };
+    throw new Error(`Unexpected run history dependency: ${moduleId}`);
+  };
+  new Function('require', 'module', 'exports', compile(path.join(process.cwd(), 'electron', 'runtime', 'run-history.ts')))(
+    runHistoryRequire,
     runHistoryModule,
     runHistoryModule.exports,
   );
@@ -1310,6 +1316,7 @@ const loadRuntimeIpcHandlers = (): {
     if (moduleId === '../runtime/run-cancellation.js') return { RunCancelledError, isRunCancelled };
     if (moduleId === '../../shared/studio.js') return { findSuiteAsset, findTestCaseVersion, isAgentRunnableTestCase };
     if (moduleId === '../../shared/maintenance.js') return { isSafeMaintenanceRationale };
+    if (moduleId === '../../shared/deep-freeze.js') return { deepFreeze };
     if (moduleId === '../projectRepository.js') return { ProjectRepositoryError };
     throw new Error(`Unexpected runtime IPC dependency: ${moduleId}`);
   };

@@ -149,7 +149,7 @@ import {
   startBrowserSession,
   startSession,
   testMidsceneConnection,
-} from './lib/runtime';
+} from './app/desktop-runtime-client.js';
 
 const initialState = createInitialStudioState();
 const PAGE_EXIT_DURATION_MS = 120;

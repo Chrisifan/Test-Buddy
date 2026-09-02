@@ -1,18 +1,6 @@
 import {
   type ChatEntry,
-  type BrowserClickRequest,
-  type BrowserInputRequest,
   type BrowserSessionState,
-  type BrowserSessionRequest,
-  type BrowserNavigateRequest,
-  type BrowserScrollRequest,
-  type BrowserSelectRequest,
-  type BrowserWaitRequest,
-  type BrowserWaitForChartStableRequest,
-  type BrowserWaitForDataReadyRequest,
-  type BrowserWaitForNetworkIdleRequest,
-  type BrowserWaitForResponseRequest,
-  type BrowserWaitForSelectorRequest,
   type ChatCommandRequest,
   type ChatCommandResponse,
   type ProjectDraft,
@@ -30,12 +18,10 @@ import {
   type TestInputValueBinding,
   type TestStepDraft,
   defaultMidsceneConfig,
-  isMidsceneConfigured,
   resolveAgentModelAssignments,
 } from '../shared/studio.js';
 import {
   deriveAgentRecoveryPlan,
-  type AgentDomInspection,
   AgentExecutionMetrics,
   AgentFailureCategory,
   AgentObservation,
@@ -72,9 +58,8 @@ import type {
 import type {
   AgentVerifier,
   AgentVerifierModelConfig,
-  AgentVerifierResult,
 } from './runtime/agent-verifier.js';
-import type { SemanticActionResult, SemanticActionRuntime } from './runtime/semantic-action-runtime.js';
+import type { SemanticActionRuntime } from './runtime/semantic-action-runtime.js';
 import type {
   ResolvedChatCommandRequest,
   ResolvedRunWorkflowRequest,
@@ -90,81 +75,18 @@ import { createSecretRedactor } from './runtime/secret-redactor.js';
 import {
   extractResponseUrlPattern,
   isObservationIntent,
-  resolveExecutionIntent,
 } from './studio-runtime/routes.js';
-import type { ExplicitAssertionIntent } from './studio-runtime/routes.js';
-import { evaluateExplicitAssertion, toExplicitAssertionIntent } from './studio-runtime/assertions.js';
-import type { AssertionEvaluation } from './studio-runtime/assertions.js';
-
-interface BrowserObserver {
-  hasRealPage?: () => boolean;
-  start: (request: BrowserSessionRequest) => Promise<BrowserSessionState>;
-  navigate: (request: BrowserNavigateRequest) => Promise<BrowserSessionState>;
-  click: (request: BrowserClickRequest) => Promise<BrowserSessionState>;
-  input: (request: BrowserInputRequest) => Promise<BrowserSessionState>;
-  wait?: (request: BrowserWaitRequest) => Promise<BrowserSessionState>;
-  waitForChartStable?: (request: BrowserWaitForChartStableRequest) => Promise<BrowserSessionState>;
-  waitForDataReady?: (request: BrowserWaitForDataReadyRequest) => Promise<BrowserSessionState>;
-  waitForNetworkIdle?: (request: BrowserWaitForNetworkIdleRequest) => Promise<BrowserSessionState>;
-  waitForResponse?: (request: BrowserWaitForResponseRequest) => Promise<BrowserSessionState>;
-  waitForSelector?: (request: BrowserWaitForSelectorRequest) => Promise<BrowserSessionState>;
-  scroll?: (request: BrowserScrollRequest) => Promise<BrowserSessionState>;
-  select?: (request: BrowserSelectRequest) => Promise<BrowserSessionState>;
-  capture: () => Promise<BrowserSessionState>;
-  beginTrace?: (runId: string) => Promise<boolean>;
-  finishTrace?: () => Promise<RunArtifact | undefined>;
-  getPageText?: () => Promise<string>;
-  inspectDom?: (selector: string, attributeName?: string) => Promise<AgentDomInspection>;
-  captureObservation?: () => Promise<
-    Partial<
-      Pick<
-        AgentObservation,
-        | 'domSummary'
-        | 'textSummary'
-        | 'interactiveElements'
-        | 'consoleMessages'
-        | 'networkHints'
-        | 'tables'
-        | 'charts'
-      >
-    >
-  >;
-  getState: () => BrowserSessionState;
-}
-
-interface BrowserPreparationResult {
-  session?: BrowserSessionState;
-  message: string;
-  navigatedUrl?: string;
-  clickedSelector?: string;
-  clickTarget?: string;
-  inputSelector?: string;
-  inputTarget?: string;
-  inputValue?: string;
-  waitedMs?: number;
-  scrolledSelector?: string;
-  scrolledPage?: boolean;
-  selectedSelector?: string;
-  selectedValue?: string;
-  extracted?: boolean;
-  assertion?: ExplicitAssertionIntent;
-  semanticAssertion?: string;
-  assertionEvaluation?: AssertionEvaluation;
-  reportArtifactPath?: string;
-  executionMetrics?: AgentExecutionMetrics;
-  observation?: Partial<
-    Pick<
-      AgentObservation,
-      | 'domSummary'
-      | 'textSummary'
-      | 'interactiveElements'
-      | 'consoleMessages'
-      | 'networkHints'
-      | 'tables'
-      | 'charts'
-    >
-  >;
-}
+import {
+  createBrowserSessionCoordinator,
+  createPendingSemanticEvaluation,
+} from './studio-runtime/browser-session.js';
+import type {
+  BrowserObserver,
+  BrowserPreparationResult,
+  BrowserSessionCoordinator,
+} from './studio-runtime/browser-session.js';
+import { createAgentRunOrchestrator } from './studio-runtime/run-orchestration.js';
+import type { AgentRunOrchestrator } from './studio-runtime/run-orchestration.js';
 
 interface PlanningAttempt {
   result?: AgentPlannerResult;
@@ -477,32 +399,6 @@ const makeAssistantReply = (
   return `主进程已接收动作指令：${prompt}。当前运行配置为 ${describeRuntimeProfile(runtimeProfile)}，前端和桌面端的命令流已经打通。`;
 };
 
-
-const toAssertionEvaluation = (result: SemanticActionResult): AssertionEvaluation => {
-  return {
-    status: result.status,
-    summary: result.message,
-    evidence: result.evidence ?? result.message,
-    ...(result.failureReason ? { failureReason: result.failureReason } : {}),
-  };
-};
-
-const toVerifierAssertionEvaluation = (result: AgentVerifierResult): AssertionEvaluation => {
-  return {
-    status: result.status,
-    summary: result.summary,
-    evidence: result.evidence,
-    ...(result.failureReason ? { failureReason: result.failureReason } : {}),
-  };
-};
-
-const createPendingSemanticEvaluation = (message: string): AssertionEvaluation => {
-  return {
-    status: 'neutral',
-    summary: message,
-    evidence: '语义动作未执行，未生成页面判断证据。',
-  };
-};
 
 const addUsageBucket = (left: AgentUsageBucket | undefined, right: AgentUsageBucket): AgentUsageBucket => {
   return {
@@ -1015,13 +911,6 @@ const resolveReporterConfigForRequest = async (request: ResolvedChatCommandReque
     : reporterConfigForRequest(request);
 };
 
-const resolveMidsceneConfigForRequest = (request: ResolvedChatCommandRequest) => {
-  return request.modelConfigResolver
-    ? request.modelConfigResolver.resolveMidsceneConfig()
-    : Promise.resolve(request.midsceneConfig);
-};
-
-
 const createPrimaryExecution = (browserPreparation: BrowserPreparationResult) => {
   if (browserPreparation.assertion) {
     return {
@@ -1273,6 +1162,8 @@ const toPlannedStepExecution = (
 export class StudioRuntime {
   private sessionActive = false;
   private activeTraceScope: string | null = null;
+  private readonly browserSessionCoordinator: BrowserSessionCoordinator;
+  private readonly agentRunOrchestrator: AgentRunOrchestrator;
 
   constructor(
     private readonly emitRunEvent: (event: RunEventPayload) => void,
@@ -1283,7 +1174,42 @@ export class StudioRuntime {
     private readonly agentReporter?: AgentReporter,
     private readonly reporterReportWriter?: ReporterReportWriter,
     private readonly deterministicInputBindingResolver?: DeterministicInputBindingResolver,
-  ) {}
+  ) {
+    this.browserSessionCoordinator = createBrowserSessionCoordinator({
+      browserObserver,
+      semanticActionRuntime,
+      agentVerifier,
+      deterministicInputBindingResolver,
+      resolveVerifierConfigForRequest,
+    });
+    this.agentRunOrchestrator = createAgentRunOrchestrator({
+      browserSessionCoordinator: this.browserSessionCoordinator,
+      beginTraceScope: (runId) => this.beginTraceScope(runId),
+      finishTraceScope: (runId, ownsTraceScope, agentRun) => this.finishTraceScope(runId, ownsTraceScope, agentRun),
+      createAgentPlan: (request) => this.createAgentPlan(request),
+      resolvePlannerReplanningCycleLimit,
+      prepareStepExecution: toPlannedStepExecution,
+      mergeExecutionMetrics,
+      withReplanningCycleLimit,
+      shouldRetryFailedExecution,
+      waitBeforeRetry: (step, failedExecution, cancellationSignal) =>
+        this.waitBeforeRetry(step, failedExecution, cancellationSignal),
+      withDynamicWaitAttempt,
+      withRetryAttempt,
+      shouldTrySelectorFallback,
+      trySelectorFallbackForStep: (request, step, stepIndex, previousExecution, cancellationSignal) =>
+        this.trySelectorFallbackForStep(request, step, stepIndex, previousExecution, cancellationSignal),
+      withSelectorFallbackAttempt,
+      appendCompletedPlannerSteps,
+      shouldReplanFailedExecution,
+      createReplannedAgentPlan: (request, currentPlan, failedStep, failedExecution, completedSteps) =>
+        this.createReplannedAgentPlan(request, currentPlan, failedStep, failedExecution, completedSteps),
+      withReplanningCycle,
+      createPrimaryExecution,
+      enhanceRunWithReporter: (request, agentRun) => this.enhanceRunWithReporter(request, agentRun),
+      createChatCommandResponse: (request, agentRun) => this.createChatCommandResponse(request, agentRun),
+    });
+  }
 
   private async trySelectorFallbackForStep(
     request: ResolvedChatCommandRequest,
@@ -1487,199 +1413,7 @@ export class StudioRuntime {
   }
 
   async sendChatCommand(request: ResolvedChatCommandRequest): Promise<ChatCommandResponse> {
-    throwIfRunCancelled(request.cancellationSignal);
-    const traceScopeId = `agent-trace-${Date.now()}`;
-    const ownsTraceScope = await this.beginTraceScope(traceScopeId);
-    const planningAttempt = await this.createAgentPlan(request);
-    throwIfRunCancelled(request.cancellationSignal);
-    const modelAssignments = resolveAgentModelAssignments({
-      midsceneConfig: request.midsceneConfig ?? defaultMidsceneConfig,
-      ...(request.agentModelConfig ? { agentModelConfig: request.agentModelConfig } : {}),
-    });
-
-    if (planningAttempt.result) {
-      const executions: PlannedAgentStepExecution[] = [];
-      const replanningHistory: PlannedAgentReplanningRecord[] = [];
-      const replanningCycleLimit = resolvePlannerReplanningCycleLimit(request);
-      let executionMetrics = withReplanningCycleLimit(planningAttempt.result.metrics, replanningCycleLimit);
-      let plannedPlan = planningAttempt.result.plan;
-      let replanningCycles = 0;
-      let completedSteps: CompletedPlannerStep[] = [];
-      for (let stepIndex = 0; stepIndex < plannedPlan.steps.length; stepIndex += 1) {
-        throwIfRunCancelled(request.cancellationSignal);
-        const step = plannedPlan.steps[stepIndex]!;
-        const preparation = await this.prepareBrowserForAgent(request, step);
-        let execution = toPlannedStepExecution(step, stepIndex, preparation);
-        executionMetrics = mergeExecutionMetrics(executionMetrics, preparation.executionMetrics) ?? executionMetrics;
-        if (execution.status !== 'passed' && shouldRetryFailedExecution(step, execution)) {
-          const failedAttempt = execution;
-          const dynamicWaitAttempt = await this.waitBeforeRetry(step, failedAttempt, request.cancellationSignal);
-          if (dynamicWaitAttempt) {
-            executionMetrics = withDynamicWaitAttempt(executionMetrics);
-          }
-          if (dynamicWaitAttempt?.status === 'failed') {
-            execution = {
-              ...failedAttempt,
-              dynamicWaitAttempts: [...(failedAttempt.dynamicWaitAttempts ?? []), dynamicWaitAttempt],
-            };
-          } else {
-            const retryPreparation = await this.prepareBrowserForAgent(request, step);
-            execution = {
-              ...toPlannedStepExecution(step, stepIndex, retryPreparation),
-              ...(dynamicWaitAttempt ? { dynamicWaitAttempts: [dynamicWaitAttempt] } : {}),
-              retryAttempts: [
-                {
-                  status: failedAttempt.status,
-                  summary: failedAttempt.summary,
-                  evidence: failedAttempt.evidence,
-                  ...(failedAttempt.failureReason ? { failureReason: failedAttempt.failureReason } : {}),
-                  ...(failedAttempt.failureCategory ? { failureCategory: failedAttempt.failureCategory } : {}),
-                  ...(failedAttempt.recoveryStrategy ? { recoveryStrategy: failedAttempt.recoveryStrategy } : {}),
-                },
-              ],
-            };
-            executionMetrics = withRetryAttempt(
-              mergeExecutionMetrics(executionMetrics, retryPreparation.executionMetrics) ?? executionMetrics,
-            );
-          }
-        }
-        if (execution.status !== 'passed' && shouldTrySelectorFallback(step, execution)) {
-          const selectorFallback = await this.trySelectorFallbackForStep(
-            request,
-            step,
-            stepIndex,
-            execution,
-            request.cancellationSignal,
-          );
-          if (selectorFallback) {
-            execution = selectorFallback.execution;
-            executionMetrics =
-              mergeExecutionMetrics(executionMetrics, selectorFallback.executionMetrics) ?? executionMetrics;
-            selectorFallback.attempts.forEach(() => {
-              executionMetrics = withSelectorFallbackAttempt(executionMetrics);
-            });
-          }
-        }
-        if (execution.status !== 'passed') {
-          const completedStepsForReplan = appendCompletedPlannerSteps(completedSteps, plannedPlan, executions);
-          const revisedPlan = replanningCycles >= replanningCycleLimit || !shouldReplanFailedExecution(step, execution)
-            ? undefined
-            : await this.createReplannedAgentPlan(request, plannedPlan, step, execution, completedStepsForReplan);
-          if (revisedPlan) {
-            const previousPlan = plannedPlan;
-            executions.push(execution);
-            completedSteps = completedStepsForReplan;
-            const completedStepCount = completedSteps.length;
-            replanningCycles += 1;
-            const nextPlan = {
-              ...revisedPlan.plan,
-              risks: [
-                ...revisedPlan.plan.risks,
-                `已在步骤「${step.title}」${execution.status === 'failed' ? '失败' : '未完成'}后触发第 ${replanningCycles} 次重规划。`,
-              ],
-            };
-            replanningHistory.push({
-              cycle: replanningCycles,
-              previousPlan,
-              revisedPlan: nextPlan,
-              executions: [...executions],
-              failedStepIndex: stepIndex,
-              ...(completedStepCount ? { completedStepCount } : {}),
-              ...(revisedPlan.metrics ? { planningMetrics: revisedPlan.metrics } : {}),
-            });
-            plannedPlan = nextPlan;
-            executionMetrics = mergeExecutionMetrics(executionMetrics, withReplanningCycle(revisedPlan.metrics)) ?? executionMetrics;
-            executions.length = 0;
-            stepIndex = -1;
-            continue;
-          }
-          executions.push(execution);
-          break;
-        }
-        executions.push(execution);
-      }
-      const tracedAgentRun = await this.finishTraceScope(traceScopeId, ownsTraceScope, createPlannedAgentRun({
-        mode: request.mode,
-        prompt: request.prompt,
-        runtimeDescription: describeRuntimeProfile(request.runtimeProfile),
-        targetEnvironment: request.targetEnvironment,
-        targetUrl: request.runtimeProfile.baseUrl,
-        plannedPlan,
-        planner: planningAttempt.provenance,
-        executions,
-        ...(replanningHistory.length ? { replanningHistory } : {}),
-        ...(planningAttempt.result.metrics ? { planningMetrics: planningAttempt.result.metrics } : {}),
-        executionMetrics,
-        modelAssignments,
-        ...(request.projectId ? { projectId: request.projectId } : {}),
-        ...(request.groupId ? { groupId: request.groupId } : {}),
-        ...(request.environmentId ? { environmentId: request.environmentId } : {}),
-        ...(request.testCaseId ? { testCaseId: request.testCaseId } : {}),
-        ...(request.documentId ? { documentId: request.documentId } : {}),
-      }));
-      const agentRun = await this.enhanceRunWithReporter(request, tracedAgentRun);
-      return this.createChatCommandResponse(request, agentRun);
-    }
-
-    const browserPreparation = await this.prepareBrowserForAgent(request);
-    throwIfRunCancelled(request.cancellationSignal);
-    const observedSession = browserPreparation.session;
-    const primaryExecution = createPrimaryExecution(browserPreparation);
-    const unresolvedEvaluation =
-      !browserPreparation.assertionEvaluation &&
-      (request.mode === 'aiQuery' ||
-        (!('primaryAction' in primaryExecution) && request.mode === 'ai' && !isObservationIntent(request.prompt)))
-        ? createPendingSemanticEvaluation(
-            request.mode === 'aiQuery'
-              ? '结构化提取能力尚未执行，该步骤保持等待态。'
-              : '当前指令尚未解析为可执行浏览器动作，该步骤保持等待态。',
-          )
-        : undefined;
-    const verificationEvaluation = browserPreparation.assertionEvaluation ?? unresolvedEvaluation;
-    const executionMetrics = browserPreparation.executionMetrics;
-    const tracedAgentRun = await this.finishTraceScope(traceScopeId, ownsTraceScope, createStubAgentRun({
-      mode: request.mode,
-      prompt: request.prompt,
-      runtimeDescription: describeRuntimeProfile(request.runtimeProfile),
-      targetEnvironment: request.targetEnvironment,
-      targetUrl: browserPreparation.navigatedUrl ?? request.runtimeProfile.baseUrl,
-      browserActionMessage: browserPreparation.message,
-      ...primaryExecution,
-      planner: planningAttempt.provenance,
-      ...(browserPreparation.observation ? { observation: browserPreparation.observation } : {}),
-      ...(verificationEvaluation
-        ? {
-            verificationStatus: verificationEvaluation.status,
-            verificationSummary: verificationEvaluation.summary,
-            verificationEvidence: verificationEvaluation.evidence,
-            ...(verificationEvaluation.failureReason
-              ? { verificationFailureReason: verificationEvaluation.failureReason }
-              : {}),
-          }
-        : {}),
-      ...(browserPreparation.reportArtifactPath
-        ? { reportArtifactPath: browserPreparation.reportArtifactPath }
-        : {}),
-      ...(executionMetrics ? { executionMetrics } : {}),
-      modelAssignments,
-      ...(observedSession
-        ? {
-            browserSession: {
-              status: observedSession.status,
-              currentUrl: observedSession.currentUrl,
-              pageTitle: observedSession.pageTitle,
-              ...(observedSession.screenshotPath ? { screenshotPath: observedSession.screenshotPath } : {}),
-            },
-          }
-        : {}),
-      ...(request.projectId ? { projectId: request.projectId } : {}),
-      ...(request.groupId ? { groupId: request.groupId } : {}),
-      ...(request.environmentId ? { environmentId: request.environmentId } : {}),
-      ...(request.testCaseId ? { testCaseId: request.testCaseId } : {}),
-      ...(request.documentId ? { documentId: request.documentId } : {}),
-    }));
-    const agentRun = await this.enhanceRunWithReporter(request, tracedAgentRun);
-    return this.createChatCommandResponse(request, agentRun);
+    return this.agentRunOrchestrator.runChatCommand(request);
   }
 
   private async beginTraceScope(runId: string): Promise<boolean> {
@@ -1965,528 +1699,30 @@ export class StudioRuntime {
     }
   }
 
-  private async prepareBrowserForAgent(
+  private prepareBrowserForAgent = (
     request: ResolvedChatCommandRequest,
     plannedStep?: AgentPlanStepDraft,
-  ): Promise<BrowserPreparationResult> {
-    throwIfRunCancelled(request.cancellationSignal);
-    const executionIntent = resolveExecutionIntent(request, plannedStep);
-    const {
-      assertionIntent,
-      clickIntent,
-      explicitUrl,
-      extractIntent,
-      inputIntent,
-      scrollIntent,
-      semanticAssertion,
-      selectIntent,
-      waitIntent,
-    } = executionIntent;
+  ): Promise<BrowserPreparationResult> => {
+    return this.browserSessionCoordinator.prepareForAgent(request, plannedStep);
+  };
 
-    if (!this.browserObserver) {
-      const assertionEvaluation =
-        assertionIntent && request.browserSession
-          ? evaluateExplicitAssertion(assertionIntent, request.browserSession)
-          : undefined;
-      return request.browserSession
-        ? {
-            session: request.browserSession,
-            message: assertionEvaluation
-              ? `未连接主进程浏览器 runtime，使用前端会话快照；${assertionEvaluation.summary}`
-              : '未连接主进程浏览器 runtime，使用前端会话快照。',
-            ...(assertionIntent ? { assertion: assertionIntent } : {}),
-            ...(assertionEvaluation ? { assertionEvaluation } : {}),
-          }
-        : {
-            message: '未连接主进程浏览器 runtime，等待真实浏览器观察能力。',
-            ...(assertionIntent ? { assertion: assertionIntent } : {}),
-          };
-    }
-
-    let semanticActionRedactor = createSecretRedactor(request.midsceneConfig);
-
-    try {
-      const current = this.browserObserver.getState();
-      const shouldStart =
-        request.project &&
-        request.environment &&
-        (!current.currentUrl || current.status === 'idle' || current.status === 'closed' || current.status === 'error');
-
-      let session: BrowserSessionState;
-      let message: string;
-
-      if (shouldStart && request.project && request.environment) {
-        session = await awaitWithRunCancellation(this.browserObserver.start({
-          project: request.project,
-          environment: request.environment,
-          record: false,
-        }), request.cancellationSignal);
-        message = `Agent 已启动受控浏览器：${session.currentUrl || request.environment.url}`;
-      } else {
-        session = await awaitWithRunCancellation(this.browserObserver.capture(), request.cancellationSignal);
-        message = `Agent 已复用浏览器会话并捕获快照：${session.currentUrl || '当前页面'}`;
-      }
-
-      if (explicitUrl && session.currentUrl !== explicitUrl) {
-        session = await awaitWithRunCancellation(
-          this.browserObserver.navigate({ url: explicitUrl }),
-          request.cancellationSignal,
-        );
-        message = `${message}；并导航到用户指定 URL：${explicitUrl}`;
-      }
-
-      let semanticEvaluation: AssertionEvaluation | undefined;
-      let reportArtifactPath: string | undefined;
-      let executionMetrics: AgentExecutionMetrics | undefined;
-
-      if (clickIntent?.selector) {
-        session = await awaitWithRunCancellation(
-          this.browserObserver.click({ selector: clickIntent.selector }),
-          request.cancellationSignal,
-        );
-        message = `${message}；并点击用户指定 selector：${clickIntent.selector}`;
-      } else if (clickIntent?.target) {
-        const semanticActionRuntime = this.semanticActionRuntime;
-        const midsceneConfig = semanticActionRuntime
-          ? await awaitWithRunCancellation(resolveMidsceneConfigForRequest(request), request.cancellationSignal)
-          : undefined;
-        semanticActionRedactor = createSecretRedactor(midsceneConfig);
-        if (semanticActionRuntime && midsceneConfig && isMidsceneConfigured(midsceneConfig)) {
-          const result = await awaitWithRunCancellation(semanticActionRuntime.click({
-            target: clickIntent.target,
-            prompt: plannedStep?.instruction ?? request.prompt,
-            config: midsceneConfig,
-          }), request.cancellationSignal);
-          semanticEvaluation = toAssertionEvaluation(result);
-          reportArtifactPath = result.reportPath;
-          executionMetrics = result.metrics;
-          session = await awaitWithRunCancellation(this.browserObserver.capture(), request.cancellationSignal);
-          message = `${message}；${result.message}`;
-        } else {
-          const pendingMessage = `已识别点击目标「${clickIntent.target}」，等待 Midscene 语义定位执行。`;
-          semanticEvaluation = createPendingSemanticEvaluation(pendingMessage);
-          message = `${message}；${pendingMessage}`;
-        }
-      }
-
-      if (inputIntent?.selector) {
-        session = await awaitWithRunCancellation(
-          this.browserObserver.input({ selector: inputIntent.selector, value: inputIntent.value }),
-          request.cancellationSignal,
-        );
-        message = `${message}；并在用户指定 selector 输入内容：${inputIntent.selector}`;
-      } else if (inputIntent?.target) {
-        const semanticActionRuntime = this.semanticActionRuntime;
-        const midsceneConfig = semanticActionRuntime
-          ? await awaitWithRunCancellation(resolveMidsceneConfigForRequest(request), request.cancellationSignal)
-          : undefined;
-        semanticActionRedactor = createSecretRedactor(midsceneConfig);
-        if (semanticActionRuntime && midsceneConfig && isMidsceneConfigured(midsceneConfig)) {
-          const result = await awaitWithRunCancellation(semanticActionRuntime.input({
-            target: inputIntent.target,
-            value: inputIntent.value,
-            prompt: plannedStep?.instruction ?? request.prompt,
-            config: midsceneConfig,
-          }), request.cancellationSignal);
-          semanticEvaluation = toAssertionEvaluation(result);
-          reportArtifactPath = result.reportPath;
-          executionMetrics = result.metrics;
-          session = await awaitWithRunCancellation(this.browserObserver.capture(), request.cancellationSignal);
-          message = `${message}；${result.message}`;
-        } else {
-          const pendingMessage = `已识别输入目标「${inputIntent.target}」，等待 Midscene 语义定位执行。`;
-          semanticEvaluation = createPendingSemanticEvaluation(pendingMessage);
-          message = `${message}；${pendingMessage}`;
-        }
-      }
-
-      let waitedMs: number | undefined;
-      if (waitIntent) {
-        if (waitIntent.strategy === 'chartStable' && this.browserObserver.waitForChartStable) {
-          session = await awaitWithRunCancellation(this.browserObserver.waitForChartStable({
-            ...(waitIntent.selector ? { selector: waitIntent.selector } : {}),
-            timeoutMs: waitIntent.timeoutMs,
-          }), request.cancellationSignal);
-          waitedMs = waitIntent.timeoutMs;
-          message = waitIntent.selector
-            ? `${message}；并等待图表稳定：${waitIntent.selector}`
-            : `${message}；并等待页面图表稳定`;
-        } else if (waitIntent.strategy === 'dataReady' && this.browserObserver.waitForDataReady) {
-          session = await awaitWithRunCancellation(this.browserObserver.waitForDataReady({
-            ...(waitIntent.selector ? { selector: waitIntent.selector } : {}),
-            timeoutMs: waitIntent.timeoutMs,
-          }), request.cancellationSignal);
-          waitedMs = waitIntent.timeoutMs;
-          message = waitIntent.selector
-            ? `${message}；并等待数据就绪：${waitIntent.selector}`
-            : `${message}；并等待页面数据就绪`;
-        } else if (waitIntent.selector && this.browserObserver.waitForSelector) {
-          session = await awaitWithRunCancellation(this.browserObserver.waitForSelector({
-            selector: waitIntent.selector,
-            timeoutMs: waitIntent.timeoutMs,
-          }), request.cancellationSignal);
-          waitedMs = waitIntent.timeoutMs;
-          message = `${message}；并等待 selector 可见：${waitIntent.selector}`;
-        } else if (waitIntent.strategy === 'response' && waitIntent.urlPattern && this.browserObserver.waitForResponse) {
-          session = await awaitWithRunCancellation(this.browserObserver.waitForResponse({
-            urlPattern: waitIntent.urlPattern,
-            timeoutMs: waitIntent.timeoutMs,
-          }), request.cancellationSignal);
-          waitedMs = waitIntent.timeoutMs;
-          message = `${message}；并等待接口响应：${waitIntent.urlPattern}`;
-        } else if (waitIntent.strategy === 'networkIdle' && this.browserObserver.waitForNetworkIdle) {
-          session = await awaitWithRunCancellation(
-            this.browserObserver.waitForNetworkIdle({ timeoutMs: waitIntent.timeoutMs }),
-            request.cancellationSignal,
-          );
-          waitedMs = waitIntent.timeoutMs;
-          message = `${message}；并等待页面网络空闲：${waitIntent.timeoutMs}ms`;
-        } else if (this.browserObserver.wait) {
-          session = await awaitWithRunCancellation(
-            this.browserObserver.wait({ timeoutMs: waitIntent.timeoutMs }),
-            request.cancellationSignal,
-          );
-          waitedMs = waitIntent.timeoutMs;
-          message = `${message}；并等待页面稳定：${waitIntent.timeoutMs}ms`;
-        } else {
-          const pendingMessage = '已识别等待动作，但当前浏览器 runtime 尚未接入 wait 执行器。';
-          semanticEvaluation = createPendingSemanticEvaluation(pendingMessage);
-          message = `${message}；${pendingMessage}`;
-        }
-      }
-
-      let scrolledSelector: string | undefined;
-      let scrolledPage = false;
-      if (scrollIntent) {
-        if (this.browserObserver.scroll) {
-          session = await awaitWithRunCancellation(this.browserObserver.scroll(scrollIntent), request.cancellationSignal);
-          scrolledSelector = scrollIntent.selector;
-          scrolledPage = !scrollIntent.selector;
-          message = scrollIntent.selector
-            ? `${message}；并滚动到用户指定 selector：${scrollIntent.selector}`
-            : `${message}；并滚动当前页面`;
-        } else {
-          const pendingMessage = '已识别滚动动作，但当前浏览器 runtime 尚未接入 scroll 执行器。';
-          semanticEvaluation = createPendingSemanticEvaluation(pendingMessage);
-          message = `${message}；${pendingMessage}`;
-        }
-      }
-
-      let selectedSelector: string | undefined;
-      let selectedValue: string | undefined;
-      if (selectIntent?.selector) {
-        if (this.browserObserver.select) {
-          session = await awaitWithRunCancellation(
-            this.browserObserver.select({ selector: selectIntent.selector, value: selectIntent.value }),
-            request.cancellationSignal,
-          );
-          selectedSelector = selectIntent.selector;
-          selectedValue = selectIntent.value;
-          message = `${message}；并在用户指定 selector 选择选项：${selectIntent.selector}`;
-        } else {
-          const pendingMessage = '已识别下拉选择动作，但当前浏览器 runtime 尚未接入 select 执行器。';
-          semanticEvaluation = createPendingSemanticEvaluation(pendingMessage);
-          message = `${message}；${pendingMessage}`;
-        }
-      } else if (selectIntent?.target) {
-        const semanticActionRuntime = this.semanticActionRuntime;
-        const midsceneConfig = semanticActionRuntime
-          ? await awaitWithRunCancellation(resolveMidsceneConfigForRequest(request), request.cancellationSignal)
-          : undefined;
-        semanticActionRedactor = createSecretRedactor(midsceneConfig);
-        if (semanticActionRuntime && midsceneConfig && isMidsceneConfigured(midsceneConfig)) {
-          const result = await awaitWithRunCancellation(semanticActionRuntime.select({
-            target: selectIntent.target,
-            value: selectIntent.value,
-            prompt: plannedStep?.instruction ?? request.prompt,
-            config: midsceneConfig,
-          }), request.cancellationSignal);
-          semanticEvaluation = toAssertionEvaluation(result);
-          reportArtifactPath = result.reportPath;
-          executionMetrics = result.metrics;
-          session = await awaitWithRunCancellation(this.browserObserver.capture(), request.cancellationSignal);
-          message = `${message}；${result.message}`;
-        } else {
-          const pendingMessage = `已识别下拉选择目标「${selectIntent.target}」，等待 Midscene 语义选择执行。`;
-          semanticEvaluation = createPendingSemanticEvaluation(pendingMessage);
-          message = `${message}；${pendingMessage}`;
-        }
-      }
-
-      const semanticActionRuntimeForExtraction = this.semanticActionRuntime;
-      const midsceneConfigForExtraction = extractIntent?.target && semanticActionRuntimeForExtraction
-        ? await awaitWithRunCancellation(resolveMidsceneConfigForRequest(request), request.cancellationSignal)
-        : undefined;
-      if (midsceneConfigForExtraction) {
-        semanticActionRedactor = createSecretRedactor(midsceneConfigForExtraction);
-      }
-      if (extractIntent?.target && semanticActionRuntimeForExtraction && midsceneConfigForExtraction && isMidsceneConfigured(midsceneConfigForExtraction)) {
-        const result = await awaitWithRunCancellation(semanticActionRuntimeForExtraction.extract({
-          target: extractIntent.target,
-          prompt: plannedStep?.instruction ?? request.prompt,
-          config: midsceneConfigForExtraction,
-        }), request.cancellationSignal);
-        semanticEvaluation = toAssertionEvaluation(result);
-        reportArtifactPath = result.reportPath;
-        executionMetrics = result.metrics;
-        message = `${message}；${result.message}`;
-      } else if (extractIntent?.target) {
-        const pendingMessage = `已识别提取目标「${extractIntent.target}」，等待 Midscene 语义提取执行。`;
-        semanticEvaluation = createPendingSemanticEvaluation(pendingMessage);
-        message = `${message}；${pendingMessage}`;
-      }
-
-      const observation = await this.captureBrowserObservation(request.cancellationSignal);
-      const extracted = Boolean(
-        extractIntent && (extractIntent.target ? semanticEvaluation?.status === 'passed' : observation),
-      );
-      let assertionEvaluation: AssertionEvaluation | undefined;
-      if (assertionIntent) {
-        const pageText =
-          assertionIntent.kind === 'pageContains' && this.browserObserver.getPageText
-            ? await this.browserObserver.getPageText()
-            : undefined;
-        const domInspection =
-          (assertionIntent.kind === 'domSelectorExists' ||
-            assertionIntent.kind === 'domSelectorVisible' ||
-            assertionIntent.kind === 'domSelectorTextContains' ||
-            assertionIntent.kind === 'domSelectorAttributeEquals') &&
-          assertionIntent.domSelector &&
-          this.browserObserver.inspectDom
-            ? assertionIntent.domAttributeName
-              ? await this.browserObserver.inspectDom(assertionIntent.domSelector, assertionIntent.domAttributeName)
-              : await this.browserObserver.inspectDom(assertionIntent.domSelector)
-            : undefined;
-        assertionEvaluation = evaluateExplicitAssertion(assertionIntent, session, pageText, observation, domInspection);
-        message = `${message}；${assertionEvaluation.summary}`;
-      } else if (semanticAssertion) {
-        const verifierConfig = this.agentVerifier
-          ? await resolveVerifierConfigForRequest(request)
-          : {};
-        if (this.agentVerifier && verifierConfig.config) {
-          try {
-            const result = await awaitWithRunCancellation(
-              this.agentVerifier.verify({
-                config: verifierConfig.config,
-                ...(request.cancellationSignal ? { cancellationSignal: request.cancellationSignal } : {}),
-                assertion: semanticAssertion,
-                prompt: plannedStep?.instruction ?? request.prompt,
-                ...(session.currentUrl ? { currentUrl: session.currentUrl } : {}),
-                ...(session.pageTitle ? { pageTitle: session.pageTitle } : {}),
-                ...(observation ? { observation } : {}),
-              }),
-              request.cancellationSignal,
-            );
-            assertionEvaluation = toVerifierAssertionEvaluation(result);
-            executionMetrics = result.metrics;
-            message = `${message}；${result.summary}`;
-          } catch (error) {
-            if (isRunCancelled(error)) {
-              throw error;
-            }
-            const pendingMessage = `Verifier 模型判断失败，当前语义断言保持等待态：${createSecretRedactor(verifierConfig.config).redactError(error)}`;
-            assertionEvaluation = createPendingSemanticEvaluation(pendingMessage);
-            message = `${message}；${pendingMessage}`;
-          }
-        } else {
-          const semanticActionRuntime = this.semanticActionRuntime;
-          const midsceneConfig = semanticActionRuntime
-            ? await awaitWithRunCancellation(resolveMidsceneConfigForRequest(request), request.cancellationSignal)
-            : undefined;
-          if (midsceneConfig) {
-            semanticActionRedactor = createSecretRedactor(midsceneConfig);
-          }
-          if (semanticActionRuntime && midsceneConfig && isMidsceneConfigured(midsceneConfig)) {
-            const result = await awaitWithRunCancellation(semanticActionRuntime.assert({
-              assertion: semanticAssertion,
-              prompt: plannedStep?.instruction ?? request.prompt,
-              config: midsceneConfig,
-            }), request.cancellationSignal);
-            assertionEvaluation = toAssertionEvaluation(result);
-            reportArtifactPath = result.reportPath;
-            executionMetrics = result.metrics;
-            message = `${message}；${result.message}`;
-          } else {
-            const pendingMessage = verifierConfig.fallbackReason
-              ? `已识别语义断言，等待 Verifier 配置完成：${verifierConfig.fallbackReason}。`
-              : '已识别语义断言，等待 Verifier 或 Midscene 根据页面上下文执行判断。';
-            assertionEvaluation = createPendingSemanticEvaluation(pendingMessage);
-            message = `${message}；${pendingMessage}`;
-          }
-        }
-      }
-
-      assertionEvaluation ??= semanticEvaluation;
-
-      return {
-        session,
-        message,
-        ...(explicitUrl ? { navigatedUrl: explicitUrl } : {}),
-        ...(clickIntent?.selector ? { clickedSelector: clickIntent.selector } : {}),
-        ...(clickIntent?.target ? { clickTarget: clickIntent.target } : {}),
-        ...(inputIntent?.selector ? { inputSelector: inputIntent.selector } : {}),
-        ...(inputIntent?.target ? { inputTarget: inputIntent.target } : {}),
-        ...(inputIntent ? { inputValue: inputIntent.value } : {}),
-        ...(waitedMs !== undefined ? { waitedMs } : {}),
-        ...(scrolledSelector ? { scrolledSelector } : {}),
-        ...(scrolledPage ? { scrolledPage } : {}),
-        ...(selectedSelector ? { selectedSelector } : {}),
-        ...(selectedValue ? { selectedValue } : {}),
-        ...(extracted ? { extracted } : {}),
-        ...(assertionIntent ? { assertion: assertionIntent } : {}),
-        ...(semanticAssertion ? { semanticAssertion } : {}),
-        ...(assertionEvaluation ? { assertionEvaluation } : {}),
-        ...(reportArtifactPath ? { reportArtifactPath } : {}),
-        ...(executionMetrics ? { executionMetrics } : {}),
-        ...(observation ? { observation } : {}),
-      };
-    } catch (error) {
-      if (isRunCancelled(error)) {
-        throw error;
-      }
-      const failureReason = semanticActionRedactor.redactError(error) || '未知错误';
-      return {
-        session: request.browserSession ?? this.browserObserver.getState(),
-        message: `语义动作执行失败，已退回到最近一次会话快照：${failureReason}`,
-        ...(clickIntent?.target ? { clickTarget: clickIntent.target } : {}),
-        ...(inputIntent?.target ? { inputTarget: inputIntent.target } : {}),
-        ...(inputIntent ? { inputValue: inputIntent.value } : {}),
-        ...(semanticAssertion ? { semanticAssertion } : {}),
-        assertionEvaluation: {
-          status: 'failed',
-          summary: '语义动作执行失败。',
-          evidence: `Runtime error: ${failureReason}`,
-          failureReason,
-        },
-      };
-    }
-  }
-
-  private async captureBrowserObservation(
+  private captureBrowserObservation = (
     cancellationSignal?: AbortSignal,
-  ): Promise<BrowserPreparationResult['observation'] | undefined> {
-    if (!this.browserObserver?.captureObservation) {
-      return undefined;
-    }
+  ): Promise<BrowserPreparationResult['observation'] | undefined> => {
+    return this.browserSessionCoordinator.captureObservation(cancellationSignal);
+  };
 
-    try {
-      return await awaitWithRunCancellation(this.browserObserver.captureObservation(), cancellationSignal);
-    } catch (error) {
-      if (isRunCancelled(error)) {
-        throw error;
-      }
-      return undefined;
-    }
-  }
-
-  private async prepareDeterministicAssertion(
+  private prepareDeterministicAssertion = (
     request: RunDeterministicStepRequest & { assertion: ExplicitTestAssertion },
-  ): Promise<BrowserPreparationResult> {
-    const assertion = toExplicitAssertionIntent(request.assertion);
-    const session = await awaitWithRunCancellation(this.browserObserver!.capture(), request.cancellationSignal);
-    throwIfRunCancelled(request.cancellationSignal);
-    const pageText =
-      assertion.kind === 'pageContains' && this.browserObserver?.getPageText
-        ? await awaitWithRunCancellation(this.browserObserver.getPageText(), request.cancellationSignal)
-        : undefined;
-    const domInspection =
-      (assertion.kind === 'domSelectorVisible' || assertion.kind === 'domSelectorTextContains') &&
-      assertion.domSelector &&
-      this.browserObserver?.inspectDom
-        ? await awaitWithRunCancellation(this.browserObserver.inspectDom(assertion.domSelector), request.cancellationSignal)
-        : undefined;
-    const observation = await this.captureBrowserObservation(request.cancellationSignal);
-    const assertionEvaluation = evaluateExplicitAssertion(assertion, session, pageText, observation, domInspection);
+  ): Promise<BrowserPreparationResult> => {
+    return this.browserSessionCoordinator.prepareDeterministicAssertion(request);
+  };
 
-    return {
-      session,
-      message: `已复用浏览器会话执行已确认的显式断言；${assertionEvaluation.summary}`,
-      assertion,
-      assertionEvaluation,
-      ...(observation ? { observation } : {}),
-    };
-  }
-
-  private async prepareDeterministicBoundInput(
+  private prepareDeterministicBoundInput = (
     request: RunDeterministicStepRequest & { inputBinding: TestInputValueBinding },
-  ): Promise<BrowserPreparationResult> {
-    const action = request.sourceStep.execution?.action;
-    const inputBindingResolver = request.inputBindingResolver ?? this.deterministicInputBindingResolver;
-    if (
-      !this.browserObserver ||
-      (action?.kind !== 'input' && action?.kind !== 'select') ||
-      !request.project?.id ||
-      !inputBindingResolver
-    ) {
-      return {
-        message: '输入值绑定不可用，未读取值且未派发浏览器动作。',
-        assertionEvaluation: {
-          status: 'neutral',
-          summary: '输入值绑定不可用。',
-          evidence: '当前运行缺少项目上下文或受控凭据解析器。',
-        },
-      };
-    }
-
-    const session = await awaitWithRunCancellation(this.browserObserver.capture(), request.cancellationSignal);
-    let value: string;
-    try {
-      value = await awaitWithRunCancellation(
-        inputBindingResolver.resolve({
-          projectId: request.project.id,
-          binding: request.inputBinding,
-        }),
-        request.cancellationSignal,
-      );
-    } catch (error) {
-      if (isRunCancelled(error)) {
-        throw error;
-      }
-      return {
-        session,
-        message: '输入值绑定无法解析，未派发浏览器动作。',
-        assertionEvaluation: {
-          status: 'neutral',
-          summary: '输入值绑定无法解析。',
-          evidence: (error as Error).message || '凭据引用不可用。',
-        },
-      };
-    }
-
-    throwIfRunCancelled(request.cancellationSignal);
-    if (action.kind === 'input') {
-      const nextSession = await awaitWithRunCancellation(
-        this.browserObserver.input({ selector: action.locator.selector, value }),
-        request.cancellationSignal,
-      );
-      return {
-        session: nextSession,
-        inputSelector: action.locator.selector,
-        message: `已使用已确认的输入值引用填写 selector：${action.locator.selector}`,
-      };
-    }
-
-    if (!this.browserObserver.select) {
-      return {
-        session,
-        message: '当前浏览器 runtime 未接入 select 执行器，未派发浏览器动作。',
-        assertionEvaluation: {
-          status: 'neutral',
-          summary: '下拉选择执行器不可用。',
-          evidence: '输入值未传递给未接入的浏览器执行器。',
-        },
-      };
-    }
-    const nextSession = await awaitWithRunCancellation(
-      this.browserObserver.select({ selector: action.locator.selector, value }),
-      request.cancellationSignal,
-    );
-    return {
-      session: nextSession,
-      selectedSelector: action.locator.selector,
-      message: `已使用已确认的输入值引用选择 selector：${action.locator.selector}`,
-    };
-  }
+  ): Promise<BrowserPreparationResult> => {
+    return this.browserSessionCoordinator.prepareDeterministicBoundInput(request);
+  };
 
   async runDeterministicStep(request: RunDeterministicStepRequest): Promise<RunDeterministicStepResponse> {
     const traceScopeId = request.runId ?? `agent-run-deterministic-${Date.now()}`;

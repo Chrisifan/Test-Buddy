@@ -19,6 +19,7 @@ import type {
   RunStatus,
   StudioState,
 } from '../../shared/studio.js';
+import { deepFreeze } from '../../shared/deep-freeze.js';
 import { DurableAtomicFileCommitError, writeDurableAtomicFile } from '../durable-atomic-file.js';
 
 export interface ArtifactRegistration {
@@ -966,14 +967,6 @@ const isReferencedByPersistedRunDetail = (entry: ArtifactManifestEntry, state: S
       (detail.agentRun ? agentRunReferencesEntry(entry, detail.agentRun) : false) ||
       (detail.agentRuns ?? []).some((agentRun) => agentRunReferencesEntry(entry, agentRun));
   });
-};
-
-const deepFreeze = <Value>(value: Value): Value => {
-  if (!value || typeof value !== 'object' || Object.isFrozen(value)) {
-    return value;
-  }
-  Object.values(value).forEach((child) => deepFreeze(child));
-  return Object.freeze(value);
 };
 
 const agentRunReferencesEntry = (entry: ArtifactManifestEntry, agentRun: StudioState['runDetails'][number]['agentRun']): boolean => {

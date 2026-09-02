@@ -103,15 +103,18 @@ or production-site acceptance.
 ## Renderer Bundle Baseline
 
 Measured on 2026-09-02 with `pnpm analyze:bundle`. The renderer keeps its
-feature pages and settings modal as independent dynamic entries; the initial
-application entry remains the main optimization candidate.
+feature pages and settings modal as independent dynamic entries. The desktop
+runtime adapter now loads through `src/app/desktop-runtime-client.ts` after a
+desktop operation or browser-fallback event subscription begins.
 
 | Asset | Minified | Gzip |
 | --- | ---: | ---: |
-| Initial renderer entry (`index`) | 573.86 kB | 176.93 kB |
+| Initial renderer entry (`index`) | 539.27 kB | 167.33 kB |
+| Desktop runtime (dynamic chunk) | 35.67 kB | 10.34 kB |
 | Renderer stylesheet (`index`) | 214.29 kB | 34.97 kB |
 
 Vite reports the JavaScript entry as larger than its 500 kB advisory limit.
-This is recorded as a follow-up candidate for splitting application
-coordination, not as a reason to alter the existing page-level lazy-loading
-boundaries without a focused behavior and loading-performance test.
+The lazy adapter moved 34.59 kB minified (9.60 kB gzip) off the initial
+entry. Further application-coordination splitting remains a focused follow-up
+candidate rather than a reason to alter existing page-level lazy-loading
+boundaries without another behavior and loading-performance test.

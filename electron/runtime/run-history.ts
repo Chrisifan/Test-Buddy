@@ -5,6 +5,7 @@ import type {
   SuiteRunRecord,
   StudioState,
 } from '../../shared/studio.js';
+import { deepFreeze } from '../../shared/deep-freeze.js';
 
 export const appendRunToStudioState = (
   state: StudioState,
@@ -64,12 +65,4 @@ const copyDetailWithFrozenProvenance = (result: RunTestCaseResponse['detail']): 
     ...result,
     provenance: deepFreeze(structuredClone(result.provenance)),
   };
-};
-
-const deepFreeze = <Value>(value: Value): Value => {
-  if (!value || typeof value !== 'object' || Object.isFrozen(value)) {
-    return value;
-  }
-  Object.values(value).forEach((child) => deepFreeze(child));
-  return Object.freeze(value);
 };

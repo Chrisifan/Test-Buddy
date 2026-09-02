@@ -32,6 +32,7 @@ import type {
 } from '../../shared/studio.js';
 import { findSuiteAsset, findTestCaseVersion, isAgentRunnableTestCase } from '../../shared/studio.js';
 import { isSafeMaintenanceRationale } from '../../shared/maintenance.js';
+import { deepFreeze } from '../../shared/deep-freeze.js';
 import { ProjectRepositoryError, type ProjectRepository, type ProjectSnapshot } from '../projectRepository.js';
 import {
   createRunProvenance,
@@ -864,14 +865,6 @@ const requiresModelConfiguration = (testCase: TestCaseDraft): boolean => {
     (step.type === 'ai' || step.type === 'aiAssert' || step.type === 'aiQuery') &&
     !((step.type === 'ai' || step.type === 'aiAssert') && step.execution?.reviewStatus === 'confirmed'),
   );
-};
-
-const deepFreeze = <Value>(value: Value): Value => {
-  if (!value || typeof value !== 'object' || Object.isFrozen(value)) {
-    return value;
-  }
-  Object.values(value).forEach((child) => deepFreeze(child));
-  return Object.freeze(value);
 };
 
 export type { RuntimeIpcChannel };
