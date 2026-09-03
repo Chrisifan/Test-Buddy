@@ -89,4 +89,15 @@ describe('application shell navigation', () => {
     expect(responsiveStyles).not.toContain('.designer-split.nl-workbench');
     expect(narrowResponsive).toMatch(/grid-template-rows:\s*minmax\(0, 1fr\)\s*minmax\(220px, auto\);/);
   });
+
+  it('uses lightweight hierarchy for overview summaries and empty workbenches', () => {
+    const styles = readLuminousPrecisionCss();
+
+    expect(styles).toMatch(/\.home-compact-stat\s*\{[\s\S]*?border:\s*0;[\s\S]*?background:\s*transparent;/);
+    expect(styles).toMatch(/\.home-glyph\s*\{[\s\S]*?border:\s*0;[\s\S]*?background:\s*var\(--surface-container-low\);/);
+    expect(styles).toMatch(/\.document-studio\.is-empty\s*\{[\s\S]*?height:\s*auto;[\s\S]*?border:\s*0;/);
+    expect(styles).toMatch(/\.home-run-signal-grid,[\s\S]*?gap:\s*0;[\s\S]*?background:\s*transparent;/);
+    expect(styles).toMatch(/\.home-insight-card\s*\{[\s\S]*?border:\s*0;[\s\S]*?background:\s*transparent;/);
+    expect(styles).toMatch(/\.run-records-empty-state\s*\{[\s\S]*?min-height:\s*176px;[\s\S]*?grid-template-columns:\s*auto minmax\(0, 1fr\);/);
+  });
 });

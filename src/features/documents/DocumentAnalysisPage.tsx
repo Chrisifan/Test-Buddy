@@ -259,7 +259,7 @@ export const DocumentAnalysisPage = ({
       />
 
       <PageBody className="figma-document-body">
-      <section className="document-studio" aria-label={t('documents.aria.workbench')}>
+      <section className={`document-studio ${documents.length ? '' : 'is-empty'}`} aria-label={t('documents.aria.workbench')}>
         {!documents.length ? (
           <OperationalEmptyState
             description={t('documents.empty.description')}

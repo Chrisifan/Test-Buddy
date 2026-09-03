@@ -101,15 +101,13 @@ const DashboardCard = ({
 
 const StatGlyph = ({
   children,
-  tone = 'neutral',
   testId,
 }: {
   children: ReactNode;
-  tone?: 'neutral' | 'primary' | 'risk';
   testId?: string;
 }) => {
   return (
-    <span className={`home-glyph home-glyph-${tone} flex h-9 w-9 shrink-0 items-center justify-center rounded-[4px] border`} data-testid={testId}>
+    <span className="home-glyph flex h-9 w-9 shrink-0 items-center justify-center rounded-[4px]" data-testid={testId}>
       {children}
     </span>
   );
@@ -269,13 +267,11 @@ export const HomePage = ({
       icon: <ScanSearch className="h-6 w-6" />,
       title: t('home.optimization.chart.title'),
       description: t('home.optimization.chart.description'),
-      tone: 'primary' as const,
     },
     {
       icon: <Clock3 className="h-6 w-6" />,
       title: t('home.optimization.duration.title'),
       description: latestRun ? `${latestRun.name} · ${latestRun.duration}` : t('home.optimization.duration.description'),
-      tone: 'neutral' as const,
     },
     {
       icon: <CheckCircle2 className="h-6 w-6" />,
@@ -284,7 +280,6 @@ export const HomePage = ({
         cases: workspaceAssets.testCases,
         recordings: workspaceAssets.recordings,
       }),
-      tone: 'neutral' as const,
     },
   ];
   const metricCards = [
@@ -297,7 +292,6 @@ export const HomePage = ({
         documents: workspaceAssets.documents,
       }),
       Icon: DatabaseZap,
-      tone: 'neutral' as const,
       action: undefined,
     },
     {
@@ -305,7 +299,6 @@ export const HomePage = ({
       value: signal.badge,
       description: t('home.health.projectCount', { count: projects.length }),
       Icon: ShieldCheck,
-      tone: signal.failed > signal.passed ? 'risk' as const : 'primary' as const,
       action: undefined,
     },
     {
@@ -316,7 +309,6 @@ export const HomePage = ({
         cases: workspaceAssets.testCases,
       }),
       Icon: CheckCircle2,
-      tone: 'primary' as const,
       action: undefined,
     },
     {
@@ -324,7 +316,6 @@ export const HomePage = ({
       value: coverageIndex === null ? t('home.health.noCoverage') : `${coverageIndex}`,
       description: coverageIndex === null ? t('home.health.noCoverageDescription') : t('home.asset.pathsDescription'),
       Icon: ScanSearch,
-      tone: coverageIndex === null ? 'neutral' as const : 'primary' as const,
       action: coverageIndex === null ? (
         <button className="home-link cursor-pointer text-xs font-semibold transition" onClick={() => onGoToPage('documents')} type="button">
           {t('home.health.noCoverageAction')}
@@ -341,11 +332,11 @@ export const HomePage = ({
       <PageBody>
         <section aria-label={t('home.aria.workbench')} className="home-dashboard-layout figma-overview-canvas">
           <div className="home-summary-grid home-metric-grid grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-4">
-            {metricCards.map(({ label, value, description, Icon, tone, action }) => (
+            {metricCards.map(({ label, value, description, Icon, action }) => (
               <DashboardCard action={action} className="home-summary-card home-metric-card p-4" key={label}>
                 <div className="flex items-start justify-between gap-3">
                   <p className="home-faint font-mono text-[11px] uppercase tracking-[0.1em]">{label}</p>
-                  <StatGlyph testId="home-summary-icon" tone={tone}><Icon className="h-5 w-5" /></StatGlyph>
+                  <StatGlyph testId="home-summary-icon"><Icon className="h-5 w-5" /></StatGlyph>
                 </div>
                 <div className="mt-3 flex min-w-0 items-center gap-2">
                   <p className="home-text min-w-0 truncate text-[24px] font-bold leading-none tracking-[-0.04em]">{value}</p>
@@ -389,7 +380,7 @@ export const HomePage = ({
               >
                 <div className="home-risk-summary flex flex-col gap-4 border-b border-border pb-4 sm:flex-row sm:items-center sm:justify-between">
                   <div className="flex min-w-0 items-center gap-3">
-                    <StatGlyph tone={signal.failed > signal.passed ? 'risk' : 'primary'}><ShieldCheck className="h-5 w-5" /></StatGlyph>
+                    <StatGlyph><ShieldCheck className="h-5 w-5" /></StatGlyph>
                     <div className="min-w-0">
                       <h2 className="home-text text-sm font-semibold">{t('home.baseline.title')}</h2>
                       <p className="home-muted mt-1 line-clamp-2 text-xs leading-5">{signal.description}</p>
@@ -405,7 +396,7 @@ export const HomePage = ({
                 <div className="home-insight-grid mt-4 grid gap-3 md:grid-cols-3">
                   {optimizationCards.map((item) => (
                     <div className="home-insight-card flex min-h-0 items-start gap-3 rounded-[6px] border border-border p-3" key={item.title}>
-                      <StatGlyph tone={item.tone}>{item.icon}</StatGlyph>
+                      <StatGlyph>{item.icon}</StatGlyph>
                       <div className="min-w-0">
                         <p className="home-text text-sm font-semibold">{item.title}</p>
                         <p className="home-muted mt-1 line-clamp-3 text-xs leading-5">{item.description}</p>

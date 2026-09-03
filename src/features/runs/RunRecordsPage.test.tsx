@@ -1671,11 +1671,11 @@ describe('RunRecordsPage', () => {
     expect(screen.queryByText('所有项目用例在其目标环境中均已获得最近通过结论。')).not.toBeInTheDocument();
   });
 
-  it('renders zero run samples as waiting with no passed status', () => {
+  it('uses a compact empty state when the project has no run history', () => {
     const state = createDemoStudioState();
     const project = state.projects[0]!;
 
-    render(
+    const { container } = render(
       <RunRecordsPage
         onSelectRun={vi.fn()}
         project={project}
@@ -1685,10 +1685,8 @@ describe('RunRecordsPage', () => {
       />,
     );
 
-    const qualitySummary = screen.getByLabelText('质量信号');
-
-    expect(within(qualitySummary).getByText('等待样本')).toBeInTheDocument();
-    expect(within(qualitySummary).getByRole('status', { name: '待处理' })).toBeInTheDocument();
-    expect(within(qualitySummary).queryByRole('status', { name: '通过' })).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 1, name: '运行记录' })).toBeInTheDocument();
+    expect(screen.getByText('暂无运行记录')).toBeInTheDocument();
+    expect(container.querySelector('.run-workbench')).not.toBeInTheDocument();
   });
 });

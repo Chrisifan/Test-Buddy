@@ -60,7 +60,12 @@ describe('HomePage', () => {
     expect(screen.getByText('工作区资产')).toBeInTheDocument();
     expect(screen.getByText('整体健康')).toBeInTheDocument();
     expect(screen.getByText('覆盖指数')).toBeInTheDocument();
-    expect(screen.getAllByTestId('home-summary-icon')).toHaveLength(4);
+    const summaryIcons = screen.getAllByTestId('home-summary-icon');
+    expect(summaryIcons).toHaveLength(4);
+    summaryIcons.forEach((icon) => {
+      expect(icon).toHaveClass('home-glyph');
+      expect(icon.className).not.toMatch(/home-glyph-(?:neutral|primary|risk)/u);
+    });
     expect(screen.getByText('覆盖指数')).toBeInTheDocument();
     expect(screen.getByText('汇总 2 个项目的运行结果')).toBeInTheDocument();
     expect(screen.getByText('测试入口')).toBeInTheDocument();

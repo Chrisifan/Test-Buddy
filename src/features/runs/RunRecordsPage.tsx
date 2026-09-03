@@ -10,6 +10,7 @@ import {
   type ProjectDraft,
   type RunArtifact,
   type RunDetail,
+  type RunCoverageRiskSummary,
   type RunSummary,
   type RunStatus,
   type RunTone,
@@ -304,6 +305,69 @@ const formatArtifactBytes = (byteCount: number): string => {
   return `${(byteCount / (1024 * 1024)).toFixed(1)} MB`;
 };
 
+const RunCoverageRiskPanel = ({
+  className = '',
+  coverageRisk,
+  project,
+}: {
+  className?: string;
+  coverageRisk: RunCoverageRiskSummary;
+  project: ProjectDraft;
+}) => {
+  const { t } = useI18n();
+
+  return (
+    <Surface aria-label={t('runs.coverage.title')} className={`${className} p-4`} variant="subtle">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="inline-flex items-center gap-2 text-xs font-medium text-primary">
+            <ShieldAlert className="h-3.5 w-3.5" />
+            {t('runs.coverage.eyebrow')}
+          </p>
+          <h3 className="mt-1 text-sm font-semibold">{t('runs.coverage.title')}</h3>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Badge variant="outline">
+            {t('runs.coverage.verified', { verified: coverageRisk.verified, total: coverageRisk.total })}
+          </Badge>
+          <Badge variant="outline">{t('runs.coverage.atRisk', { count: coverageRisk.risks.length })}</Badge>
+        </div>
+      </div>
+      {coverageRisk.risks.length ? (
+        <div className="mt-3 grid gap-2">
+          {coverageRisk.risks.map((risk) => {
+            const testCase = project.testCases.find((item) => item.id === risk.testCaseId);
+            const group = project.groups.find((item) => item.id === risk.groupId);
+            const environment = project.environments.find((item) => item.id === risk.environmentId);
+            const statusLabel = risk.latestRun
+              ? t(`common.status.${risk.latestRun.status}`)
+              : t('runs.coverage.neverExecuted');
+            return (
+              <div className="flex min-w-0 items-center justify-between gap-3 border-t border-border/70 pt-2 first:border-t-0 first:pt-0" key={`${risk.testCaseId}-${risk.environmentId}`}>
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-medium text-foreground">{testCase?.name ?? risk.testCaseId}</p>
+                  <p className="truncate text-xs text-muted-foreground">
+                    {t('runs.coverage.scope', {
+                      group: group?.name ?? t('runs.value.ungrouped'),
+                      environment: environment?.name ?? t('runs.value.environmentMissing'),
+                    })}
+                  </p>
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  <span className="text-xs text-muted-foreground">{t('runs.coverage.latest', { status: statusLabel })}</span>
+                  <StatusPill tone={risk.status === 'neverExecuted' ? 'neutral' : risk.status} />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <p className="mt-3 text-sm text-muted-foreground">{t('runs.coverage.empty')}</p>
+      )}
+    </Surface>
+  );
+};
+
 export const RunRecordsPage = ({
   project,
   projectAssetBinding,
@@ -434,6 +498,7 @@ export const RunRecordsPage = ({
   selectedRunIdRef.current = selectedRun?.id ?? '';
   const activeRun = projectSuiteRuns.find((record) => record.status === 'running') ??
     projectRuns.find((run) => run.status === 'running');
+  const hasRunHistory = Boolean(projectRuns.length || projectSuiteRuns.length);
   const isRunningExactRerun = runningExactRerunId === selectedRun?.id;
   useEffect(() => {
     let active = true;
@@ -694,7 +759,8 @@ export const RunRecordsPage = ({
         title={t('runs.header.title')}
       />
 
-      <PageBody>
+      <PageBody className={hasRunHistory ? undefined : 'run-records-empty-body'}>
+      {hasRunHistory ? (
       <section className="designer-split run-workbench" aria-label={t('runs.aria.workbench')}>
         <aside className="designer-panel">
           <div className="designer-panel-header grid gap-3">
@@ -796,54 +862,7 @@ export const RunRecordsPage = ({
             <MetricTile label={t('runs.metric.health')} value={runAnalytics.healthLabel} tone={runHealthTone} />
           </section>
           {project && project.testCases.length > 0 && coverageRisk ? (
-            <Surface aria-label={t('runs.coverage.title')} className="mt-5 p-4" variant="subtle">
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div>
-                  <p className="inline-flex items-center gap-2 text-xs font-medium text-primary">
-                    <ShieldAlert className="h-3.5 w-3.5" />
-                    {t('runs.coverage.eyebrow')}
-                  </p>
-                  <h3 className="mt-1 text-sm font-semibold">{t('runs.coverage.title')}</h3>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  <Badge variant="outline">
-                    {t('runs.coverage.verified', { verified: coverageRisk.verified, total: coverageRisk.total })}
-                  </Badge>
-                  <Badge variant="outline">{t('runs.coverage.atRisk', { count: coverageRisk.risks.length })}</Badge>
-                </div>
-              </div>
-              {coverageRisk.risks.length ? (
-                <div className="mt-3 grid gap-2">
-                  {coverageRisk.risks.map((risk) => {
-                    const testCase = project.testCases.find((item) => item.id === risk.testCaseId);
-                    const group = project.groups.find((item) => item.id === risk.groupId);
-                    const environment = project.environments.find((item) => item.id === risk.environmentId);
-                    const statusLabel = risk.latestRun
-                      ? t(`common.status.${risk.latestRun.status}`)
-                      : t('runs.coverage.neverExecuted');
-                    return (
-                      <div className="flex min-w-0 items-center justify-between gap-3 border-t border-border/70 pt-2 first:border-t-0 first:pt-0" key={`${risk.testCaseId}-${risk.environmentId}`}>
-                        <div className="min-w-0">
-                          <p className="truncate text-sm font-medium text-foreground">{testCase?.name ?? risk.testCaseId}</p>
-                          <p className="truncate text-xs text-muted-foreground">
-                            {t('runs.coverage.scope', {
-                              group: group?.name ?? t('runs.value.ungrouped'),
-                              environment: environment?.name ?? t('runs.value.environmentMissing'),
-                            })}
-                          </p>
-                        </div>
-                        <div className="flex shrink-0 items-center gap-2">
-                          <span className="text-xs text-muted-foreground">{t('runs.coverage.latest', { status: statusLabel })}</span>
-                          <StatusPill tone={risk.status === 'neverExecuted' ? 'neutral' : risk.status} />
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              ) : (
-                <p className="mt-3 text-sm text-muted-foreground">{t('runs.coverage.empty')}</p>
-              )}
-            </Surface>
+            <RunCoverageRiskPanel className="mt-5" coverageRisk={coverageRisk} project={project} />
           ) : null}
           {retentionError && !retentionPlan ? <p className="mt-3 text-sm text-destructive" role="alert">{retentionError}</p> : null}
           {retentionPlan ? (
@@ -1789,6 +1808,20 @@ export const RunRecordsPage = ({
           </div>
         </aside>
       </section>
+      ) : (
+        <>
+          <section aria-label={t('runs.empty.title')} className="run-records-empty-state">
+            <FileSearch aria-hidden="true" className="h-5 w-5" />
+            <div>
+              <h2>{t('runs.empty.title')}</h2>
+              <p>{t('runs.empty.description')}</p>
+            </div>
+          </section>
+          {project && project.testCases.length > 0 && coverageRisk ? (
+            <RunCoverageRiskPanel className="run-records-empty-risk" coverageRisk={coverageRisk} project={project} />
+          ) : null}
+        </>
+      )}
       </PageBody>
     </PageShell>
   );

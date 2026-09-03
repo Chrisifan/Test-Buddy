@@ -73,6 +73,7 @@ describe('DocumentAnalysisPage', () => {
 
     expect(within(emptyState).getByText('上传新文档')).toBeInTheDocument();
     expect(container.querySelector('.document-side-panel')).not.toBeInTheDocument();
+    expect(emptyState.closest('.document-studio')).toHaveClass('is-empty');
   });
 
   it('switches document analysis actions to English', () => {
