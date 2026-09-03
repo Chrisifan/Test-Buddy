@@ -11,6 +11,10 @@ describe('main window options', () => {
     });
 
     expect(options).toMatchObject({
+      width: 1440,
+      height: 900,
+      minWidth: 1280,
+      minHeight: 800,
       backgroundColor: '#00000000',
       titleBarStyle: 'hidden',
       transparent: true,

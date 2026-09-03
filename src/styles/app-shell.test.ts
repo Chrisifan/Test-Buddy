@@ -90,14 +90,22 @@ describe('application shell navigation', () => {
     expect(narrowResponsive).toMatch(/grid-template-rows:\s*minmax\(0, 1fr\)\s*minmax\(220px, auto\);/);
   });
 
-  it('uses lightweight hierarchy for overview summaries and empty workbenches', () => {
-    const styles = readLuminousPrecisionCss();
+  it('retains card hierarchy for overview summaries while keeping glyphs quiet', () => {
+    const styles = readFileSync('src/styles/luminous-precision/workspace.css', 'utf8');
+    const readRule = (selector: string): string => {
+      const start = styles.lastIndexOf(selector);
+      const end = styles.indexOf('}', start);
+      return styles.slice(start, end + 1);
+    };
 
-    expect(styles).toMatch(/\.home-compact-stat\s*\{[\s\S]*?border:\s*0;[\s\S]*?background:\s*transparent;/);
-    expect(styles).toMatch(/\.home-glyph\s*\{[\s\S]*?border:\s*0;[\s\S]*?background:\s*var\(--surface-container-low\);/);
-    expect(styles).toMatch(/\.document-studio\.is-empty\s*\{[\s\S]*?height:\s*auto;[\s\S]*?border:\s*0;/);
-    expect(styles).toMatch(/\.home-run-signal-grid,[\s\S]*?gap:\s*0;[\s\S]*?background:\s*transparent;/);
-    expect(styles).toMatch(/\.home-insight-card\s*\{[\s\S]*?border:\s*0;[\s\S]*?background:\s*transparent;/);
-    expect(styles).toMatch(/\.run-records-empty-state\s*\{[\s\S]*?min-height:\s*176px;[\s\S]*?grid-template-columns:\s*auto minmax\(0, 1fr\);/);
+    const overviewCardRule = readRule('.home-flat-card,');
+
+    expect(readRule('.home-stat-card {')).toMatch(/border:\s*1px solid var\(--outline-variant\);/);
+    expect(readRule('.home-stat-card {')).toMatch(/box-shadow:\s*var\(--panel-shadow\);/);
+    expect(overviewCardRule).toContain('.home-compact-stat,');
+    expect(overviewCardRule).toMatch(/border:\s*1px solid var\(--outline-variant\);/);
+    expect(overviewCardRule).toMatch(/background:\s*var\(--card\);/);
+    expect(readRule('.home-glyph {')).toMatch(/border:\s*0;/);
+    expect(readRule('.home-glyph {')).toMatch(/background:\s*var\(--surface-container-low\);/);
   });
 });

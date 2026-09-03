@@ -146,8 +146,7 @@ a.motion-surface:hover,
   box-shadow: none;
 }
 
-.tech-panel,
-.home-stat-card {
+.tech-panel {
   border: 0;
   background: var(--card);
   box-shadow: none;
@@ -407,23 +406,25 @@ a.motion-surface:hover,
 }
 
 .home-stat-card {
-  border: 0;
+  border: 1px solid var(--outline-variant);
   background: var(--card);
-  box-shadow: none;
+  box-shadow: var(--panel-shadow);
 }
 
 .home-stat-card:hover {
+  border-color: var(--outline-variant);
   transform: none;
-  box-shadow: none;
+  box-shadow: var(--panel-shadow);
 }
 
 .home-flat-card,
 .home-control-card,
+.home-compact-stat,
 .home-mini-row,
 .home-route-row,
 .home-empty-card,
 .home-midscene-card {
-  border: 0;
+  border: 1px solid var(--outline-variant);
   border-radius: var(--panel-radius);
   background: var(--card);
   color: var(--foreground);
@@ -431,19 +432,15 @@ a.motion-surface:hover,
 }
 
 .home-control-card,
+.home-compact-stat,
 .home-mini-row {
   border-radius: var(--control-radius);
-}
-
-.home-compact-stat {
-  border: 0;
-  border-radius: 0;
-  background: transparent;
 }
 
 .home-mini-row:hover,
 .home-route-row:hover,
 .home-empty-card:hover {
+  border-color: color-mix(in srgb, var(--primary) 36%, var(--outline-variant));
   background: color-mix(in srgb, var(--primary) 5%, var(--card));
   transform: none;
 }

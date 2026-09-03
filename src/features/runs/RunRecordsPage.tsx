@@ -498,7 +498,6 @@ export const RunRecordsPage = ({
   selectedRunIdRef.current = selectedRun?.id ?? '';
   const activeRun = projectSuiteRuns.find((record) => record.status === 'running') ??
     projectRuns.find((run) => run.status === 'running');
-  const hasRunHistory = Boolean(projectRuns.length || projectSuiteRuns.length);
   const isRunningExactRerun = runningExactRerunId === selectedRun?.id;
   useEffect(() => {
     let active = true;
@@ -759,8 +758,7 @@ export const RunRecordsPage = ({
         title={t('runs.header.title')}
       />
 
-      <PageBody className={hasRunHistory ? undefined : 'run-records-empty-body'}>
-      {hasRunHistory ? (
+      <PageBody>
       <section className="designer-split run-workbench" aria-label={t('runs.aria.workbench')}>
         <aside className="designer-panel">
           <div className="designer-panel-header grid gap-3">
@@ -1808,20 +1806,6 @@ export const RunRecordsPage = ({
           </div>
         </aside>
       </section>
-      ) : (
-        <>
-          <section aria-label={t('runs.empty.title')} className="run-records-empty-state">
-            <FileSearch aria-hidden="true" className="h-5 w-5" />
-            <div>
-              <h2>{t('runs.empty.title')}</h2>
-              <p>{t('runs.empty.description')}</p>
-            </div>
-          </section>
-          {project && project.testCases.length > 0 && coverageRisk ? (
-            <RunCoverageRiskPanel className="run-records-empty-risk" coverageRisk={coverageRisk} project={project} />
-          ) : null}
-        </>
-      )}
       </PageBody>
     </PageShell>
   );

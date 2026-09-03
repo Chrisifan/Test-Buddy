@@ -12,10 +12,10 @@ export const createMainWindowOptions = ({
   platform,
 }: MainWindowOptionsInput): BrowserWindowConstructorOptions => {
   return {
-    width: 1200,
-    height: 760,
-    minWidth: 1200,
-    minHeight: 760,
+    width: 1440,
+    height: 900,
+    minWidth: 1280,
+    minHeight: 800,
     title: 'TestBuddy',
     icon,
     backgroundColor: platform === 'darwin' ? '#00000000' : '#050505',

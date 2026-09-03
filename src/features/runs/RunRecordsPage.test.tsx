@@ -1671,7 +1671,7 @@ describe('RunRecordsPage', () => {
     expect(screen.queryByText('所有项目用例在其目标环境中均已获得最近通过结论。')).not.toBeInTheDocument();
   });
 
-  it('uses a compact empty state when the project has no run history', () => {
+  it('keeps the run workbench accessible when the project has no run history', () => {
     const state = createDemoStudioState();
     const project = state.projects[0]!;
 
@@ -1686,7 +1686,10 @@ describe('RunRecordsPage', () => {
     );
 
     expect(screen.getByRole('heading', { level: 1, name: '运行记录' })).toBeInTheDocument();
-    expect(screen.getByText('暂无运行记录')).toBeInTheDocument();
-    expect(container.querySelector('.run-workbench')).not.toBeInTheDocument();
+    expect(screen.getByText('质量信号')).toBeInTheDocument();
+    expect(screen.getByText('等待样本')).toBeInTheDocument();
+    expect(screen.getAllByText('待处理').length).toBeGreaterThan(0);
+    expect(screen.queryByText('通过')).not.toBeInTheDocument();
+    expect(container.querySelector('.run-workbench')).toBeInTheDocument();
   });
 });
